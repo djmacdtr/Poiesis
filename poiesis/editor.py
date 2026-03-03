@@ -1,4 +1,4 @@
-"""Chapter editor that rewrites content to fix consistency violations."""
+"""章节编辑器，针对一致性违规对内容进行精准重写。"""
 
 from __future__ import annotations
 

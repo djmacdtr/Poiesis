@@ -1,4 +1,4 @@
-"""OpenAI LLM client implementation."""
+"""OpenAI LLM 客户端实现。"""
 
 from __future__ import annotations
 

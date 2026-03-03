@@ -1,4 +1,4 @@
-"""Main generation loop for Poiesis."""
+"""Poiesis 主生成循环。"""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ class RunLoop:
                 status=hint.get("status", "pending"),
             )
 
-        # Refresh in-memory world
+        # 刷新内存中的世界模型
         self._world.load_from_db(self._db)
         console.print(f"[green]World seed loaded from {path}[/green]")
 
@@ -175,7 +175,7 @@ class RunLoop:
             console=console,
             transient=True,
         ) as progress:
-            # 1. Plan
+            # 第一步：规划章节
             task = progress.add_task("Planning chapter...", total=None)
             summaries = self._get_previous_summaries()
             plan = self._planner.plan(
@@ -184,14 +184,14 @@ class RunLoop:
             progress.remove_task(task)
             console.print(f"  [cyan]Plan:[/cyan] {plan.get('title', '')}")
 
-            # 2. Write
+            # 第二步：写作章节
             task = progress.add_task("Writing chapter...", total=None)
             content = self._writer.write(chapter_number, plan, self._world, self._writer_llm)
             progress.remove_task(task)
             word_count = len(content.split())
             console.print(f"  [cyan]Written:[/cyan] {word_count} words")
 
-            # 3. Originality check
+            # 第三步：检查原创性
             task = progress.add_task("Checking originality...", total=None)
             orig_result = self._originality.check(content, self._vs)
             progress.remove_task(task)
@@ -201,7 +201,7 @@ class RunLoop:
                     f"  [yellow]Originality warning: risk_score={risk:.2f}[/yellow]"
                 )
 
-            # 4. Extract facts
+            # 第四步：提取事实
             task = progress.add_task("Extracting facts...", total=None)
             proposed_changes = self._extractor.extract(
                 chapter_number, content, self._world, self._planner_llm
@@ -209,7 +209,7 @@ class RunLoop:
             progress.remove_task(task)
             console.print(f"  [cyan]Proposed changes:[/cyan] {len(proposed_changes)}")
 
-            # 5. Verify + Edit loop
+            # 第五步：一致性验证 + 编辑循环
             passed = False
             for attempt in range(rewrite_retries + 1):
                 task = progress.add_task(
@@ -252,7 +252,7 @@ class RunLoop:
                     f"  [yellow]Chapter {chapter_number} saved with unresolved violations.[/yellow]"
                 )
 
-            # 6. Persist chapter
+            # 第六步：持久化章节到数据库
             self._db.upsert_chapter(
                 chapter_number=chapter_number,
                 content=content,
@@ -262,7 +262,7 @@ class RunLoop:
                 status="final" if passed else "flagged",
             )
 
-            # 7. Persist staging changes and approve all
+            # 第七步：持久化暂存变更并批量批准
             task = progress.add_task("Merging world changes...", total=None)
             approved: list[dict[str, Any]] = []
             for change in proposed_changes:
@@ -281,7 +281,7 @@ class RunLoop:
             progress.remove_task(task)
             console.print(f"  [cyan]Merged:[/cyan] {merged} world changes")
 
-            # 8. Summarize
+            # 第八步：生成章节摘要
             task = progress.add_task("Summarizing...", total=None)
             summary = self._summarizer.summarize(
                 chapter_number, content, plan, self._world, self._planner_llm
@@ -293,7 +293,7 @@ class RunLoop:
                 characters_featured=summary.get("characters_featured", []),
                 new_facts_introduced=summary.get("new_facts_introduced", []),
             )
-            # Index chapter for future originality checks
+            # 将章节索引到向量存储，以供后续原创性检测使用
             self._vs.add(
                 key=f"chapter:{chapter_number}",
                 text=content[:2000],

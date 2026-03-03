@@ -1,4 +1,4 @@
-"""Chapter planner that produces structured JSON chapter plans."""
+"""章节规划器，生成结构化 JSON 章节计划。"""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ class ChapterPlanner:
         """
         world_context = world.world_context_summary()
 
-        # Retrieve relevant facts from vector store
+        # 从向量存储中检索与当前章节相关的历史事实
         relevant = self._vs.search(f"chapter {chapter_number} narrative arc", k=10)
         if relevant:
             world_context += "\n\n=== Relevant Past Facts ===\n"
@@ -78,7 +78,7 @@ class ChapterPlanner:
         )
         raw_plan = llm.complete_json(prompt, system=system)
 
-        # Ensure mandatory keys are present with sensible defaults
+        # 为必要字段设置合理的默认值，防止 LLM 返回不完整的 JSON
         raw_plan.setdefault("title", f"Chapter {chapter_number}")
         raw_plan.setdefault("summary", "")
         raw_plan.setdefault("key_events", [])

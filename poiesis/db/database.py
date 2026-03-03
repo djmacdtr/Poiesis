@@ -1,4 +1,4 @@
-"""SQLite database manager for Poiesis."""
+"""Poiesis SQLite 数据库管理模块。"""
 
 from __future__ import annotations
 

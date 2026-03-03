@@ -1,4 +1,4 @@
-"""Chapter summarizer that produces archivable chapter summaries."""
+"""章节摘要器，生成可归档的章节摘要。"""
 
 from __future__ import annotations
 

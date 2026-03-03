@@ -1,4 +1,4 @@
-"""World merger that applies approved staging changes to the canon."""
+"""世界合并器，将已批准的暂存变更应用到 canon 层。"""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ class WorldMerger:
                 self._index(change, vector_store)
                 merged += 1
             except Exception:
-                # Log and continue; a single bad change should not stop the rest
+                # 单个变更失败不应阻断其他变更的处理，记录错误后继续执行
                 import traceback
 
                 traceback.print_exc()

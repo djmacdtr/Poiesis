@@ -1,4 +1,4 @@
-"""Anthropic LLM client implementation."""
+"""Anthropic LLM 客户端实现。"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Originality checker using vector store similarity search."""
+"""基于向量存储相似度搜索的原创性检测器。"""
 
 from __future__ import annotations
 
