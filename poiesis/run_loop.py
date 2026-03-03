@@ -28,18 +28,20 @@ from poiesis.writer import ChapterWriter
 console = Console()
 
 
-def _build_llm(cfg: Any) -> LLMClient:
+def _build_llm(cfg: Any, openai_key: str | None = None, anthropic_key: str | None = None) -> LLMClient:
     """Instantiate an LLM client from a ModelConfig."""
     if cfg.provider == "anthropic":
         return AnthropicClient(
             model=cfg.model,
             temperature=cfg.temperature,
             max_tokens=cfg.max_tokens,
+            api_key=anthropic_key,
         )
     return OpenAIClient(
         model=cfg.model,
         temperature=cfg.temperature,
         max_tokens=cfg.max_tokens,
+        api_key=openai_key,
     )
 
 
@@ -61,8 +63,12 @@ class RunLoop:
             embedding_model=self._config.vector_store.embedding_model,
         )
 
-        self._writer_llm = _build_llm(self._config.llm)
-        self._planner_llm = _build_llm(self._config.planner_llm)
+        # 优先从数据库读取 API Key；若无则回退环境变量（LLM 客户端自身处理）
+        openai_key = self._load_key_from_db("OPENAI_API_KEY")
+        anthropic_key = self._load_key_from_db("ANTHROPIC_API_KEY")
+
+        self._writer_llm = _build_llm(self._config.llm, openai_key=openai_key, anthropic_key=anthropic_key)
+        self._planner_llm = _build_llm(self._config.planner_llm, openai_key=openai_key, anthropic_key=anthropic_key)
 
         gen = self._config.generation
         self._planner = ChapterPlanner(
@@ -80,6 +86,15 @@ class RunLoop:
 
         self._world = WorldModel()
         self._world.load_from_db(self._db)
+
+    def _load_key_from_db(self, config_key: str) -> str | None:
+        """从数据库读取并解密 API Key（不在日志中打印）。"""
+        try:
+            from poiesis.api.services.system_config_service import get_decrypted_key
+            return get_decrypted_key(self._db, config_key)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]读取数据库配置 {config_key} 失败（已回退环境变量）：{type(exc).__name__}[/yellow]")
+            return None
 
     # ------------------------------------------------------------------
     # Seed loading

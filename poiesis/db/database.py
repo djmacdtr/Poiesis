@@ -449,3 +449,38 @@ class Database:
                 d[key] = json.loads(d.get(key) or "[]")
             result.append(d)
         return result
+
+    # ------------------------------------------------------------------
+    # 系统配置（system_config）
+    # ------------------------------------------------------------------
+
+    def set_system_config(self, config_key: str, config_value: str) -> None:
+        """Insert or update a system config entry."""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO system_config (config_key, config_value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(config_key) DO UPDATE SET
+                    config_value = excluded.config_value,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (config_key, config_value),
+            )
+
+    def get_system_config(self, config_key: str) -> str | None:
+        """Return the raw (possibly encrypted) value for a config key, or None."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT config_value FROM system_config WHERE config_key = ?",
+                (config_key,),
+            )
+            row = cur.fetchone()
+        return row["config_value"] if row else None
+
+    def list_system_config(self) -> dict[str, str]:
+        """Return all system config entries as a dict {key: value}."""
+        with self._cursor() as cur:
+            cur.execute("SELECT config_key, config_value FROM system_config")
+            rows = cur.fetchall()
+        return {r["config_key"]: r["config_value"] for r in rows}
