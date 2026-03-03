@@ -199,6 +199,44 @@ poiesis serve --config config.yaml --host 127.0.0.1 --port 8000 --reload
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
 | `POIESIS_CONFIG` | 配置文件路径（同 `--config`） | `config.yaml` |
+| `POIESIS_EMBEDDING_MODE` | Embedding 模式：`real`（sentence-transformers 真实向量）或 `dummy`（离线哈希向量，用于测试/CI） | `real` |
+
+#### POIESIS_EMBEDDING_MODE 说明
+
+- **`real`**（默认）：使用 `sentence-transformers` 加载语义模型（`all-MiniLM-L6-v2`），首次使用时会从 HuggingFace 下载模型。
+- **`dummy`**：使用确定性 SHA-256 哈希生成 384 维向量，纯本地、零网络依赖。  
+  适用场景：pytest、GitHub Actions CI、任何无外网环境。  
+  **注意**：dummy 向量不具备语义相似度，不得用于生产相似度判断。
+
+```bash
+# 使用 dummy 模式运行测试（无网络）
+POIESIS_EMBEDDING_MODE=dummy pytest
+
+# 生产运行使用真实 embedding（默认）
+poiesis serve --config config.yaml
+```
+
+---
+
+## 冒烟测试
+
+使用 `scripts/smoke_test_api.py` 对已启动的后端进行一键联调验证：
+
+```bash
+# 1. 先启动后端
+poiesis serve --config config.yaml
+
+# 2. 另开终端执行冒烟测试
+python scripts/smoke_test_api.py
+
+# 可选：指定非默认地址
+python scripts/smoke_test_api.py --base-url http://localhost:8000
+```
+
+脚本行为：
+- `GET /api/chapters`：期望 200，可为空列表
+- `POST /api/run`：若未配置 LLM Key 返回 4xx，脚本视为"预期失败（缺少配置）"并继续；若配置齐全则轮询任务直至完成（最多 60 秒）
+- 最终输出中文总结："API 冒烟测试通过/失败"
 
 ---
 

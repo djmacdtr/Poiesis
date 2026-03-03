@@ -1,4 +1,9 @@
-"""基于 FAISS 和 sentence-transformers 的向量存储。"""
+"""基于 FAISS 和可配置 EmbeddingProvider 的向量存储。
+
+通过 POIESIS_EMBEDDING_MODE 环境变量选择 embedding 实现：
+  - real  （默认）：sentence-transformers 真实语义向量
+  - dummy ：确定性哈希向量，离线/CI 测试专用
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,8 @@ from typing import Any
 
 import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer
+
+from poiesis.vector_store.providers import EmbeddingProvider, get_embedding_provider
 
 
 class VectorStore:
@@ -21,18 +27,25 @@ class VectorStore:
     _INDEX_FILE = "index.faiss"
     _META_FILE = "metadata.pkl"
 
-    def __init__(self, store_path: str, embedding_model: str = "all-MiniLM-L6-v2") -> None:
+    def __init__(
+        self,
+        store_path: str,
+        embedding_model: str = "all-MiniLM-L6-v2",
+        provider: EmbeddingProvider | None = None,
+    ) -> None:
         """Initialise the vector store.
 
         Args:
             store_path: Directory where index files are persisted.
-            embedding_model: Sentence-transformers model name.
+            embedding_model: Sentence-transformers model name（real 模式使用）。
+            provider: 可选的自定义 EmbeddingProvider；若为 None 则由环境变量决定。
         """
         self.store_path = Path(store_path)
         self.store_path.mkdir(parents=True, exist_ok=True)
 
-        self._model = SentenceTransformer(embedding_model)
-        self._dim: int = self._model.get_sentence_embedding_dimension()  # type: ignore[assignment]
+        # 优先使用传入的 provider，否则根据 POIESIS_EMBEDDING_MODE 决定
+        self._provider: EmbeddingProvider = provider or get_embedding_provider(embedding_model)
+        self._dim: int = self._provider.dim
 
         self._index_path = self.store_path / self._INDEX_FILE
         self._meta_path = self.store_path / self._META_FILE
@@ -70,8 +83,7 @@ class VectorStore:
 
     def _embed(self, text: str) -> np.ndarray:  # type: ignore[type-arg]
         """Return a normalised embedding vector for *text*."""
-        vec = self._model.encode([text], normalize_embeddings=True)
-        return vec.astype(np.float32)  # type: ignore[union-attr]
+        return self._provider.encode([text], normalize_embeddings=True)
 
     # ------------------------------------------------------------------
     # Public API
@@ -154,7 +166,7 @@ class VectorStore:
         self._index = faiss.IndexFlatIP(self._dim)  # type: ignore[attr-defined]
         if self._metadata:
             texts = [m["text"] for m in self._metadata]
-            vecs = self._model.encode(texts, normalize_embeddings=True).astype(np.float32)  # type: ignore[union-attr]
+            vecs = self._provider.encode(texts, normalize_embeddings=True)
             self._index.add(vecs)  # type: ignore[arg-type]
 
         self._save()

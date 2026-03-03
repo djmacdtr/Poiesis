@@ -3,42 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pytest
 
 from poiesis.originality import OriginalityChecker, OriginalityResult
 
 
-def _make_mock_model(dim: int = 384) -> MagicMock:
-    """Return a mock SentenceTransformer that produces deterministic embeddings."""
-    model = MagicMock()
-    model.get_sentence_embedding_dimension.return_value = dim
-
-    def _encode(texts: list[str], normalize_embeddings: bool = True) -> np.ndarray:
-        # Produce a consistent vector from the hash of each text
-        vecs = []
-        for text in texts:
-            rng = np.random.default_rng(abs(hash(text)) % (2**32))
-            vec = rng.random(dim).astype(np.float32)
-            if normalize_embeddings:
-                vec = vec / (np.linalg.norm(vec) + 1e-10)
-            vecs.append(vec)
-        return np.array(vecs, dtype=np.float32)
-
-    model.encode.side_effect = _encode
-    return model
-
-
 @pytest.fixture
 def empty_vector_store(tmp_path: Path) -> VectorStore:  # noqa: F821
-    """Return an empty VectorStore backed by a mock embedding model."""
+    """Return an empty VectorStore backed by the dummy embedding provider."""
     from poiesis.vector_store.store import VectorStore
 
-    with patch("poiesis.vector_store.store.SentenceTransformer", return_value=_make_mock_model()):
-        vs = VectorStore(store_path=str(tmp_path / "vs"))
-    return vs
+    # POIESIS_EMBEDDING_MODE=dummy 由 conftest 的 force_dummy_embedding fixture 保证
+    return VectorStore(store_path=str(tmp_path / "vs"))
 
 
 @pytest.fixture
@@ -51,9 +28,8 @@ def populated_vector_store(tmp_path: Path) -> VectorStore:  # noqa: F821
         "misting in the cold air. The shard-iron bracelet on her wrist grew warm."
     )
 
-    with patch("poiesis.vector_store.store.SentenceTransformer", return_value=_make_mock_model()):
-        vs = VectorStore(store_path=str(tmp_path / "vs"))
-        vs.add(key="chapter:1", text=existing_text, metadata={"chapter_number": 1})
+    vs = VectorStore(store_path=str(tmp_path / "vs"))
+    vs.add(key="chapter:1", text=existing_text, metadata={"chapter_number": 1})
     return vs
 
 

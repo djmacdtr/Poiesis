@@ -20,6 +20,16 @@ from poiesis.llm.base import LLMClient
 from poiesis.world import WorldModel
 
 # ---------------------------------------------------------------------------
+# 全局 fixture：测试期间强制使用 DummyEmbeddingProvider（离线，无网络依赖）
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def force_dummy_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
+    """在所有测试中将 POIESIS_EMBEDDING_MODE 设为 dummy，确保无外网依赖。"""
+    monkeypatch.setenv("POIESIS_EMBEDDING_MODE", "dummy")
+
+# ---------------------------------------------------------------------------
 # Mock LLM
 # ---------------------------------------------------------------------------
 
