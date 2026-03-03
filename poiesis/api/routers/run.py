@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 import time
+from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+from poiesis.api.deps import require_admin
 from poiesis.api.schemas.run import RunRequest, RunResponse, TaskDetail
 from poiesis.api.services import run_service
 from poiesis.api.task_registry import registry
@@ -21,8 +23,11 @@ def _config_path() -> str:
 
 
 @router.post("", response_model=RunResponse)
-def start_run(body: RunRequest) -> RunResponse:
-    """启动后台写作任务，立即返回 task_id（非阻塞）。"""
+def start_run(
+    body: RunRequest,
+    _: Any = Depends(require_admin),
+) -> RunResponse:
+    """启动后台写作任务，立即返回 task_id（非阻塞，仅 admin 可操作）。"""
     if body.chapter_count < 1:
         raise HTTPException(status_code=422, detail="chapter_count 必须大于 0")
     task_dict = run_service.start_run(
@@ -38,7 +43,7 @@ def start_run(body: RunRequest) -> RunResponse:
 
 @router.get("/{task_id}", response_model=TaskDetail)
 def get_task(task_id: str) -> TaskDetail:
-    """查询任务状态与最近日志（供前端轮询）。"""
+    """查询任务状态与最近日志（供前端轮询，无需认证）。"""
     task_dict = run_service.get_task(task_id)
     if task_dict is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")

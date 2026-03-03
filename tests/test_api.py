@@ -23,11 +23,13 @@ from poiesis.db.database import Database
 
 
 def _make_client(tmp_db: Database) -> TestClient:
-    """创建注入了临时数据库的 TestClient。"""
+    """创建注入了临时数据库的 TestClient（同时绕过 admin 权限守卫）。"""
     from poiesis.api import deps
 
     # 覆盖 get_db 依赖，返回临时数据库
     app.dependency_overrides[deps.get_db] = lambda: tmp_db
+    # 绕过 admin 权限守卫（测试环境无需真实认证）
+    app.dependency_overrides[deps.require_admin] = lambda: {"sub": "1", "username": "test_admin", "role": "admin"}
     client = TestClient(app, raise_server_exceptions=True)
     return client
 

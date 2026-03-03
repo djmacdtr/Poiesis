@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from poiesis.api.deps import get_db
+from poiesis.api.deps import get_db, require_admin
 from poiesis.api.schemas.world import (
     ApproveRequest,
     CanonData,
@@ -39,8 +41,9 @@ def approve_staging(
     change_id: int,
     body: ApproveRequest | None = None,
     db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
 ) -> StagingChange:
-    """批准指定 staging 变更（可附带可选备注）。"""
+    """批准指定 staging 变更（仅 admin 可操作）。"""
     row = world_service.approve_staging(db, change_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"staging 变更 id={change_id} 不存在")
@@ -52,8 +55,9 @@ def reject_staging(
     change_id: int,
     body: RejectRequest,
     db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
 ) -> StagingChange:
-    """拒绝指定 staging 变更，必须提供拒绝原因。"""
+    """拒绝指定 staging 变更，必须提供拒绝原因（仅 admin 可操作）。"""
     row = world_service.reject_staging(db, change_id, body.reason)
     if row is None:
         raise HTTPException(status_code=404, detail=f"staging 变更 id={change_id} 不存在")

@@ -75,6 +75,15 @@ CREATE TABLE IF NOT EXISTS chapter_summaries (
     FOREIGN KEY (chapter_number) REFERENCES chapters(chapter_number)
 );
 
+-- 用户表：管理员与普通用户
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 系统配置表：存储加密后的 API Key 及其他全局配置
 CREATE TABLE IF NOT EXISTS system_config (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

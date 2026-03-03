@@ -27,6 +27,11 @@ services:
       - POIESIS_EMBEDDING_MODE=${POIESIS_EMBEDDING_MODE:-dummy}
       # 配置文件路径（容器内）
       - POIESIS_CONFIG=/app/config.yaml
+      # 加密与 JWT 签名密钥（生产必填；留空则使用内置默认密钥并打印警告）
+      - POIESIS_SECRET_KEY=${POIESIS_SECRET_KEY:-}
+      # 首次启动自动创建的管理员账号（不存在时生效）
+      - POIESIS_ADMIN_USER=${POIESIS_ADMIN_USER:-admin}
+      - POIESIS_ADMIN_PASS=${POIESIS_ADMIN_PASS:-admin}
     volumes:
       # 持久化数据目录（含 poiesis.db 和 vector_store/）
       - ./data:/app/data

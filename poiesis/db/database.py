@@ -484,3 +484,38 @@ class Database:
             cur.execute("SELECT config_key, config_value FROM system_config")
             rows = cur.fetchall()
         return {r["config_key"]: r["config_value"] for r in rows}
+
+    # ------------------------------------------------------------------
+    # 用户管理（users）
+    # ------------------------------------------------------------------
+
+    def create_user(self, username: str, password_hash: str, role: str = "user") -> int:
+        """创建新用户，返回行 id。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+                (username, password_hash, role),
+            )
+            return cur.lastrowid or 0
+
+    def get_user_by_username(self, username: str) -> dict[str, Any] | None:
+        """按用户名查找用户，不存在则返回 None。"""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE username = ?", (username,))
+            row = cur.fetchone()
+        return dict(row) if row else None
+
+    def count_admins(self) -> int:
+        """返回 admin 角色的用户数量。"""
+        with self._cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS cnt FROM users WHERE role = 'admin'")
+            row = cur.fetchone()
+        return row["cnt"] if row else 0
+
+    def update_user_password(self, user_id: int, new_password_hash: str) -> None:
+        """Update a user's password hash by user id."""
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (new_password_hash, user_id),
+            )
