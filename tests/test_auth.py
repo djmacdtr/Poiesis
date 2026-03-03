@@ -237,3 +237,113 @@ class TestLogout:
         # 登出后访问受限接口应 401
         resp2 = client.get("/api/system/config")
         assert resp2.status_code == 401
+
+
+# ──────────────────────────────────────────────
+# 测试 6：登录时 need_password_change 标志
+# ──────────────────────────────────────────────
+
+
+class TestNeedPasswordChange:
+    """首次使用默认密码登录时 need_password_change 标志测试。"""
+
+    def test_login_with_default_password_sets_flag(self, tmp_db: Database) -> None:
+        """使用默认密码 'admin' 登录时，响应应包含 need_password_change=true。"""
+        from poiesis.api.services.auth_service import ensure_admin_exists
+
+        ensure_admin_exists(tmp_db)
+        client = _make_client(tmp_db)
+        resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        assert resp.status_code == 200
+        assert resp.json()["need_password_change"] is True
+
+    def test_login_with_custom_password_no_flag(
+        self, tmp_db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """使用非默认密码登录时，need_password_change 应为 false。"""
+        monkeypatch.setenv("POIESIS_ADMIN_USER", "admin")
+        monkeypatch.setenv("POIESIS_ADMIN_PASS", "my-secure-pass-123")
+        from poiesis.api.services.auth_service import ensure_admin_exists
+
+        ensure_admin_exists(tmp_db)
+        client = _make_client(tmp_db)
+        resp = client.post(
+            "/api/auth/login", json={"username": "admin", "password": "my-secure-pass-123"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["need_password_change"] is False
+
+
+# ──────────────────────────────────────────────
+# 测试 7：修改密码接口
+# ──────────────────────────────────────────────
+
+
+class TestChangePassword:
+    """POST /api/auth/change-password 测试。"""
+
+    def test_change_password_success(self, tmp_db: Database) -> None:
+        """正确的旧密码 + 合法新密码应修改成功。"""
+        client = _make_authed_client(tmp_db)
+        resp = client.post(
+            "/api/auth/change-password",
+            json={"old_password": "admin", "new_password": "new-secure-pass"},
+        )
+        assert resp.status_code == 200
+        assert "成功" in resp.json()["message"]
+
+    def test_change_password_wrong_old_password_returns_401(self, tmp_db: Database) -> None:
+        """旧密码错误时应返回 401。"""
+        client = _make_authed_client(tmp_db)
+        resp = client.post(
+            "/api/auth/change-password",
+            json={"old_password": "wrong-old", "new_password": "new-secure-pass"},
+        )
+        assert resp.status_code == 401
+
+    def test_change_password_too_short_returns_422(self, tmp_db: Database) -> None:
+        """新密码过短（< 6 位）应返回 422。"""
+        client = _make_authed_client(tmp_db)
+        resp = client.post(
+            "/api/auth/change-password",
+            json={"old_password": "admin", "new_password": "abc"},
+        )
+        assert resp.status_code == 422
+
+    def test_change_password_without_auth_returns_401(self, tmp_db: Database) -> None:
+        """未登录时修改密码应返回 401。"""
+        client = _make_client(tmp_db)
+        resp = client.post(
+            "/api/auth/change-password",
+            json={"old_password": "admin", "new_password": "new-pass-123"},
+        )
+        assert resp.status_code == 401
+
+    def test_changed_password_allows_new_login(self, tmp_db: Database) -> None:
+        """修改密码后应能用新密码登录。"""
+        client = _make_authed_client(tmp_db)
+        new_password = "secure-new-pass-456"
+        resp = client.post(
+            "/api/auth/change-password",
+            json={"old_password": "admin", "new_password": new_password},
+        )
+        assert resp.status_code == 200
+
+        # 使用新密码重新登录
+        login_resp = client.post(
+            "/api/auth/login", json={"username": "admin", "password": new_password}
+        )
+        assert login_resp.status_code == 200
+
+    def test_changed_password_old_password_rejected(self, tmp_db: Database) -> None:
+        """修改密码后旧密码应被拒绝。"""
+        client = _make_authed_client(tmp_db)
+        client.post(
+            "/api/auth/change-password",
+            json={"old_password": "admin", "new_password": "secure-new-pass-789"},
+        )
+        # 旧密码应无法登录
+        login_resp = client.post(
+            "/api/auth/login", json={"username": "admin", "password": "admin"}
+        )
+        assert login_resp.status_code == 401

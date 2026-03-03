@@ -511,3 +511,11 @@ class Database:
             cur.execute("SELECT COUNT(*) AS cnt FROM users WHERE role = 'admin'")
             row = cur.fetchone()
         return row["cnt"] if row else 0
+
+    def update_user_password(self, user_id: int, new_password_hash: str) -> None:
+        """Update a user's password hash by user id."""
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (new_password_hash, user_id),
+            )

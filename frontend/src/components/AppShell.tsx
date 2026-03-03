@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
+import { ChangePasswordModal } from '@/components/ChangePasswordModal'
 import { toast } from 'sonner'
 
 /** 导航菜单项定义 */
@@ -29,7 +30,7 @@ const navItems = [
 ]
 
 export function AppShell() {
-  const { user, logout } = useAuth()
+  const { user, logout, needPasswordChange } = useAuth()
   const navigate = useNavigate()
 
   const handleLogout = async () => {
@@ -43,6 +44,9 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen bg-gray-50 text-gray-900">
+      {/* 首次登录修改密码弹窗 */}
+      {needPasswordChange && <ChangePasswordModal />}
+
       {/* 左侧导航 */}
       <aside className="w-56 shrink-0 bg-white border-r border-gray-200 flex flex-col">
         {/* Logo / 品牌 */}

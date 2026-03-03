@@ -102,6 +102,30 @@ def authenticate_user(db: Database, username: str, password: str) -> dict[str, A
     return user
 
 
+def change_password(db: Database, user_id: int, old_password: str, new_password: str) -> bool:
+    """修改用户密码。
+
+    Args:
+        db: 数据库实例。
+        user_id: 用户 id。
+        old_password: 当前密码（明文）。
+        new_password: 新密码（明文）。
+
+    Returns:
+        True 表示修改成功，False 表示旧密码不匹配。
+    """
+    with db._cursor() as cur:
+        cur.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,))
+        row = cur.fetchone()
+    if row is None:
+        return False
+    if not verify_password(old_password, row["password_hash"]):
+        return False
+    new_hash = hash_password(new_password)
+    db.update_user_password(user_id, new_hash)
+    return True
+
+
 def ensure_admin_exists(db: Database) -> None:
     """若数据库中还没有 admin 用户，则从环境变量自动创建一次。
 

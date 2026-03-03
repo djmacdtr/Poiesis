@@ -1,4 +1,4 @@
-"""认证路由：登录、登出、当前用户信息。"""
+"""认证路由：登录、登出、当前用户信息、修改密码。"""
 
 from __future__ import annotations
 
@@ -16,6 +16,9 @@ router = APIRouter(prefix="/api/auth", tags=["认证"])
 # Cookie 名称
 _COOKIE_NAME = "poiesis_token"
 
+# 默认密码（首次登录提示修改）
+_DEFAULT_PASSWORD = "admin"
+
 
 class LoginRequest(BaseModel):
     """登录请求体。"""
@@ -30,6 +33,15 @@ class UserInfo(BaseModel):
     id: int
     username: str
     role: str
+    need_password_change: bool = False
+    """True 表示正在使用默认密码，建议立即修改。"""
+
+
+class ChangePasswordRequest(BaseModel):
+    """修改密码请求体。"""
+
+    old_password: str
+    new_password: str
 
 
 @router.post("/login")
@@ -57,7 +69,17 @@ def login(
         max_age=7 * 24 * 3600,  # 7 天
         path="/",
     )
-    return UserInfo(id=user["id"], username=user["username"], role=user["role"])
+    # 若使用默认密码登录，提示修改
+    using_default = body.password == _DEFAULT_PASSWORD
+    need_change = using_default and auth_service.verify_password(
+        body.password, user["password_hash"]
+    )
+    return UserInfo(
+        id=user["id"],
+        username=user["username"],
+        role=user["role"],
+        need_password_change=need_change,
+    )
 
 
 @router.post("/logout")
@@ -77,3 +99,19 @@ def get_me(
         username=current_user["username"],
         role=current_user["role"],
     )
+
+
+@router.post("/change-password")
+def change_password(
+    body: ChangePasswordRequest,
+    db: Database = Depends(deps.get_db),
+    current_user: dict[str, Any] = Depends(deps.get_current_user),
+) -> dict[str, str]:
+    """修改当前登录用户的密码。"""
+    if len(body.new_password) < 6:
+        raise HTTPException(status_code=422, detail="新密码长度不得少于 6 位")
+    user_id = int(current_user["sub"])
+    ok = auth_service.change_password(db, user_id, body.old_password, body.new_password)
+    if not ok:
+        raise HTTPException(status_code=401, detail="当前密码不正确")
+    return {"message": "密码修改成功"}
