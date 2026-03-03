@@ -74,3 +74,11 @@ CREATE TABLE IF NOT EXISTS chapter_summaries (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (chapter_number) REFERENCES chapters(chapter_number)
 );
+
+-- 系统配置表：存储加密后的 API Key 及其他全局配置
+CREATE TABLE IF NOT EXISTS system_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    config_key TEXT NOT NULL UNIQUE,
+    config_value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

@@ -18,7 +18,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from poiesis.api.routers import chapters, run, world
+from poiesis.api.routers import chapters, run, system_config, world
 
 # 创建 FastAPI 应用
 app = FastAPI(
@@ -47,6 +47,7 @@ app.add_middleware(
 app.include_router(chapters.router)
 app.include_router(world.router)
 app.include_router(run.router)
+app.include_router(system_config.router)
 
 
 @app.get("/health", tags=["健康检查"])

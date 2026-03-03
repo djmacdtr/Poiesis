@@ -10,6 +10,7 @@ import ChapterDetail from '@/pages/ChapterDetail'
 import Canon from '@/pages/Canon'
 import Staging from '@/pages/Staging'
 import Stats from '@/pages/Stats'
+import Settings from '@/pages/Settings'
 
 function App() {
   return (
@@ -23,6 +24,7 @@ function App() {
           <Route path="canon" element={<Canon />} />
           <Route path="staging" element={<Staging />} />
           <Route path="stats" element={<Stats />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
     </BrowserRouter>

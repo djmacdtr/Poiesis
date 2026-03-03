@@ -9,6 +9,7 @@ import {
   Globe,
   GitPullRequest,
   BarChart2,
+  Settings,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -20,6 +21,7 @@ const navItems = [
   { to: '/canon', label: '世界设定', icon: Globe, end: false },
   { to: '/staging', label: '候选审批', icon: GitPullRequest, end: false },
   { to: '/stats', label: '统计分析', icon: BarChart2, end: false },
+  { to: '/settings', label: '系统设置', icon: Settings, end: false },
 ]
 
 export function AppShell() {
