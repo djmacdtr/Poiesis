@@ -1,4 +1,4 @@
-"""Chapter writer that generates narrative prose guided by a plan."""
+"""章节写作器，根据结构化规划生成叙事散文。"""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ class ChapterWriter:
         """
         world_context = world.world_context_summary()
 
-        # Pull relevant context from vector store using the plan summary
+        # 利用章节摘要作为查询，从向量存储中拉取相关背景信息
         query = plan.get("summary", f"chapter {chapter_number}")
         relevant = self._vs.search(query, k=8)
         relevant_context = (

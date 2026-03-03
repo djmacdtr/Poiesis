@@ -1,4 +1,4 @@
-"""Configuration management for Poiesis using Pydantic v2."""
+"""Poiesis 配置管理模块，基于 Pydantic v2 实现。"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Abstract base class for LLM clients."""
+"""LLM 客户端抽象基类。"""
 
 from __future__ import annotations
 
@@ -96,13 +96,14 @@ class LLMClient(ABC):
 
         Tries direct parsing first, then attempts to find a JSON block.
         """
+        # 先尝试直接解析 JSON 字符串
         text = text.strip()
         try:
             return json.loads(text)  # type: ignore[no-any-return]
         except json.JSONDecodeError:
             pass
 
-        # Look for a JSON block wrapped in markdown code fences
+        # 尝试从 Markdown 代码块中提取 JSON
         import re
 
         match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
@@ -112,7 +113,7 @@ class LLMClient(ABC):
             except json.JSONDecodeError:
                 pass
 
-        # Last resort: find first { ... } block
+        # 最后手段：查找文本中第一个完整的 { ... } 块
         start = text.find("{")
         end = text.rfind("}")
         if start != -1 and end != -1 and end > start:

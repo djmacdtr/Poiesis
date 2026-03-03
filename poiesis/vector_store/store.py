@@ -1,4 +1,4 @@
-"""FAISS-backed vector store with sentence-transformers embeddings."""
+"""基于 FAISS 和 sentence-transformers 的向量存储。"""
 
 from __future__ import annotations
 
@@ -37,9 +37,9 @@ class VectorStore:
         self._index_path = self.store_path / self._INDEX_FILE
         self._meta_path = self.store_path / self._META_FILE
 
-        # metadata: list of {key, text, metadata} dicts, index-aligned
+        # metadata：与 FAISS 索引位置对齐的文档元数据列表
         self._metadata: list[dict[str, Any]] = []
-        # key -> position mapping for O(1) lookups
+        # key -> 位置的映射，支持 O(1) 复杂度的查找
         self._key_to_pos: dict[str, int] = {}
 
         self._load()
@@ -143,10 +143,10 @@ class VectorStore:
             return
 
         pos = self._key_to_pos[key]
-        # Mark slot as None to indicate deletion
+        # 将该槽位标记为 None 表示已删除
         self._metadata[pos] = None  # type: ignore[call-overload]
 
-        # Rebuild index from remaining entries
+        # 从剩余条目中重建索引
         remaining = [(i, m) for i, m in enumerate(self._metadata) if m is not None]
         self._metadata = [m for _, m in remaining]
         self._key_to_pos = {m["key"]: i for i, m in enumerate(self._metadata)}

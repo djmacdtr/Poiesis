@@ -1,4 +1,4 @@
-"""Fact extractor that parses new world facts from generated chapters."""
+"""事实提取器，从生成的章节中解析新的世界事实。"""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ class FactExtractor:
 
         staging: list[dict[str, Any]] = []
 
-        # New characters
+        # 处理新角色
         for char in raw.get("new_characters", []):
             name = char.get("name", "")
             if not name:
@@ -73,7 +73,7 @@ class FactExtractor:
                 }
             )
 
-        # New world rules
+        # 处理新世界规则
         for rule in raw.get("new_world_rules", []):
             key = rule.get("rule_key", "")
             if not key:
@@ -88,7 +88,7 @@ class FactExtractor:
                 }
             )
 
-        # Timeline events
+        # 处理时间线事件
         for event in raw.get("timeline_events", []):
             key = event.get("event_key", "")
             if not key:
@@ -103,7 +103,7 @@ class FactExtractor:
                 }
             )
 
-        # Foreshadowing
+        # 处理伏笔提示
         for hint in raw.get("foreshadowing", []):
             key = hint.get("hint_key", "")
             if not key:
@@ -118,7 +118,7 @@ class FactExtractor:
                 }
             )
 
-        # Character updates
+        # 处理角色属性更新
         for update in raw.get("character_updates", []):
             name = update.get("name", "")
             if not name:

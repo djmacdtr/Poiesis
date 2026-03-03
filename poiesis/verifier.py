@@ -1,4 +1,4 @@
-"""Consistency verifier for generated chapters."""
+"""生成章节的一致性验证器。"""
 
 from __future__ import annotations
 
@@ -62,10 +62,10 @@ class ConsistencyVerifier:
         violations: list[str] = []
         warnings: list[str] = []
 
-        # --- Rule-based checks ---
+        # --- 基于规则的静态检查 ---
         self._check_new_fact_budget(proposed_changes, violations, warnings)
 
-        # --- LLM-based checks ---
+        # --- 基于 LLM 的语义检查 ---
         world_context = world.world_context_summary()
         changes_text = json.dumps(proposed_changes, indent=2)
         plan_text = json.dumps(plan, indent=2)

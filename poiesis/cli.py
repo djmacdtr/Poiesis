@@ -1,4 +1,4 @@
-"""CLI entry point for Poiesis."""
+"""Poiesis 命令行入口。"""
 
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ def status(config: str) -> None:
     characters = db.list_characters()
     pending = db.list_staging_changes(status="pending")
 
-    # Summary table
+    # 构建并打印状态汇总表格
     table = Table(title="Poiesis World Status", show_header=True, header_style="bold magenta")
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="white")

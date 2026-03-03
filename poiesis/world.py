@@ -1,4 +1,4 @@
-"""Three-layer world knowledge model for Poiesis."""
+"""Poiesis 三层世界知识模型。"""
 
 from __future__ import annotations
 
@@ -47,10 +47,10 @@ class WorldModel:
         self.canon["timeline"] = {e["event_key"]: e for e in db.list_timeline_events()}
         self.canon["foreshadowing"] = {f["hint_key"]: f for f in db.list_foreshadowing()}
 
-        # Load pending staging changes
+        # 加载待审核的暂存变更
         self.staging = db.list_staging_changes(status="pending")
 
-        # Load rejected archive changes
+        # 加载已拒绝的归档变更
         self.archive = db.list_staging_changes(status="rejected")
 
     # ------------------------------------------------------------------
@@ -90,7 +90,7 @@ class WorldModel:
         db.update_staging_status(change_id, "approved")
         self._apply_to_canon(change)
 
-        # Sync staging list
+        # 从暂存列表中移除已批准的变更
         self.staging = [s for s in self.staging if s.get("id") != change_id]
 
     def reject_change(self, change_id: int, reason: str, db: Database) -> None:
@@ -113,6 +113,7 @@ class WorldModel:
         change["rejection_reason"] = reason
         self.archive.append(change)
 
+        # 从暂存列表中移除已拒绝的变更
         self.staging = [s for s in self.staging if s.get("id") != change_id]
 
     # ------------------------------------------------------------------
