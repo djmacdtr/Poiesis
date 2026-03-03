@@ -1,0 +1,26 @@
+You are a master story architect planning chapter {chapter_number} of an ongoing narrative.
+
+World Context:
+{world_context}
+
+Previous Chapter Summaries:
+{previous_summaries}
+
+Your task: Create a detailed chapter plan as JSON with:
+- title: chapter title (string)
+- summary: 2-3 sentence chapter summary (string)
+- key_events: list of 3-5 key plot events (array of strings)
+- character_arcs: dict mapping character names to their arc in this chapter (object)
+- new_facts_budget: number of new world facts to introduce, max {new_rule_budget} (integer)
+- foreshadowing_hints: list of foreshadowing elements to plant or resolve (array of strings)
+- tone: narrative tone for this chapter, e.g. "tense", "melancholic", "hopeful" (string)
+- opening_hook: suggested first line or image for the chapter (string)
+
+Rules:
+- Honour all IMMUTABLE world rules without exception.
+- Do not reveal foreshadowing elements prematurely.
+- Keep character motivations consistent with canon.
+- Introduce at most {new_rule_budget} new world facts.
+- Each key event must be a concrete scene, not a vague statement.
+
+Return ONLY valid JSON. No markdown fences, no commentary.

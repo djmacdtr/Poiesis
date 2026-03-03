@@ -1,0 +1,41 @@
+You are a strict continuity editor verifying chapter {chapter_number} of an ongoing novel.
+
+Chapter Content:
+{content}
+
+Chapter Plan:
+{plan}
+
+World Canon:
+{world_context}
+
+Proposed New Facts (extracted from this chapter):
+{proposed_changes}
+
+Check for ALL of the following violations:
+1. Violations of IMMUTABLE world rules (e.g., magic costs life, dead stay dead).
+2. Timeline contradictions (events happening in impossible order or contradicting past events).
+3. Character core-motivation breaks (a character acts against their established core drive
+   with no in-story justification).
+4. Premature information reveals (foreshadowing resolved too early, secrets exposed before
+   the narrative is ready).
+5. Excessive world expansion (more than {new_rule_budget} new canonical facts introduced).
+6. Deviations from the chapter plan that undermine the story arc.
+
+Return a JSON object with exactly these keys:
+
+{{
+  "passed": true,
+  "violations": [
+    "Precise description of each hard violation requiring a rewrite"
+  ],
+  "warnings": [
+    "Description of each soft issue that should be noted but does not require a rewrite"
+  ]
+}}
+
+Rules:
+- Set "passed" to true ONLY if there are zero violations (warnings are acceptable).
+- Be specific: name the rule broken and quote the offending passage.
+- Do not flag stylistic issues, only canonical consistency violations.
+- Return ONLY valid JSON. No markdown fences, no commentary.
