@@ -81,6 +81,32 @@ def init(config: str, seed: str | None) -> None:
     show_default=True,
     help="Path to config.yaml.",
 )
+@click.option("--host", default="0.0.0.0", show_default=True, help="监听地址。")
+@click.option("--port", default=8000, show_default=True, type=int, help="监听端口。")
+@click.option("--reload", is_flag=True, default=False, help="开启热重载（开发模式）。")
+def serve(config: str, host: str, port: int, reload: bool) -> None:
+    """启动 Poiesis HTTP API 服务（FastAPI + uvicorn）。"""
+    import os
+
+    import uvicorn
+
+    os.environ["POIESIS_CONFIG"] = config
+    console.print(f"[green]启动 API 服务：http://{host}:{port}[/green]")
+    uvicorn.run(
+        "poiesis.api.main:app",
+        host=host,
+        port=port,
+        reload=reload,
+    )
+
+
+@main.command()
+@click.option(
+    "--config",
+    default="config.yaml",
+    show_default=True,
+    help="Path to config.yaml.",
+)
 def status(config: str) -> None:
     """Show current world state and generation progress."""
     from poiesis.config import load_config

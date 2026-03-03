@@ -171,6 +171,91 @@ pytest tests/test_database.py -v
 
 ---
 
+## 后端 API 服务
+
+Poiesis 内置了一个基于 **FastAPI** 的 HTTP API 服务层，供前端控制台（`frontend/`）调用真实数据。
+
+### 启动 API 服务
+
+```bash
+# 方式一：通过 CLI 子命令（推荐）
+poiesis serve --config config.yaml
+
+# 方式二：直接运行模块
+python -m poiesis.api.main --config config.yaml
+
+# 可选参数
+poiesis serve --config config.yaml --host 127.0.0.1 --port 8000 --reload
+```
+
+服务默认监听 `http://localhost:8000`，可通过 `--host` / `--port` 调整。
+
+启动后可访问自动生成的 API 文档：
+- Swagger UI：`http://localhost:8000/docs`
+- ReDoc：`http://localhost:8000/redoc`
+
+### 环境变量
+
+| 变量名 | 说明 | 默认值 |
+|--------|------|--------|
+| `POIESIS_CONFIG` | 配置文件路径（同 `--config`） | `config.yaml` |
+
+---
+
+## 前端联调步骤
+
+### 1. 配置前端 API 地址
+
+在 `frontend/` 目录下，复制并编辑环境变量文件：
+
+```bash
+cd frontend
+cp .env.example .env.local
+# 编辑 .env.local，设置：
+# VITE_API_BASE_URL=http://localhost:8000
+```
+
+### 2. 启动后端
+
+```bash
+# 在项目根目录
+poiesis serve --config config.yaml
+```
+
+### 3. 启动前端
+
+```bash
+cd frontend
+npm install
+npm run dev
+# 前端默认运行在 http://localhost:5173
+```
+
+### 4. 最小联调验收流程
+
+1. 打开浏览器访问 `http://localhost:5173`（Dashboard 页面）
+2. 查看 **章节列表**（Chapters 页面）——确认能看到已生成的章节
+3. 点击 **Run**，设置章节数为 1，触发生成任务
+4. 通过轮询 `GET /api/run/{task_id}` 或刷新 Chapters 页面，确认新章节出现
+5. 如有 staging 变更，在 **Staging** 页面审批或拒绝
+
+### 已实现接口清单
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/chapters` | 章节列表 |
+| GET | `/api/chapters/{id}` | 章节详情 |
+| GET | `/api/world/canon` | Canon 快照（规则/角色/时间线/伏笔） |
+| GET | `/api/world/staging` | Staging 变更列表（可 `?status=pending` 筛选） |
+| POST | `/api/world/staging/{id}/approve` | 批准变更 |
+| POST | `/api/world/staging/{id}/reject` | 拒绝变更（必须提供 `reason`） |
+| POST | `/api/run` | 启动写作任务 |
+| GET | `/api/run/{task_id}` | 查询任务状态与日志 |
+| GET | `/api/run/{task_id}/events` | SSE 实时日志流 |
+| GET | `/health` | 健康检查 |
+
+---
+
 ## 参与贡献
 
 1. Fork 本仓库并创建功能分支。
