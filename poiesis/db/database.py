@@ -28,7 +28,7 @@ class Database:
 
     def _get_connection(self) -> sqlite3.Connection:
         if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path)
+            self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
@@ -295,10 +295,17 @@ class Database:
         result["proposed_data"] = json.loads(result.get("proposed_data") or "{}")
         return result
 
-    def list_staging_changes(self, status: str = "pending") -> list[dict[str, Any]]:
-        """Return staging changes filtered by status."""
+    def list_staging_changes(self, status: str | None = "pending") -> list[dict[str, Any]]:
+        """Return staging changes filtered by status.
+
+        Args:
+            status: Filter by status value. Pass ``None`` to return all records.
+        """
         with self._cursor() as cur:
-            cur.execute("SELECT * FROM staging_changes WHERE status = ?", (status,))
+            if status is None:
+                cur.execute("SELECT * FROM staging_changes ORDER BY id ASC")
+            else:
+                cur.execute("SELECT * FROM staging_changes WHERE status = ?", (status,))
             rows = cur.fetchall()
         return [
             {**dict(r), "proposed_data": json.loads(r["proposed_data"] or "{}")} for r in rows
@@ -351,6 +358,17 @@ class Database:
                 ),
             )
             return cur.lastrowid or 0
+
+    def get_chapter_by_id(self, chapter_id: int) -> dict[str, Any] | None:
+        """Return a chapter by its primary key (id), or None."""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM chapters WHERE id = ?", (chapter_id,))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["plan"] = json.loads(result.get("plan") or "{}")
+        return result
 
     def get_chapter(self, chapter_number: int) -> dict[str, Any] | None:
         """Return a chapter by number, or None."""
