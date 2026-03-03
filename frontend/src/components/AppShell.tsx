@@ -1,7 +1,7 @@
 /**
  * 应用外壳：左侧导航栏 + 顶部标题栏 + 内容区
  */
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
   Play,
@@ -10,8 +10,12 @@ import {
   GitPullRequest,
   BarChart2,
   Settings,
+  LogOut,
+  User,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useAuth } from '@/contexts/AuthContext'
+import { toast } from 'sonner'
 
 /** 导航菜单项定义 */
 const navItems = [
@@ -25,6 +29,18 @@ const navItems = [
 ]
 
 export function AppShell() {
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+
+  const handleLogout = async () => {
+    try {
+      await logout()
+      navigate('/login', { replace: true })
+    } catch {
+      toast.error('退出登录失败，请重试')
+    }
+  }
+
   return (
     <div className="flex h-screen bg-gray-50 text-gray-900">
       {/* 左侧导航 */}
@@ -69,8 +85,31 @@ export function AppShell() {
       {/* 右侧主区域 */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* 顶部栏 */}
-        <header className="h-16 shrink-0 bg-white border-b border-gray-200 flex items-center px-6">
+        <header className="h-16 shrink-0 bg-white border-b border-gray-200 flex items-center justify-between px-6">
           <h1 className="text-base font-semibold text-gray-700">AI 小说写作控制台</h1>
+
+          {/* 用户信息与退出按钮 */}
+          {user && (
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5 text-sm text-gray-600">
+                <User className="w-4 h-4 text-gray-400" />
+                <span>{user.username}</span>
+                {user.role === 'admin' && (
+                  <span className="text-xs px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded">
+                    管理员
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-600 transition-colors px-2 py-1 rounded hover:bg-red-50"
+                title="退出登录"
+              >
+                <LogOut className="w-4 h-4" />
+                退出
+              </button>
+            </div>
+          )}
         </header>
 
         {/* 页面内容 */}

@@ -1,9 +1,12 @@
-"""FastAPI 依赖注入：数据库连接与配置加载。"""
+"""FastAPI 依赖注入：数据库连接、配置加载与权限控制。"""
 
 from __future__ import annotations
 
 import os
 from functools import lru_cache
+from typing import Any
+
+from fastapi import Cookie, Depends, HTTPException
 
 from poiesis.config import Config, load_config
 from poiesis.db.database import Database
@@ -26,3 +29,29 @@ def get_db() -> Database:
     db = Database(cfg.database.path)
     db.initialize_schema()
     return db
+
+
+def get_current_user(
+    poiesis_token: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """从 HttpOnly Cookie 中解析 JWT，返回当前用户 payload。
+
+    未登录或 token 无效时抛出 401。
+    """
+    from poiesis.api.services.auth_service import decode_access_token
+
+    if not poiesis_token:
+        raise HTTPException(status_code=401, detail="未登录，请先访问 /api/auth/login")
+    payload = decode_access_token(poiesis_token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
+    return payload
+
+
+def require_admin(
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """仅允许 admin 角色访问，否则抛出 403。"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可执行此操作")
+    return current_user

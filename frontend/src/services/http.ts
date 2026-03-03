@@ -3,15 +3,16 @@
  * baseURL 来自环境变量 VITE_API_BASE_URL
  */
 
-const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000'
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
 
 /** 通用请求函数，自动处理 JSON 序列化与错误提示 */
 export async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const url = `${BASE_URL}${path}`
+  const url = BASE_URL ? `${BASE_URL}${path}` : path
   const res = await fetch(url, {
+    credentials: 'include',  // 携带 HttpOnly Cookie
     headers: {
       'Content-Type': 'application/json',
       ...options.headers,

@@ -8,23 +8,41 @@
     poiesis serve --config path/to/config.yaml
 
 环境变量：
-    POIESIS_CONFIG  配置文件路径（默认 config.yaml）
+    POIESIS_CONFIG      配置文件路径（默认 config.yaml）
+    POIESIS_SECRET_KEY  加密与 JWT 签名密钥（生产环境必填）
+    POIESIS_ADMIN_USER  首次启动自动创建的管理员用户名（默认 admin）
+    POIESIS_ADMIN_PASS  首次启动自动创建的管理员密码（默认 admin，生产必改）
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from poiesis.api.routers import chapters, run, system_config, world
+from poiesis.api.routers import auth, chapters, run, system_config, world
+
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
+    """服务启动时自动创建管理员（若不存在）。"""
+    from poiesis.api.deps import get_db
+    from poiesis.api.services.auth_service import ensure_admin_exists
+
+    db = get_db()
+    ensure_admin_exists(db)
+    yield
+
 
 # 创建 FastAPI 应用
 app = FastAPI(
     title="Poiesis API",
     description="Poiesis 后端 HTTP API，供前端控制台调用。",
     version="0.1.0",
+    lifespan=_lifespan,
 )
 
 # ──────────────────────────────────────────────
@@ -44,6 +62,7 @@ app.add_middleware(
 # ──────────────────────────────────────────────
 # 路由注册
 # ──────────────────────────────────────────────
+app.include_router(auth.router)
 app.include_router(chapters.router)
 app.include_router(world.router)
 app.include_router(run.router)

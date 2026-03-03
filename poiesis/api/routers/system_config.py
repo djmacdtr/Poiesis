@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from poiesis.api.deps import get_db
+from poiesis.api.deps import get_db, require_admin
 from poiesis.api.schemas.system_config import SystemConfigRequest, SystemConfigStatus
 from poiesis.api.services import system_config_service
 from poiesis.db.database import Database
@@ -16,8 +17,11 @@ router = APIRouter(prefix="/api/system", tags=["系统配置"])
 
 
 @router.get("/config", response_model=SystemConfigStatus)
-def get_system_config(db: Database = Depends(get_db)) -> SystemConfigStatus:
-    """获取系统配置状态（不返回明文 API Key）。"""
+def get_system_config(
+    db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
+) -> SystemConfigStatus:
+    """获取系统配置状态（不返回明文 API Key，仅 admin 可访问）。"""
     return system_config_service.get_config_status(db)
 
 
@@ -25,8 +29,9 @@ def get_system_config(db: Database = Depends(get_db)) -> SystemConfigStatus:
 def save_system_config(
     body: SystemConfigRequest,
     db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
 ) -> SystemConfigStatus:
-    """保存或更新系统配置（API Key 加密存储，响应不含明文 Key）。"""
+    """保存或更新系统配置（API Key 加密存储，仅 admin 可操作）。"""
     return system_config_service.save_config(db, body)
 
 
@@ -41,8 +46,9 @@ class InitRequest(BaseModel):
 def init_world(
     body: InitRequest | None = None,
     db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
 ) -> dict[str, str]:
-    """初始化世界数据库。
+    """初始化世界数据库（仅 admin 可操作）。
 
     使用指定的 seed.yaml 路径（或默认路径）加载世界种子数据。
     """
@@ -57,7 +63,6 @@ def init_world(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail="世界种子文件不存在，请检查路径配置") from exc
     except Exception as exc:  # noqa: BLE001
-        # 内部错误仅记录类型，不向前端暴露详细堆栈
         raise HTTPException(status_code=500, detail=f"初始化失败：{type(exc).__name__}") from exc
 
     return {"status": "ok", "message": "世界初始化完成"}
