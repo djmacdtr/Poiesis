@@ -319,6 +319,9 @@ npm run dev
 
 > **推荐部署方式：Docker + docker compose**
 > 无需手动配置 Python 环境，一键拉起前端控制台与后端 API。
+>
+> **端口说明**：Docker 服务仅绑定本机回环地址（`127.0.0.1`），不对公网直接暴露，
+> 需由服务器已有 Nginx 做外部反向代理（参见下方[生产部署](#生产部署服务器-nginx-反代)章节）。
 
 ### 前置准备
 
@@ -353,7 +356,22 @@ mkdir -p data
 docker compose up -d --build
 ```
 
-访问 Web 控制台：`http://服务器IP/`
+启动后各服务监听端口：
+
+| 服务 | 本机端口 | 说明 |
+|------|----------|------|
+| web（前端 Nginx） | `127.0.0.1:18080` | 静态文件 + 内部 `/api` 反代 |
+| api（后端 FastAPI）| `127.0.0.1:18000` | REST API，便于本地调试 |
+
+> 两个端口均只绑定 `127.0.0.1`，不对公网直接暴露。
+> 需配置服务器 Nginx 反代到 `127.0.0.1:18080` 后方可从外部访问（见下方生产部署章节）。
+
+本地快速验证（无需外部 Nginx）：
+
+```bash
+curl http://127.0.0.1:18080/       # 前端页面
+curl http://127.0.0.1:18000/health # 后端健康检查
+```
 
 > 首次启动使用 `POIESIS_EMBEDDING_MODE=dummy`（默认），无需下载 embedding 模型，可直接打开页面。
 
@@ -414,7 +432,96 @@ docker compose up -d
 
 - **请勿**将含有真实 API Key 的 `.env` 文件提交到版本库（`.gitignore` 已忽略 `.env`）。
 - 推荐通过宿主机环境变量或 `.env` 文件注入密钥，不要写进 Dockerfile 或镜像。
-- 生产环境建议在 Nginx 前加 HTTPS（Let's Encrypt 或反代到 443），此处暂只配置 HTTP 80。
+- Docker 服务端口仅绑定 `127.0.0.1`，HTTPS 及证书管理统一交由服务器 Nginx 处理。
+
+---
+
+## 生产部署（服务器 Nginx 反代）
+
+Docker compose 只提供应用容器，不直接监听公网 80/443 端口。
+生产环境推荐使用服务器上已有的 Nginx 统一管理 HTTPS 与域名，Docker 仅作为应用容器运行。
+
+### 架构说明
+
+```
+外部请求（浏览器）
+      │ HTTPS 443（或 HTTP 80）
+      ▼
+ 服务器 Nginx（宿主机）          ← 负责 SSL 证书、域名、访问控制
+      │ proxy_pass http://127.0.0.1:18080
+      ▼
+ Docker web 容器（Nginx）        ← 托管前端静态文件，内部反代 /api
+      │ proxy_pass http://api:8000
+      ▼
+ Docker api 容器（FastAPI）      ← Poiesis 后端
+```
+
+### 服务器 Nginx 示例配置
+
+将以下配置添加到服务器 Nginx 的 `sites-available/` 目录（如 `/etc/nginx/sites-available/poiesis`）：
+
+```nginx
+# Poiesis Web 控制台 — 服务器 Nginx 反代配置示例
+# 将外部请求转发到 Docker 容器的 web 服务（127.0.0.1:18080）
+
+server {
+    listen 80;
+    server_name your-domain.com;  # 替换为你的域名或服务器 IP
+
+    # 如已配置 HTTPS，可在此添加 HTTP → HTTPS 跳转：
+    # return 301 https://$host$request_uri;
+
+    location / {
+        # 反代到 Docker web 容器
+        proxy_pass         http://127.0.0.1:18080;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        # SSE 实时日志流需要关闭缓冲
+        proxy_buffering    off;
+        proxy_read_timeout 300s;
+    }
+}
+
+# HTTPS 配置示例（需先用 certbot 申请证书）
+# server {
+#     listen 443 ssl;
+#     server_name your-domain.com;
+#
+#     ssl_certificate     /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+#     ssl_protocols       TLSv1.2 TLSv1.3;
+#
+#     location / {
+#         proxy_pass         http://127.0.0.1:18080;
+#         proxy_http_version 1.1;
+#         proxy_set_header   Host              $host;
+#         proxy_set_header   X-Real-IP         $remote_addr;
+#         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+#         proxy_set_header   X-Forwarded-Proto $scheme;
+#         proxy_buffering    off;
+#         proxy_read_timeout 300s;
+#     }
+# }
+```
+
+启用配置并重载 Nginx：
+
+```bash
+sudo ln -s /etc/nginx/sites-available/poiesis /etc/nginx/sites-enabled/poiesis
+sudo nginx -t          # 语法检查
+sudo systemctl reload nginx
+```
+
+### 配置 HTTPS（Let's Encrypt）
+
+```bash
+sudo apt install certbot python3-certbot-nginx
+sudo certbot --nginx -d your-domain.com
+# certbot 会自动修改 nginx 配置并续期证书
+```
 
 ---
 
