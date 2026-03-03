@@ -1,0 +1,36 @@
+# Docker 专用 Poiesis 配置
+# 数据库与向量存储路径指向容器内挂载目录（由 docker-compose.yml 中 volumes 绑定）
+
+llm:
+  provider: "openai"
+  model: "gpt-4o"
+  temperature: 0.8
+  max_tokens: 4000
+
+planner_llm:
+  provider: "openai"
+  model: "gpt-4o"
+  temperature: 0.3
+  max_tokens: 2000
+
+similarity:
+  originality_threshold: 0.85
+  fact_retrieval_k: 10
+  chapter_similarity_k: 5
+
+generation:
+  max_chapters: 100
+  rewrite_retries: 3
+  new_rule_budget: 5
+  target_word_count: 3000
+
+# 数据库文件路径（宿主机 ./data/poiesis.db 挂载到容器内）
+database:
+  path: "/app/data/poiesis.db"
+
+# 向量存储路径（宿主机 ./data/vector_store 挂载到容器内）
+vector_store:
+  path: "/app/data/vector_store"
+  embedding_model: "all-MiniLM-L6-v2"
+
+world_seed: "/app/examples/world_seed.yaml"

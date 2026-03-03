@@ -1,0 +1,55 @@
+# docker-compose.yml
+# Poiesis 一键部署：后端 API + 前端 Nginx
+#
+# 使用方式：
+#   1. 复制 .env.example 为 .env，填入 API Key
+#   2. docker compose up -d --build
+#   3. 访问 http://服务器IP/
+
+services:
+  # ── 后端 API 服务 ────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    restart: unless-stopped
+    environment:
+      # LLM 密钥（从 .env 文件读取，不写入镜像）
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # embedding 模式：dummy（离线哈希，首次启动无需下载模型）/ real（真实语义向量）
+      - POIESIS_EMBEDDING_MODE=${POIESIS_EMBEDDING_MODE:-dummy}
+      # 配置文件路径（容器内）
+      - POIESIS_CONFIG=/app/config.yaml
+    volumes:
+      # 持久化数据目录（含 poiesis.db 和 vector_store/）
+      - ./data:/app/data
+      # Docker 专用配置（只读）
+      - ./docker/config.yaml:/app/config.yaml:ro
+      # 世界种子文件（init 时使用）
+      - ./examples:/app/examples:ro
+    # api 服务不对公网直接暴露，仅供 web 服务反代
+    # 若需本地调试，可取消下方注释：
+    # ports:
+    #   - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request, sys; \
+              r = urllib.request.urlopen('http://localhost:8000/health', timeout=5); \
+              sys.exit(0 if r.status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── 前端 Nginx 服务 ──────────────────────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    restart: unless-stopped
+    ports:
+      # 对外暴露 HTTP 80 端口
+      - "80:80"
+    depends_on:
+      - api
