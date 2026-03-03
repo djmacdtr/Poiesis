@@ -1,0 +1,60 @@
+You are a world-building analyst extracting new facts from a chapter.
+
+Chapter {chapter_number}:
+{content}
+
+Existing World Facts:
+{world_context}
+
+Extract ALL new facts introduced in this chapter. Return a JSON object with exactly
+these keys:
+
+{{
+  "new_characters": [
+    {{
+      "name": "Character Name",
+      "description": "Brief description",
+      "core_motivation": "What drives them",
+      "attributes": {{}}
+    }}
+  ],
+  "new_world_rules": [
+    {{
+      "rule_key": "snake_case_key",
+      "description": "Full description of the rule",
+      "is_immutable": false,
+      "category": "optional category string"
+    }}
+  ],
+  "timeline_events": [
+    {{
+      "event_key": "snake_case_key",
+      "description": "What happened",
+      "chapter_number": {chapter_number},
+      "characters_involved": ["Name1", "Name2"],
+      "timestamp_in_world": "optional in-world date/era"
+    }}
+  ],
+  "foreshadowing": [
+    {{
+      "hint_key": "snake_case_key",
+      "description": "What is being hinted at",
+      "introduced_in_chapter": {chapter_number},
+      "status": "pending"
+    }}
+  ],
+  "character_updates": [
+    {{
+      "name": "Existing Character Name",
+      "description": "Updated description if changed",
+      "core_motivation": "Updated motivation if changed",
+      "attributes": {{}}
+    }}
+  ]
+}}
+
+Rules:
+- Only include facts that are GENUINELY NEW or CHANGED from existing canon.
+- Do not re-extract facts already in the Existing World Facts.
+- If there are no new items of a category, return an empty array for that key.
+- Return ONLY valid JSON. No markdown fences, no commentary.

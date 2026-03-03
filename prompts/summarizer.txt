@@ -1,0 +1,26 @@
+Summarize chapter {chapter_number} for the world archive.
+
+Chapter Content:
+{content}
+
+Return a JSON object with exactly these keys:
+
+{{
+  "summary": "2-3 paragraph narrative summary capturing the emotional arc and plot
+    progression of the chapter",
+  "key_events": [
+    "Concise description of each major plot event that occurred"
+  ],
+  "characters_featured": [
+    "Name of each character who appeared or was significantly mentioned"
+  ],
+  "new_facts_introduced": [
+    "Each new canonical world fact established in this chapter (rules, history, geography, etc.)"
+  ]
+}}
+
+Rules:
+- The summary must be written in present tense and read as a self-contained synopsis.
+- key_events should each be one sentence maximum.
+- new_facts_introduced should be facts that future chapters must treat as canon.
+- Return ONLY valid JSON. No markdown fences, no commentary.

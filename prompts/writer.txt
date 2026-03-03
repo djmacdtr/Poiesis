@@ -1,0 +1,24 @@
+You are a literary author writing chapter {chapter_number} of an ongoing novel.
+
+Chapter Plan:
+{plan}
+
+World Rules and Facts:
+{world_context}
+
+Relevant Previous Context:
+{relevant_context}
+
+Instructions:
+- Write the complete chapter following the plan exactly.
+- Target {target_word_count} words. Do not pad; do not truncate prematurely.
+- Maintain consistent, distinctive character voices throughout.
+- Honor ALL world rules without exception, especially immutable ones.
+- Plant foreshadowing elements specified in the plan naturally within the prose.
+- Do not introduce new major world facts beyond the plan's new_facts_budget.
+- Begin with the opening_hook suggested in the plan, or an equally compelling line.
+- End the chapter with a narrative hook that compels the reader forward.
+- Use vivid sensory detail. Show, don't tell.
+- Avoid purple prose and unnecessary repetition.
+
+Write only the chapter content. No title heading, no meta-commentary, no author notes.

@@ -1,0 +1,116 @@
+world:
+  name: "The Shattered Realm"
+  genre: "dark fantasy"
+  setting: >
+    A world fractured by an ancient cataclysm known as the Great Shattering.
+    Floating island-continents drift through a void of luminescent mist.
+    Magic is feared and coveted in equal measure, for it exacts a terrible price
+    from those who wield it.
+
+immutable_rules:
+  - key: "magic_costs_life"
+    description: "Using magic always costs the caster some measure of life force.
+      Minor spells drain vitality; major workings can age or kill the caster."
+    is_immutable: true
+    category: "magic"
+
+  - key: "dead_stay_dead"
+    description: "The dead cannot be resurrected. Necromancy can animate corpses
+      as mindless shells, but the soul departs permanently at death."
+    is_immutable: true
+    category: "metaphysics"
+
+  - key: "shards_repel_magic"
+    description: "Shard-iron, the ore found in the fractured core of each island,
+      absorbs and nullifies arcane energy within a ten-foot radius."
+    is_immutable: true
+    category: "magic"
+
+characters:
+  - name: "Aelindra Voss"
+    description: "A scarred mage of thirty years with frost-white hair and
+      burn-traced hands. She moves with careful deliberation and speaks rarely,
+      but when she does her words carry the weight of hard-won experience."
+    core_motivation: "Atone for accidentally destroying her home village of Caelweth
+      with a forbidden fire-summoning when she was eighteen."
+    attributes:
+      age: 28
+      abilities:
+        - "fire magic (suppressed)"
+        - "limited telepathy"
+        - "runic inscription"
+      faction: "None – formerly the Ember Covenant"
+      status: "active"
+
+  - name: "Dorvaan the Pale"
+    description: "A gaunt inquisitor of the Shard-Church, seven feet tall with
+      hollow grey eyes and shard-iron manacles he wears by choice. His faith
+      is absolute and his mercy non-existent."
+    core_motivation: "Eradicate unregulated magic use to prevent another Shattering."
+    attributes:
+      age: 52
+      abilities:
+        - "shard-iron resistance"
+        - "tactical genius"
+        - "divine authority"
+      faction: "Shard-Church"
+      status: "active"
+
+  - name: "Mira Talvec"
+    description: "A teenage scavenger from the underbelly of the Drift-City
+      Karath, clever and quick-fingered, perpetually oil-stained, and
+      surprisingly well-read for someone who grew up illiterate."
+    core_motivation: "Find and free her older brother Esten, who was taken by the
+      Shard-Church five years ago for manifesting wild magic."
+    attributes:
+      age: 17
+      abilities:
+        - "mechanical aptitude"
+        - "pickpocketing"
+        - "latent (untriggered) magic"
+      faction: "None"
+      status: "active"
+
+timeline_events:
+  - event_key: "great_shattering"
+    description: "The cataclysm that fractured the world 300 years ago. A cabal
+      of arch-mages attempted to channel the Primal Flame to end a century of war.
+      Instead they split the world into dozens of drifting island-continents."
+    timestamp_in_world: "Year 0 of the Shattered Age"
+
+  - event_key: "caelweth_destruction"
+    description: "The village of Caelweth was incinerated by uncontrolled fire
+      magic. Sixty-three people died. The sole survivor was the young mage
+      who caused it, Aelindra Voss."
+    timestamp_in_world: "Year 290 of the Shattered Age"
+    characters_involved:
+      - "Aelindra Voss"
+
+  - event_key: "esten_talvec_taken"
+    description: "Esten Talvec, seventeen years old, manifested wild lightning
+      magic in the Karath market-square. Shard-Church Inquisitors led by
+      Dorvaan arrived within the hour and took him to the Null-Spire."
+    timestamp_in_world: "Year 295 of the Shattered Age"
+    characters_involved:
+      - "Dorvaan the Pale"
+      - "Mira Talvec"
+
+foreshadowing:
+  - hint_key: "ancient_artifact"
+    description: "A relic called the Weavestone, forged before the Shattering,
+      is rumoured to be hidden beneath the foundations of the Shard-Church's
+      capital cathedral. It supposedly holds the resonance pattern that could
+      either mend the Shattering or repeat it."
+    status: "pending"
+
+  - hint_key: "mira_latent_power"
+    description: "Mira has twice inexplicably survived situations that should
+      have killed her, each time accompanied by a brief silver shimmer nobody
+      else noticed. Her magic has not yet awakened."
+    status: "pending"
+
+  - hint_key: "dorvaan_doubt"
+    description: "Dorvaan keeps a locked journal. On the single page visible
+      through a tear in the cover, the words 'What if I am the heresy' are written
+      in a shaking hand."
+    status: "pending"
