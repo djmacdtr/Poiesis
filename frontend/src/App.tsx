@@ -19,9 +19,13 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
   const location = useLocation()
 
-  // 初始化中（user === undefined）：显示空白，等待检测 Cookie
+  // 初始化中（user === undefined）：显示加载中，等待检测 Cookie
   if (user === undefined) {
-    return null
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <span className="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
+      </div>
+    )
   }
 
   if (!user) {

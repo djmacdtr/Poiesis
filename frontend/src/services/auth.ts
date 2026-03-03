@@ -14,7 +14,6 @@ export async function login(username: string, password: string): Promise<UserInf
   return request<UserInfo>('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify({ username, password }),
-    credentials: 'include',
   })
 }
 
@@ -22,7 +21,6 @@ export async function login(username: string, password: string): Promise<UserInf
 export async function logout(): Promise<void> {
   await request<void>('/api/auth/logout', {
     method: 'POST',
-    credentials: 'include',
   })
 }
 
@@ -30,6 +28,5 @@ export async function logout(): Promise<void> {
 export async function getMe(): Promise<UserInfo> {
   return request<UserInfo>('/api/auth/me', {
     method: 'GET',
-    credentials: 'include',
   })
 }

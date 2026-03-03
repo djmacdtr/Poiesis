@@ -40,7 +40,7 @@ def verify_password(plaintext: str, hashed: str) -> bool:
     """验证明文密码与已存储的 bcrypt 哈希是否匹配。"""
     try:
         return bcrypt.checkpw(plaintext.encode(), hashed.encode())
-    except Exception:  # noqa: BLE001
+    except (ValueError, UnicodeDecodeError):
         return False
 
 

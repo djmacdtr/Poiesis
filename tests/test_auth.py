@@ -93,8 +93,8 @@ class TestEnsureAdminExists:
         assert user is not None
         # 哈希不等于明文
         assert user["password_hash"] != "admin"
-        # 哈希以 bcrypt 前缀开头
-        assert user["password_hash"].startswith("$2b$") or user["password_hash"].startswith("$2a$")
+        # 哈希以 bcrypt 前缀开头（$2b$ 为当前 bcrypt 标准版本）
+        assert user["password_hash"].startswith("$2b$")
 
 
 # ──────────────────────────────────────────────
