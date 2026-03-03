@@ -1,0 +1,60 @@
+# docker-compose.yml
+# Poiesis 一键部署：后端 API + 前端 Nginx
+#
+# 端口说明（适配服务器已有 Nginx 反代场景）：
+#   - web 服务监听 127.0.0.1:18080（前端静态文件 + 内部 /api 反代）
+#   - api 服务监听 127.0.0.1:18000（后端 FastAPI，便于调试）
+#   - 两个端口均只绑定本机回环地址，不对公网直接暴露
+#   - 由服务器已有 Nginx 做外部反代（HTTP/HTTPS）
+#
+# 使用方式：
+#   1. 复制 .env.example 为 .env，填入 API Key
+#   2. docker compose up -d --build
+#   3. 配置服务器 Nginx 反代到 127.0.0.1:18080（参见 README 生产部署章节）
+
+services:
+  # ── 后端 API 服务 ────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    restart: unless-stopped
+    environment:
+      # LLM 密钥（从 .env 文件读取，不写入镜像）
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # embedding 模式：dummy（离线哈希，首次启动无需下载模型）/ real（真实语义向量）
+      - POIESIS_EMBEDDING_MODE=${POIESIS_EMBEDDING_MODE:-dummy}
+      # 配置文件路径（容器内）
+      - POIESIS_CONFIG=/app/config.yaml
+    volumes:
+      # 持久化数据目录（含 poiesis.db 和 vector_store/）
+      - ./data:/app/data
+      # Docker 专用配置（只读）
+      - ./docker/config.yaml:/app/config.yaml:ro
+      # 世界种子文件（init 时使用）
+      - ./examples:/app/examples:ro
+    ports:
+      # 绑定本机回环地址，不对公网暴露；供本地调试或服务器 Nginx 直接反代 API
+      - "127.0.0.1:18000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request, sys; \
+              r = urllib.request.urlopen('http://localhost:8000/health', timeout=5); \
+              sys.exit(0 if r.status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── 前端 Nginx 服务 ──────────────────────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    restart: unless-stopped
+    ports:
+      # 绑定本机回环地址，不对公网直接暴露；由服务器 Nginx 反代到此端口
+      - "127.0.0.1:18080:80"
+    depends_on:
+      - api

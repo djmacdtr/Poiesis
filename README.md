@@ -313,6 +313,218 @@ npm run dev
 
 ---
 
+---
+
+## Docker 部署与初始化
+
+> **推荐部署方式：Docker + docker compose**
+> 无需手动配置 Python 环境，一键拉起前端控制台与后端 API。
+>
+> **端口说明**：Docker 服务仅绑定本机回环地址（`127.0.0.1`），不对公网直接暴露，
+> 需由服务器已有 Nginx 做外部反向代理（参见下方[生产部署](#生产部署服务器-nginx-反代)章节）。
+
+### 前置准备
+
+```
+项目根目录/
+├── docker/config.yaml       # Docker 专用配置（数据路径已指向容器内挂载目录）
+├── data/                    # 持久化目录（挂载到容器 /app/data/，init 后自动生成内容）
+│   ├── poiesis.db           # 数据库（init 后自动生成）
+│   └── vector_store/        # 向量存储（运行后自动生成）
+├── .env                     # 环境变量（复制 .env.example 填写）
+└── docker-compose.yml
+```
+
+**步骤一：准备环境变量文件**
+
+```bash
+cp .env.example .env
+# 编辑 .env，填入 LLM API Key（至少配置一项）：
+#   OPENAI_API_KEY=sk-...
+#   ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**步骤二：创建持久化数据目录**
+
+```bash
+mkdir -p data
+```
+
+### 一键启动（先跑 UI）
+
+```bash
+docker compose up -d --build
+```
+
+启动后各服务监听端口：
+
+| 服务 | 本机端口 | 说明 |
+|------|----------|------|
+| web（前端 Nginx） | `127.0.0.1:18080` | 静态文件 + 内部 `/api` 反代 |
+| api（后端 FastAPI）| `127.0.0.1:18000` | REST API，便于本地调试 |
+
+> 两个端口均只绑定 `127.0.0.1`，不对公网直接暴露。
+> 需配置服务器 Nginx 反代到 `127.0.0.1:18080` 后方可从外部访问（见下方生产部署章节）。
+
+本地快速验证（无需外部 Nginx）：
+
+```bash
+curl http://127.0.0.1:18080/       # 前端页面
+curl http://127.0.0.1:18000/health # 后端健康检查
+```
+
+> 首次启动使用 `POIESIS_EMBEDDING_MODE=dummy`（默认），无需下载 embedding 模型，可直接打开页面。
+
+### 初始化世界
+
+如果数据库尚未初始化（首次部署），需执行以下命令：
+
+```bash
+docker compose run --rm api poiesis init \
+    --config /app/config.yaml \
+    --seed /app/examples/world_seed.yaml
+```
+
+### 生成章节（可选示例）
+
+```bash
+# 生成 1 章（测试用）
+docker compose run --rm api poiesis run \
+    --config /app/config.yaml \
+    --max-chapters 1
+```
+
+### 查看当前进度
+
+```bash
+docker compose run --rm api poiesis status --config /app/config.yaml
+```
+
+### 切换真实 Embedding（生产环境）
+
+编辑 `.env`，将 embedding 模式改为 `real`：
+
+```bash
+POIESIS_EMBEDDING_MODE=real
+```
+
+然后重启服务：
+
+```bash
+docker compose up -d
+```
+
+> **注意**：首次使用 `real` 模式时，容器启动过程中会从 HuggingFace 下载约 90MB 的
+> `all-MiniLM-L6-v2` 模型。若服务器无法访问 HuggingFace，可考虑在构建阶段预下载，
+> 或使用国内镜像（如 `HF_ENDPOINT=https://hf-mirror.com`）。
+
+### 常见问题排查
+
+| 现象 | 原因 | 解决方案 |
+|------|------|----------|
+| 前端能打开，但 API 返回 404 | Nginx 反代路径配置问题 | 检查 `docker/nginx.conf` 中 `location /api/` 的 `proxy_pass` 是否指向 `http://api:8000/api/` |
+| 浏览器报跨域（CORS）错误 | 前端直连后端而非走 Nginx 同域 | 确保前端通过 Nginx 的 `/api` 路径访问，而非直连 `localhost:8000` |
+| 触发生成任务后报错（缺少 Key）| LLM API Key 未配置 | 在 `.env` 中填写 `OPENAI_API_KEY` 或 `ANTHROPIC_API_KEY` 并重启服务 |
+| 服务启动失败，日志提示下载模型超时 | embedding 模型下载失败 | 将 `.env` 中 `POIESIS_EMBEDDING_MODE` 设为 `dummy`，先跑通页面 |
+| `poiesis init` 报错，找不到数据库 | 数据目录不存在 | 宿主机执行 `mkdir -p data` 后重试 |
+
+### 安全提醒
+
+- **请勿**将含有真实 API Key 的 `.env` 文件提交到版本库（`.gitignore` 已忽略 `.env`）。
+- 推荐通过宿主机环境变量或 `.env` 文件注入密钥，不要写进 Dockerfile 或镜像。
+- Docker 服务端口仅绑定 `127.0.0.1`，HTTPS 及证书管理统一交由服务器 Nginx 处理。
+
+---
+
+## 生产部署（服务器 Nginx 反代）
+
+Docker compose 只提供应用容器，不直接监听公网 80/443 端口。
+生产环境推荐使用服务器上已有的 Nginx 统一管理 HTTPS 与域名，Docker 仅作为应用容器运行。
+
+### 架构说明
+
+```
+外部请求（浏览器）
+      │ HTTPS 443（或 HTTP 80）
+      ▼
+ 服务器 Nginx（宿主机）          ← 负责 SSL 证书、域名、访问控制
+      │ proxy_pass http://127.0.0.1:18080
+      ▼
+ Docker web 容器（Nginx）        ← 托管前端静态文件，内部反代 /api
+      │ proxy_pass http://api:8000
+      ▼
+ Docker api 容器（FastAPI）      ← Poiesis 后端
+```
+
+### 服务器 Nginx 示例配置
+
+将以下配置添加到服务器 Nginx 的 `sites-available/` 目录（如 `/etc/nginx/sites-available/poiesis`）：
+
+```nginx
+# Poiesis Web 控制台 — 服务器 Nginx 反代配置示例
+# 将外部请求转发到 Docker 容器的 web 服务（127.0.0.1:18080）
+
+server {
+    listen 80;
+    server_name your-domain.com;  # 替换为你的域名或服务器 IP
+
+    # 如已配置 HTTPS，可在此添加 HTTP → HTTPS 跳转：
+    # return 301 https://$host$request_uri;
+
+    location / {
+        # 反代到 Docker web 容器
+        proxy_pass         http://127.0.0.1:18080;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        # SSE 实时日志流需要关闭缓冲
+        proxy_buffering    off;
+        proxy_read_timeout 300s;
+    }
+}
+
+# HTTPS 配置示例（需先用 certbot 申请证书）
+# server {
+#     listen 443 ssl;
+#     server_name your-domain.com;
+#
+#     ssl_certificate     /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+#     ssl_protocols       TLSv1.2 TLSv1.3;
+#
+#     location / {
+#         proxy_pass         http://127.0.0.1:18080;
+#         proxy_http_version 1.1;
+#         proxy_set_header   Host              $host;
+#         proxy_set_header   X-Real-IP         $remote_addr;
+#         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+#         proxy_set_header   X-Forwarded-Proto $scheme;
+#         proxy_buffering    off;
+#         proxy_read_timeout 300s;
+#     }
+# }
+```
+
+启用配置并重载 Nginx：
+
+```bash
+sudo ln -s /etc/nginx/sites-available/poiesis /etc/nginx/sites-enabled/poiesis
+sudo nginx -t          # 语法检查
+sudo systemctl reload nginx
+```
+
+### 配置 HTTPS（Let's Encrypt）
+
+```bash
+sudo apt install certbot python3-certbot-nginx
+sudo certbot --nginx -d your-domain.com
+# certbot 会自动修改 nginx 配置并续期证书
+```
+
+---
+
 ## 许可证
 
 Apache-2.0 — 详见 [LICENSE](LICENSE)。

@@ -1,0 +1,32 @@
+# 前端容器（多阶段构建）
+# 阶段一：node:20 构建 React/Vite 静态产物
+# 阶段二：nginx:alpine 托管静态文件并反代 /api 到后端
+
+# ── 阶段一：构建前端 ──────────────────────────────────────────
+FROM node:20-alpine AS builder
+
+WORKDIR /app/frontend
+
+# 先复制 package 文件，利用缓存层
+COPY frontend/package.json frontend/package-lock.json ./
+
+# 安装依赖（ci 模式确保可复现）
+RUN npm ci
+
+# 复制源码并构建
+COPY frontend/ ./
+RUN npm run build
+
+# ── 阶段二：Nginx 静态托管 ────────────────────────────────────
+FROM nginx:alpine
+
+# 复制 Nginx 配置
+COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+
+# 将构建产物复制到 Nginx 服务目录
+COPY --from=builder /app/frontend/dist /usr/share/nginx/html
+
+# 暴露 HTTP 端口
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

@@ -208,3 +208,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Poiesis 运行时数据（Docker volume 持久化目录内容）
+data/poiesis.db
+data/vector_store/
+
+# Docker 环境变量文件（含密钥，不提交）
+.env
