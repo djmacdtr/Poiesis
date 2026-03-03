@@ -192,4 +192,4 @@ pytest tests/test_database.py -v
 
 ## 许可证
 
-MIT — 详见 [LICENSE](LICENSE)。
+Apache-2.0 — 详见 [LICENSE](LICENSE)。
