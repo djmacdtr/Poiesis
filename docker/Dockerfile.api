@@ -1,13 +1,26 @@
 # syntax=docker/dockerfile:1
-# 后端 API 容器
-# 基于 python:3.11-slim，安装 Poiesis 并通过 uvicorn 暴露 FastAPI 服务
+# 后端 API 容器（多阶段精简构建）
+#
+# 构建参数：
+#   EMBEDDING_MODE=dummy（默认）：仅安装核心依赖，镜像约 500MB
+#   EMBEDDING_MODE=real          ：额外安装 sentence-transformers（含 PyTorch），镜像约 3GB
+#
+# 使用方式：
+#   # 默认 dummy 模式（推荐生产，语义搜索使用哈希向量）
+#   docker build -f docker/Dockerfile.api .
+#
+#   # real 模式（需要真实语义向量时使用）
+#   docker build -f docker/Dockerfile.api --build-arg EMBEDDING_MODE=real .
 
-FROM python:3.11-slim
+# ── 阶段一：构建器（安装依赖）────────────────────────────────────
+FROM python:3.11-slim AS builder
 
-# 设置工作目录
+# 声明构建参数（决定是否安装 sentence-transformers）
+ARG EMBEDDING_MODE=dummy
+
 WORKDIR /app
 
-# 安装系统依赖（faiss-cpu 等需要 libgomp）
+# 安装系统依赖（faiss-cpu 等需要 libgomp；仅构建阶段临时使用）
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/*
@@ -20,11 +33,37 @@ RUN mkdir -p poiesis && touch poiesis/__init__.py
 # 3. 安装所有运行时依赖（利用 BuildKit pip 缓存，跨构建复用下载内容）
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -U pip && pip install .
+# 4. 若 EMBEDDING_MODE=real，额外安装 sentence-transformers（含 PyTorch，体积约 2GB）
+#    dummy 模式下跳过此步骤，显著缩减镜像体积
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "$EMBEDDING_MODE" = "real" ]; then \
+        echo "安装 real-embedding 扩展（sentence-transformers + PyTorch）..." && \
+        pip install ".[real-embedding]"; \
+    else \
+        echo "dummy 模式：跳过 sentence-transformers 安装（节省约 2GB）"; \
+    fi
+
+# ── 阶段二：最终运行镜像 ──────────────────────────────────────────
+FROM python:3.11-slim
+
+# 继承构建参数（用于设置运行时默认环境变量）
+ARG EMBEDDING_MODE=dummy
+
+WORKDIR /app
+
+# 安装运行时系统依赖（faiss-cpu 需要 libgomp1；使用独立 RUN 避免缓存失效）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 从构建阶段复制已安装的 Python 包（包含 pip/uvicorn/poiesis 入口点等）
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 # ── 源码层（仅在业务代码变更时失效）──────────────────────────────
-# 4. 复制完整源码（此层变更不会触发依赖重新下载）
+# 复制完整源码（此层变更不会触发依赖重新下载）
 COPY . .
-# 5. 用真实源码重新安装项目本体（跳过依赖，无需缓存，复用上层已安装的包）
+# 用真实源码重新安装项目本体（跳过依赖，无需重新下载）
 RUN pip install --no-deps --no-cache-dir .
 
 # 暴露 API 端口
@@ -33,7 +72,9 @@ EXPOSE 8000
 # 支持的环境变量：
 #   OPENAI_API_KEY         - OpenAI API 密钥
 #   ANTHROPIC_API_KEY      - Anthropic API 密钥
-#   POIESIS_EMBEDDING_MODE - embedding 模式：real / dummy（默认 dummy，避免首次拉起下载模型失败）
+#   POIESIS_EMBEDDING_MODE - embedding 模式：
+#                            dummy（默认）：确定性哈希向量，无需额外依赖
+#                            real         ：真实语义向量（需以 EMBEDDING_MODE=real 构建镜像）
 #   POIESIS_CONFIG         - 配置文件路径（默认 /app/config.yaml）
 ENV POIESIS_EMBEDDING_MODE=dummy
 

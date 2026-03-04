@@ -91,7 +91,15 @@ class RealEmbeddingProvider(EmbeddingProvider):
         """懒加载 sentence-transformers 模型（仅在需要时才触发下载）。"""
         if self._model is None:
             # 仅在此处导入，避免模块级 import 触发下载
-            from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+            # sentence-transformers 是可选依赖，需通过 pip install "poiesis[real-embedding]" 安装
+            try:
+                from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+            except ImportError as exc:
+                raise ImportError(
+                    "使用 POIESIS_EMBEDDING_MODE=real 需要安装 sentence-transformers。\n"
+                    "请执行：pip install \"poiesis[real-embedding]\"\n"
+                    "或在构建镜像时传入构建参数：--build-arg EMBEDDING_MODE=real"
+                ) from exc
 
             self._model = SentenceTransformer(self._model_name)
             self._dim = int(self._model.get_sentence_embedding_dimension())

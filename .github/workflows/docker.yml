@@ -72,6 +72,10 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile.api
+          # EMBEDDING_MODE=dummy（默认）：不安装 sentence-transformers，镜像约 500MB
+          # 若需要 real 模式镜像，可通过 workflow_dispatch 或修改此参数为 real
+          build-args: |
+            EMBEDDING_MODE=dummy
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta-api.outputs.tags }}
           labels: ${{ steps.meta-api.outputs.labels }}
@@ -135,6 +139,9 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile.api
+          # CI 始终使用 dummy 模式，避免下载 PyTorch 导致构建超时
+          build-args: |
+            EMBEDDING_MODE=dummy
           push: false
           load: true
           tags: ghcr.io/${{ github.repository_owner }}/poiesis-api:ci-smoke
