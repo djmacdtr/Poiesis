@@ -140,9 +140,10 @@ jobs:
           # 确保数据挂载目录存在（避免 Docker 以 root 自动创建导致权限问题）
           mkdir -p data
 
-      # 使用 docker compose 启动完整服务栈（自动挂载 config.yaml、数据目录、配置网络）
+      # 使用 docker compose 启动完整服务栈（--no-wait：后台启动，不阻塞等待健康检查，
+      # 避免 web 依赖 api 健康检查条件导致 compose up 超时失败；健康等待由后续步骤完成）
       - name: Start services with docker compose
-        run: docker compose up -d
+        run: docker compose up -d --no-wait
 
       # 轮询 API /health，每 3 秒重试，最多等待 90 秒
       - name: Wait for API to become healthy
@@ -198,40 +199,40 @@ jobs:
           curl -f http://127.0.0.1:18080/api/openapi.json > /dev/null
           echo "Web 反代验证通过"
 
-      # 仅在失败时输出诊断信息，便于定位问题
+      # 仅在失败时输出诊断信息，便于定位问题（必须在 docker compose down 之前执行）
       - name: Diagnose on failure
         if: failure()
         run: |
           echo "====== 诊断信息 ======"
           echo ""
+          echo "--- docker compose ps ---"
+          docker compose ps
+          echo ""
           echo "--- docker ps -a ---"
           docker ps -a
           echo ""
-          echo "--- API 容器日志 ---"
-          docker compose logs api 2>/dev/null || true
+          echo "--- API 容器日志（最近 300 行）---"
+          docker compose logs --no-color --tail=300 api 2>/dev/null || true
           echo ""
-          echo "--- Web 容器日志 ---"
-          docker compose logs web 2>/dev/null || true
+          echo "--- Web 容器日志（最近 300 行）---"
+          docker compose logs --no-color --tail=300 web 2>/dev/null || true
           echo ""
-          echo "--- API 容器详情 ---"
+          echo "--- docker inspect（API 容器）---"
           API_CID=$(docker compose ps -q api 2>/dev/null || true)
           [ -n "$API_CID" ] && docker inspect "$API_CID" || true
+          echo ""
+          echo "--- docker inspect（Web 容器）---"
+          WEB_CID=$(docker compose ps -q web 2>/dev/null || true)
+          [ -n "$WEB_CID" ] && docker inspect "$WEB_CID" || true
           echo ""
           echo "--- 网络列表 ---"
           docker network ls
           echo ""
-          echo "--- Compose 网络详情 ---"
-          NET=$(docker network ls --filter name=poiesis --format '{{.Name}}' | head -1)
-          [ -n "$NET" ] && docker network inspect "$NET" || true
-          echo ""
           echo "--- curl -v http://127.0.0.1:18000/health ---"
           curl -v http://127.0.0.1:18000/health 2>&1 || true
           echo ""
-          echo "--- curl -v http://127.0.0.1:18000/api/openapi.json ---"
-          curl -v http://127.0.0.1:18000/api/openapi.json 2>&1 || true
-          echo ""
-          echo "--- curl -v http://127.0.0.1:18080/api/openapi.json ---"
-          curl -v http://127.0.0.1:18080/api/openapi.json 2>&1 || true
+          echo "--- curl -v http://127.0.0.1:18080/health ---"
+          curl -v http://127.0.0.1:18080/health 2>&1 || true
 
       # 清理：停止并删除容器和数据卷
       - name: Stop services

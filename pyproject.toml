@@ -25,6 +25,7 @@ dependencies = [
     "PyJWT>=2.7.0",
     "bcrypt>=3.2.0",
     "python-multipart>=0.0.9",
+    "cryptography>=42.0.4",
 ]
 
 [project.optional-dependencies]
