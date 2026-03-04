@@ -1,10 +1,10 @@
-# VCS
+# 版本控制
 .git
 .gitignore
 .github
 .pre-commit-config.yaml
 
-# Python artifacts
+# Python 构建产物
 __pycache__
 *.py[cod]
 *.egg-info
@@ -14,14 +14,14 @@ build/
 .installed.cfg
 MANIFEST
 
-# Virtual environments
+# 虚拟环境
 .venv
 venv/
 env/
 ENV/
 .pixi
 
-# Test / lint caches
+# 测试 / 代码检查缓存
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -32,14 +32,14 @@ ENV/
 htmlcov/
 cover/
 
-# Runtime / data (mounted as Docker volumes)
+# 运行时数据（通过 Docker volume 挂载，不打入镜像）
 data/
 
-# Frontend artifacts (rebuilt inside Docker)
+# 前端构建产物（在 Docker 内重新构建，无需带入）
 frontend/node_modules/
 frontend/dist/
 
-# IDE / editors
+# IDE / 编辑器配置
 .vscode/
 .idea/
 *.swp
@@ -47,12 +47,12 @@ frontend/dist/
 .cursorignore
 .cursorindexingignore
 
-# Env files (may contain secrets)
+# 环境变量文件（可能含密钥，不打入镜像）
 .env
 .env.*
 !.env.example
 
-# Docs, examples and scripts (not needed inside images)
+# 文档、示例与脚本（镜像内不需要）
 docs/
 examples/
 scripts/
