@@ -1,5 +1,5 @@
 # docker-compose.yml
-# Poiesis 一键部署：后端 API + 前端 Nginx
+# Poiesis 一键部署：后端 API + 前端 Nginx（拉取预构建镜像，无需本地 build）
 #
 # 端口说明（适配服务器已有 Nginx 反代场景）：
 #   - web 服务监听 127.0.0.1:18080（前端静态文件 + 内部 /api 反代）
@@ -9,15 +9,15 @@
 #
 # 使用方式：
 #   1. 复制 .env.example 为 .env，填入 API Key
-#   2. docker compose up -d --build
+#   2. docker compose up -d          # 自动拉取 GHCR 预构建镜像，无需本地编译
 #   3. 配置服务器 Nginx 反代到 127.0.0.1:18080（参见 README 生产部署章节）
+#
+# 开发者本地构建：docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 services:
   # ── 后端 API 服务 ────────────────────────────────────────────
   api:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.api
+    image: ghcr.io/djmacdtr/poiesis-api:latest
     restart: unless-stopped
     environment:
       # LLM 密钥（从 .env 文件读取，不写入镜像）
@@ -56,9 +56,7 @@ services:
 
   # ── 前端 Nginx 服务 ──────────────────────────────────────────
   web:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.web
+    image: ghcr.io/djmacdtr/poiesis-web:latest
     restart: unless-stopped
     ports:
       # 绑定本机回环地址，不对公网直接暴露；由服务器 Nginx 反代到此端口
