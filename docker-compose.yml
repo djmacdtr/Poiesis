@@ -1,11 +1,19 @@
 # docker-compose.yml
 # Poiesis 一键部署：后端 API + 前端 Nginx（拉取预构建镜像，无需本地 build）
 #
-# ── 部署耗时对比 ────────────────────────────────────────────────
-#   旧（本地 build）：npm install + pip install + 编译，约 5–10 分钟，磁盘占用 ~2 GB
-#   新（拉取镜像）  ：docker pull，约 30–60 秒，无本地编译，磁盘占用约 400 MB
+# ── 镜像体积说明 ─────────────────────────────────────────────────
+#   API 镜像（dummy 模式，默认）：约 500MB（无 PyTorch / sentence-transformers）
+#   API 镜像（real  模式）      ：约 3GB  （含 sentence-transformers + PyTorch）
+#   Web 镜像（nginx:alpine）   ：约  50MB
+#   合计（dummy）              ：约 550MB（相比旧版 4.2GB 节省约 87%）
 #
-# 端口说明（适配服务器已有 Nginx 反代场景）：
+# ── embedding 模式选择 ──────────────────────────────────────────
+#   dummy（默认）：使用确定性哈希向量，无语义相似度，适合快速启动与生产部署
+#   real         ：使用 sentence-transformers 真实语义向量，需重新构建镜像：
+#                  POIESIS_EMBEDDING_MODE=real \
+#                    docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# ── 端口说明（适配服务器已有 Nginx 反代场景）───────────────────────
 #   - web 服务监听 127.0.0.1:18080（前端静态文件 + 内部 /api 反代）
 #   - api 服务监听 127.0.0.1:18000（后端 FastAPI，便于调试）
 #   - 两个端口均只绑定本机回环地址，不对公网直接暴露

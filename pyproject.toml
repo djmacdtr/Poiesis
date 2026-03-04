@@ -13,8 +13,7 @@ dependencies = [
     "openai>=1.0.0",
     "anthropic>=0.20.0",
     "faiss-cpu>=1.7.4",
-    "chromadb>=0.4.0",
-    "sentence-transformers>=2.2.0",
+    "numpy>=1.24.0",
     "pyyaml>=6.0",
     "pydantic>=2.0.0",
     "click>=8.1.0",
@@ -29,6 +28,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# 真实语义向量模式所需的重型依赖（PyTorch + transformers）
+# 使用 POIESIS_EMBEDDING_MODE=real 时必须安装此扩展
+# 安装方式：pip install "poiesis[real-embedding]"
+real-embedding = [
+    "sentence-transformers>=2.2.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",

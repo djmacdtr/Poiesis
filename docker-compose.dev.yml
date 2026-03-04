@@ -2,13 +2,20 @@
 # 开发者本地构建路径（覆盖默认的镜像拉取）
 #
 # 使用方式：
+#   # dummy 模式（默认，镜像约 500MB）
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+#   # real 模式（镜像约 3GB，含 sentence-transformers + PyTorch）
+#   POIESIS_EMBEDDING_MODE=real docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 services:
   api:
     build:
       context: .
       dockerfile: docker/Dockerfile.api
+      args:
+        # 将运行时 EMBEDDING_MODE 传入构建阶段，决定是否安装 sentence-transformers
+        EMBEDDING_MODE: ${POIESIS_EMBEDDING_MODE:-dummy}
 
   web:
     build:
