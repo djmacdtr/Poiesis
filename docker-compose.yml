@@ -21,7 +21,7 @@
 services:
   # ── 后端 API 服务 ────────────────────────────────────────────
   api:
-    image: ghcr.io/djmacdtr/poiesis-api:latest
+    image: ghcr.io/djmacdtr/poiesis-api:${POIESIS_IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       # LLM 密钥（从 .env 文件读取，不写入镜像）
@@ -60,7 +60,7 @@ services:
 
   # ── 前端 Nginx 服务 ──────────────────────────────────────────
   web:
-    image: ghcr.io/djmacdtr/poiesis-web:latest
+    image: ghcr.io/djmacdtr/poiesis-web:${POIESIS_IMAGE_TAG:-latest}
     restart: unless-stopped
     ports:
       # 绑定本机回环地址，不对公网直接暴露；由服务器 Nginx 反代到此端口
