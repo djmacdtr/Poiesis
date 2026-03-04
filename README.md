@@ -20,10 +20,39 @@ cp .env.example .env
 # 3. 创建数据持久化目录
 mkdir -p data
 
-# 4. 一键启动（首次构建约需 2~5 分钟）
+# 4. 首次构建并启动（推荐开启 BuildKit 以加速构建）
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
 docker compose up -d --build
-# 或：bash scripts/up.sh
+# 或：bash scripts/rebuild.sh
 ```
+
+### 🔄 何时需要 `--build`？
+
+| 场景 | 推荐命令 |
+|------|---------|
+| **首次部署** | `docker compose up -d --build`（或 `bash scripts/rebuild.sh`） |
+| **日常重启**（代码无变更） | `docker compose up -d`（或 `bash scripts/up.sh`）**不要加 `--build`，速度更快** |
+| **代码有更新后重新部署** | `bash scripts/rebuild.sh` 或 `docker compose up -d --build` |
+| **一键更新（含 git pull）** | `bash scripts/update.sh`（自动拉代码 + 清理 + 重建） |
+
+> **提示**：每次加 `--build` 会重新构建镜像，耗时较长。
+> 日常重启只需 `docker compose up -d`，几秒即可完成。
+
+### ⚡ BuildKit 加速构建
+
+Dockerfile 已启用 BuildKit 缓存挂载（pip / npm），**第二次及后续构建将显著更快**：
+- `api` 镜像：pip 依赖缓存复用，仅重装变更的包
+- `web` 镜像：npm 缓存复用，仅重装变更的包
+
+建议在执行构建前设置以下环境变量以确保 BuildKit 开启：
+
+```bash
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+```
+
+> Docker Desktop 及 Docker Engine 23.0+ 已默认开启 BuildKit，无需手动设置。
 
 访问：
 - **Web 控制台**：http://127.0.0.1:18080
@@ -55,6 +84,10 @@ docker compose run --rm api poiesis init \
   ```
 - 触发生成任务后报错（缺少 Key）→ 属于预期，在浏览器系统设置或 `.env` 中配置 API Key
 - 服务启动失败（embedding 下载超时）→ 在 `.env` 设置 `POIESIS_EMBEDDING_MODE=dummy` 先跑通页面
+- **首次使用 `real` 模式**（`POIESIS_EMBEDDING_MODE=real`）→ 容器启动时会从 HuggingFace 下载语义模型：
+  - 模型：`all-MiniLM-L6-v2`（约 80MB），请确保网络可达
+  - 模型会缓存在持久化目录（可通过 `HF_HOME` 环境变量指定缓存路径），后续启动无需重新下载
+  - 若网络受限，建议提前将模型目录挂载到容器内，或继续使用 `dummy` 模式
 - 数据持久化在 `data/` 目录 → 备份时复制该目录即可
 
 > **安全提醒**：生产环境请务必在 `.env` 中设置强密码的 `POIESIS_SECRET_KEY` 和 `POIESIS_ADMIN_PASS`。
@@ -65,7 +98,10 @@ docker compose run --rm api poiesis init \
 
 | 模式 | 适用场景 | 启动方式 |
 |------|----------|----------|
-| 部署/演示（推荐） | 首次体验、生产部署 | `docker compose up -d --build` |
+| 首次部署 | 全新安装 | `docker compose up -d --build`（或 `bash scripts/rebuild.sh`） |
+| 日常重启 | 代码无变更，仅重启服务 | `docker compose up -d`（或 `bash scripts/up.sh`）**无需 `--build`** |
+| 代码更新后重建 | 拉取新代码后重新构建 | `bash scripts/rebuild.sh` |
+| 一键更新部署 | 服务器上自动拉代码+重建 | `bash scripts/update.sh` |
 | 开发联调（可选） | 前端/后端本地调试 | `poiesis serve` + Vite（见下方章节） |
 
 ---

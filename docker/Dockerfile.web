@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # 前端容器（多阶段构建）
 # 阶段一：node:20 构建 React/Vite 静态产物
 # 阶段二：nginx:alpine 托管静态文件并反代 /api 到后端
@@ -10,8 +11,9 @@ WORKDIR /app/frontend
 # 先复制 package 文件，利用缓存层
 COPY frontend/package.json frontend/package-lock.json ./
 
-# 安装依赖（ci 模式确保可复现）
-RUN npm ci
+# 安装依赖（利用 BuildKit npm 缓存，跨构建复用已下载的包）
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --cache /root/.npm
 
 # 复制源码并构建
 COPY frontend/ ./
