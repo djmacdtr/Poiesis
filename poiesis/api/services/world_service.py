@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from poiesis.db.database import Database
 
 
-def get_canon(db: Database) -> dict:
+def get_canon(db: Database) -> dict[str, Any]:
     """读取完整的 Canon 快照（世界规则、角色、时间线、伏笔）。"""
     world_rules = db.list_world_rules()
     characters = db.list_characters()
@@ -40,7 +42,7 @@ def get_canon(db: Database) -> dict:
     }
 
 
-def list_staging(db: Database, status: str | None = None) -> list[dict]:
+def list_staging(db: Database, status: str | None = None) -> list[dict[str, Any]]:
     """返回 staging 变更列表。status 为 None 时返回全部。"""
     rows = db.list_staging_changes(status=status)
     for row in rows:
@@ -50,7 +52,7 @@ def list_staging(db: Database, status: str | None = None) -> list[dict]:
     return rows
 
 
-def approve_staging(db: Database, change_id: int) -> dict | None:
+def approve_staging(db: Database, change_id: int) -> dict[str, Any] | None:
     """批准指定 staging 变更，返回更新后的记录。"""
     change = db.get_staging_change(change_id)
     if change is None:
@@ -63,7 +65,7 @@ def approve_staging(db: Database, change_id: int) -> dict | None:
     return change
 
 
-def reject_staging(db: Database, change_id: int, reason: str) -> dict | None:
+def reject_staging(db: Database, change_id: int, reason: str) -> dict[str, Any] | None:
     """拒绝指定 staging 变更并记录原因，返回更新后的记录。"""
     change = db.get_staging_change(change_id)
     if change is None:

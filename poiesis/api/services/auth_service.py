@@ -76,7 +76,7 @@ def decode_access_token(token: str) -> dict[str, Any] | None:
         解码后的 payload dict，或 None（无效/过期）。
     """
     try:
-        return jwt.decode(token, _get_jwt_secret(), algorithms=[_JWT_ALGORITHM])
+        return dict(jwt.decode(token, _get_jwt_secret(), algorithms=[_JWT_ALGORITHM]))
     except jwt.ExpiredSignatureError:
         return None
     except jwt.InvalidTokenError:

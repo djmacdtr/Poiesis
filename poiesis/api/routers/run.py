@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Generator
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -57,7 +58,7 @@ def task_events(task_id: str) -> StreamingResponse:
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
 
-    def _event_generator():
+    def _event_generator() -> Generator[str, None, None]:
         sent = 0
         while True:
             logs = task.logs
