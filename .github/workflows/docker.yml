@@ -104,8 +104,33 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 本地构建 API 镜像（PR 和 main 均适用，利用 GHA 缓存加速）
-      - name: Build API image locally for smoke test
+      # ── Push 事件（main/tags）：登录 GHCR 并拉取已推送的镜像 ──────────────
+      # 避免重复本地构建导致磁盘空间不足；build-and-push 已将镜像推送至 GHCR
+      - name: Log in to GHCR (仅非 PR 事件)
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull pre-built images for smoke test (仅非 PR 事件)
+        if: github.event_name != 'pull_request'
+        run: |
+          # 使用 SHA 短标签拉取 build-and-push 已推送的镜像，并打标 ci-smoke
+          SHA_TAG="sha-$(echo '${{ github.sha }}' | cut -c1-7)"
+          API_IMAGE="ghcr.io/${{ github.repository_owner }}/poiesis-api:${SHA_TAG}"
+          WEB_IMAGE="ghcr.io/${{ github.repository_owner }}/poiesis-web:${SHA_TAG}"
+          echo "拉取 API 镜像：${API_IMAGE}"
+          docker pull "${API_IMAGE}" || { echo "错误：无法拉取 ${API_IMAGE}，请确认 build-and-push 步骤已成功"; exit 1; }
+          docker tag  "${API_IMAGE}" ghcr.io/${{ github.repository_owner }}/poiesis-api:ci-smoke
+          echo "拉取 Web 镜像：${WEB_IMAGE}"
+          docker pull "${WEB_IMAGE}" || { echo "错误：无法拉取 ${WEB_IMAGE}，请确认 build-and-push 步骤已成功"; exit 1; }
+          docker tag  "${WEB_IMAGE}" ghcr.io/${{ github.repository_owner }}/poiesis-web:ci-smoke
+
+      # ── PR 事件：本地构建镜像（无 GHCR 推送，利用 GHA 缓存加速）──────────
+      - name: Build API image locally for smoke test (仅 PR 事件)
+        if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -115,8 +140,8 @@ jobs:
           tags: ghcr.io/${{ github.repository_owner }}/poiesis-api:ci-smoke
           cache-from: type=gha
 
-      # 本地构建 Web 镜像（PR 和 main 均适用）
-      - name: Build Web image locally for smoke test
+      - name: Build Web image locally for smoke test (仅 PR 事件)
+        if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -168,7 +193,7 @@ jobs:
           echo "=== 测试 API 直连（端口 18000）==="
           curl -f http://127.0.0.1:18000/health
           echo ""
-          curl -f http://127.0.0.1:18000/api/openapi.json > /dev/null
+          curl -f http://127.0.0.1:18000/openapi.json > /dev/null
           echo "API 直连验证通过"
 
       # 轮询 Web /health（通过 Nginx 反代），每 3 秒重试，最多等待 60 秒
@@ -195,7 +220,7 @@ jobs:
           echo "=== 测试 Web 反代（端口 18080）==="
           curl -f http://127.0.0.1:18080/health
           echo ""
-          curl -f http://127.0.0.1:18080/api/openapi.json > /dev/null
+          curl -f http://127.0.0.1:18080/openapi.json > /dev/null
           echo "Web 反代验证通过"
 
       # 仅在失败时输出诊断信息，便于定位问题（必须在 docker compose down 之前执行）
