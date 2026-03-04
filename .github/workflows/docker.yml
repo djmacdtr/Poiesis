@@ -18,6 +18,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # 输出本次构建的 API 镜像 digest（push 事件时有效）
+    outputs:
+      api-digest: ${{ steps.build-api.outputs.digest }}
 
     steps:
       - name: Checkout
@@ -64,6 +67,7 @@ jobs:
 
       # ── 构建并推送 API 镜像 ──────────────────────────────────
       - name: Build and push API image
+        id: build-api
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -100,6 +104,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # 本地构建 API 镜像（PR 和 main 均适用，利用 GHA 缓存加速）
       - name: Build API image locally for smoke test
         uses: docker/build-push-action@v6
         with:
@@ -107,38 +112,128 @@ jobs:
           file: docker/Dockerfile.api
           push: false
           load: true
-          tags: poiesis-api:smoke
+          tags: ghcr.io/${{ github.repository_owner }}/poiesis-api:ci-smoke
           cache-from: type=gha
 
-      - name: Smoke test — API health check
+      # 本地构建 Web 镜像（PR 和 main 均适用）
+      - name: Build Web image locally for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.web
+          push: false
+          load: true
+          tags: ghcr.io/${{ github.repository_owner }}/poiesis-web:ci-smoke
+          cache-from: type=gha
+
+      # 生成 CI 专用 .env（使用合法 Fernet 格式的 32 字节测试密钥）
+      - name: Create CI environment file
         run: |
-          docker run --rm \
-            -e POIESIS_EMBEDDING_MODE=dummy \
-            -e POIESIS_SECRET_KEY=smoketest-key-32-bytes-padded-xx \
-            -e POIESIS_ADMIN_USER=admin \
-            -e POIESIS_ADMIN_PASS=admin \
-            -p 18000:8000 \
-            --detach \
-            --name poiesis-smoke \
-            poiesis-api:smoke
-          echo "Waiting for API to start..."
-          healthy=false
-          for attempt in $(seq 1 15); do
-            if docker exec poiesis-smoke python -c \
-              "import urllib.request, sys; r = urllib.request.urlopen('http://localhost:8000/health', timeout=5); sys.exit(0 if r.status == 200 else 1)" \
-              2>/dev/null; then
-              echo "API is healthy after attempt ${attempt}"
-              healthy=true
+          SECRET_KEY=$(python3 -c "import base64; print(base64.urlsafe_b64encode(b'ci-smoke-test-secret-key-00000000').decode())")
+          {
+            echo "POIESIS_IMAGE_TAG=ci-smoke"
+            echo "POIESIS_SECRET_KEY=${SECRET_KEY}"
+            echo "POIESIS_EMBEDDING_MODE=dummy"
+            echo "POIESIS_ADMIN_USER=admin"
+            echo "POIESIS_ADMIN_PASS=CI_TEST"
+          } > .env
+          # 确保数据挂载目录存在（避免 Docker 以 root 自动创建导致权限问题）
+          mkdir -p data
+
+      # 使用 docker compose 启动完整服务栈（自动挂载 config.yaml、数据目录、配置网络）
+      - name: Start services with docker compose
+        run: docker compose up -d
+
+      # 轮询 API /health，每 3 秒重试，最多等待 90 秒
+      - name: Wait for API to become healthy
+        run: |
+          echo "等待 API /health 就绪（最多 90 秒）..."
+          for i in $(seq 1 30); do
+            http_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:18000/health || echo "000")
+            echo "  [${i}/30] HTTP ${http_code}"
+            if [ "$http_code" = "200" ]; then
+              echo "API 服务已就绪！"
               break
             fi
-            sleep 2
+            if [ "$i" -eq 30 ]; then
+              echo "错误：API 在 90 秒内未能就绪"
+              exit 1
+            fi
+            sleep 3
           done
-          if [ "$healthy" != "true" ]; then
-            echo "ERROR: API failed to become healthy after 15 attempts"
-            docker logs poiesis-smoke
-            docker stop poiesis-smoke
-            exit 1
-          fi
+
+      # 验证 API 直连端口（18000）
+      - name: Verify API direct endpoints
+        run: |
+          echo "=== 测试 API 直连（端口 18000）==="
           curl -f http://127.0.0.1:18000/health
-          curl -f http://127.0.0.1:18000/api/openapi.json
-          docker stop poiesis-smoke
+          echo ""
+          curl -f http://127.0.0.1:18000/api/openapi.json > /dev/null
+          echo "API 直连验证通过"
+
+      # 轮询 Web /health（通过 Nginx 反代），每 3 秒重试，最多等待 60 秒
+      - name: Wait for Web proxy to become available
+        run: |
+          echo "等待 Web /health 就绪（最多 60 秒）..."
+          for i in $(seq 1 20); do
+            http_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:18080/health || echo "000")
+            echo "  [${i}/20] HTTP ${http_code}"
+            if [ "$http_code" = "200" ]; then
+              echo "Web 服务已就绪！"
+              break
+            fi
+            if [ "$i" -eq 20 ]; then
+              echo "错误：Web 在 60 秒内未能就绪"
+              exit 1
+            fi
+            sleep 3
+          done
+
+      # 验证 Web 反代端口（18080）
+      - name: Verify Web proxy endpoints
+        run: |
+          echo "=== 测试 Web 反代（端口 18080）==="
+          curl -f http://127.0.0.1:18080/health
+          echo ""
+          curl -f http://127.0.0.1:18080/api/openapi.json > /dev/null
+          echo "Web 反代验证通过"
+
+      # 仅在失败时输出诊断信息，便于定位问题
+      - name: Diagnose on failure
+        if: failure()
+        run: |
+          echo "====== 诊断信息 ======"
+          echo ""
+          echo "--- docker ps -a ---"
+          docker ps -a
+          echo ""
+          echo "--- API 容器日志 ---"
+          docker compose logs api 2>/dev/null || true
+          echo ""
+          echo "--- Web 容器日志 ---"
+          docker compose logs web 2>/dev/null || true
+          echo ""
+          echo "--- API 容器详情 ---"
+          API_CID=$(docker compose ps -q api 2>/dev/null || true)
+          [ -n "$API_CID" ] && docker inspect "$API_CID" || true
+          echo ""
+          echo "--- 网络列表 ---"
+          docker network ls
+          echo ""
+          echo "--- Compose 网络详情 ---"
+          NET=$(docker network ls --filter name=poiesis --format '{{.Name}}' | head -1)
+          [ -n "$NET" ] && docker network inspect "$NET" || true
+          echo ""
+          echo "--- curl -v http://127.0.0.1:18000/health ---"
+          curl -v http://127.0.0.1:18000/health 2>&1 || true
+          echo ""
+          echo "--- curl -v http://127.0.0.1:18000/api/openapi.json ---"
+          curl -v http://127.0.0.1:18000/api/openapi.json 2>&1 || true
+          echo ""
+          echo "--- curl -v http://127.0.0.1:18080/api/openapi.json ---"
+          curl -v http://127.0.0.1:18080/api/openapi.json 2>&1 || true
+
+      # 清理：停止并删除容器和数据卷
+      - name: Stop services
+        if: always()
+        run: docker compose down -v
