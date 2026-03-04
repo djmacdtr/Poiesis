@@ -1,0 +1,58 @@
+# 版本控制
+.git
+.gitignore
+.github
+.pre-commit-config.yaml
+
+# Python 构建产物
+__pycache__
+*.py[cod]
+*.egg-info
+.eggs/
+dist/
+build/
+.installed.cfg
+MANIFEST
+
+# 虚拟环境
+.venv
+venv/
+env/
+ENV/
+.pixi
+
+# 测试 / 代码检查缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+cover/
+
+# 运行时数据（通过 Docker volume 挂载，不打入镜像）
+data/
+
+# 前端构建产物（在 Docker 内重新构建，无需带入）
+frontend/node_modules/
+frontend/dist/
+
+# IDE / 编辑器配置
+.vscode/
+.idea/
+*.swp
+*.swo
+.cursorignore
+.cursorindexingignore
+
+# 环境变量文件（可能含密钥，不打入镜像）
+.env
+.env.*
+!.env.example
+
+# 文档、示例与脚本（镜像内不需要）
+docs/
+examples/
+scripts/
