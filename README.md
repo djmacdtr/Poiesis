@@ -54,6 +54,40 @@ export COMPOSE_DOCKER_CLI_BUILD=1
 
 > Docker Desktop 及 Docker Engine 23.0+ 已默认开启 BuildKit，无需手动设置。
 
+### 🗄️ 控制 BuildKit 缓存上限（防止写满系统盘）
+
+BuildKit 缓存默认无上限，长期运行可能占用大量磁盘空间。建议在 Docker daemon 配置中设置 GC 上限：
+
+**编辑 `/etc/docker/daemon.json`（或 Docker Desktop → Settings → Docker Engine）：**
+
+```json
+{
+  "builder": {
+    "gc": {
+      "enabled": true,
+      "defaultKeepStorage": "8GB"
+    }
+  }
+}
+```
+
+修改后重启 Docker 使配置生效：
+
+```bash
+sudo systemctl restart docker   # Linux
+# Docker Desktop：重启应用即可
+```
+
+### 🧹 手动清理磁盘（磁盘满时）
+
+```bash
+# 一键清理（删除 7 天前 build 缓存 + 停止的容器/镜像）
+bash scripts/cleanup.sh
+
+# 或手动执行（两条命令均需运行）：
+docker builder prune -af --filter "until=168h" && docker system prune -af
+```
+
 访问：
 - **Web 控制台**：http://127.0.0.1:18080
 - **后端 API**：http://127.0.0.1:18000（调试用，仅本机）
@@ -84,6 +118,12 @@ docker compose run --rm api poiesis init \
   ```
 - 触发生成任务后报错（缺少 Key）→ 属于预期，在浏览器系统设置或 `.env` 中配置 API Key
 - 服务启动失败（embedding 下载超时）→ 在 `.env` 设置 `POIESIS_EMBEDDING_MODE=dummy` 先跑通页面
+- **磁盘空间不足（系统盘写满）** → 清理 Docker 缓存：
+  ```bash
+  bash scripts/cleanup.sh
+  # 或手动：docker builder prune -af && docker system prune -af
+  ```
+  > 清理后下次构建需重新下载依赖；建议在 `daemon.json` 中设置 `defaultKeepStorage=8GB` 防止再次写满（见上方 BuildKit 加速构建章节）
 - **首次使用 `real` 模式**（`POIESIS_EMBEDDING_MODE=real`）→ 容器启动时会从 HuggingFace 下载语义模型：
   - 模型：`all-MiniLM-L6-v2`（约 80MB），请确保网络可达
   - 模型会缓存在持久化目录（可通过 `HF_HOME` 环境变量指定缓存路径），后续启动无需重新下载
@@ -102,6 +142,7 @@ docker compose run --rm api poiesis init \
 | 日常重启 | 代码无变更，仅重启服务 | `docker compose up -d`（或 `bash scripts/up.sh`）**无需 `--build`** |
 | 代码更新后重建 | 拉取新代码后重新构建 | `bash scripts/rebuild.sh` |
 | 一键更新部署 | 服务器上自动拉代码+重建 | `bash scripts/update.sh` |
+| 磁盘清理 | 系统盘空间不足时 | `bash scripts/cleanup.sh` |
 | 开发联调（可选） | 前端/后端本地调试 | `poiesis serve` + Vite（见下方章节） |
 
 ---
