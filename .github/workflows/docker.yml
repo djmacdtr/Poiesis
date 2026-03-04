@@ -140,10 +140,9 @@ jobs:
           # 确保数据挂载目录存在（避免 Docker 以 root 自动创建导致权限问题）
           mkdir -p data
 
-      # 使用 docker compose 启动完整服务栈（--no-wait：后台启动，不阻塞等待健康检查，
-      # 避免 web 依赖 api 健康检查条件导致 compose up 超时失败；健康等待由后续步骤完成）
+      # 使用 docker compose 启动完整服务栈（-d：后台启动；服务就绪由后续健康检查步骤判断）
       - name: Start services with docker compose
-        run: docker compose up -d --no-wait
+        run: docker compose up -d
 
       # 轮询 API /health，每 3 秒重试，最多等待 90 秒
       - name: Wait for API to become healthy
