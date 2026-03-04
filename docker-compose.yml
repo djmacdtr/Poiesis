@@ -42,6 +42,8 @@ services:
     ports:
       # 绑定本机回环地址，不对公网暴露；供本地调试或服务器 Nginx 直接反代 API
       - "127.0.0.1:18000:8000"
+    networks:
+      - poiesis_net
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request, sys; \
@@ -61,5 +63,11 @@ services:
     ports:
       # 绑定本机回环地址，不对公网直接暴露；由服务器 Nginx 反代到此端口
       - "127.0.0.1:18080:80"
+    networks:
+      - poiesis_net
     depends_on:
       - api
+
+networks:
+  poiesis_net:
+    driver: bridge

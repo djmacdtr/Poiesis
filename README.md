@@ -46,6 +46,13 @@ docker compose run --rm api poiesis init \
 **常见问题：**
 
 - 页面能打开但 `/api` 返回 404 → 检查 `docker/nginx.conf` 中 `/api/` 的 `proxy_pass` 配置
+- `/api` 返回 502 → 检查 `api` 与 `web` 容器是否在同一网络，以及 web 容器内能否解析 `api` 服务名：
+  ```bash
+  # 查看网络成员，确认 api 与 web 均在 poiesis_net
+  docker network inspect poiesis_net
+  # 在 web 容器内验证服务名可解析且后端可达
+  docker compose exec web wget -qO- http://api:8000/api/openapi.json
+  ```
 - 触发生成任务后报错（缺少 Key）→ 属于预期，在浏览器系统设置或 `.env` 中配置 API Key
 - 服务启动失败（embedding 下载超时）→ 在 `.env` 设置 `POIESIS_EMBEDDING_MODE=dummy` 先跑通页面
 - 数据持久化在 `data/` 目录 → 备份时复制该目录即可
