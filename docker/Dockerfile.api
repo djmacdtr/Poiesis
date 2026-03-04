@@ -24,9 +24,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # ── 源码层（仅在业务代码变更时失效）──────────────────────────────
 # 4. 复制完整源码（此层变更不会触发依赖重新下载）
 COPY . .
-# 5. 用真实源码重新安装项目本体（跳过依赖，复用上层已缓存的包）
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-deps .
+# 5. 用真实源码重新安装项目本体（跳过依赖，无需缓存，复用上层已安装的包）
+RUN pip install --no-deps --no-cache-dir .
 
 # 暴露 API 端口
 EXPOSE 8000
