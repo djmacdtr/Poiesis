@@ -62,9 +62,9 @@ class OpenAIClient(LLMClient):
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        response = self._client.chat.completions.create(
+        response = self._client.chat.completions.create(  # type: ignore[call-overload]
             model=self.model,
-            messages=messages,  # type: ignore[arg-type]
+            messages=messages,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             response_format={"type": "json_object"},

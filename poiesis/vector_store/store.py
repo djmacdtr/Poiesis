@@ -64,16 +64,16 @@ class VectorStore:
     def _load(self) -> None:
         """Load existing index and metadata from disk if available."""
         if self._index_path.exists() and self._meta_path.exists():
-            self._index: faiss.IndexFlatIP = faiss.read_index(str(self._index_path))  # type: ignore[attr-defined]
+            self._index: faiss.IndexFlatIP = faiss.read_index(str(self._index_path))
             with open(self._meta_path, "rb") as fh:
                 self._metadata = pickle.load(fh)
             self._key_to_pos = {m["key"]: i for i, m in enumerate(self._metadata)}
         else:
-            self._index = faiss.IndexFlatIP(self._dim)  # type: ignore[attr-defined]
+            self._index = faiss.IndexFlatIP(self._dim)
 
     def _save(self) -> None:
         """Persist index and metadata to disk."""
-        faiss.write_index(self._index, str(self._index_path))  # type: ignore[attr-defined]
+        faiss.write_index(self._index, str(self._index_path))
         with open(self._meta_path, "wb") as fh:
             pickle.dump(self._metadata, fh)
 
@@ -81,7 +81,7 @@ class VectorStore:
     # Embedding helpers
     # ------------------------------------------------------------------
 
-    def _embed(self, text: str) -> np.ndarray:  # type: ignore[type-arg]
+    def _embed(self, text: str) -> np.ndarray:
         """Return a normalised embedding vector for *text*."""
         return self._provider.encode([text], normalize_embeddings=True)
 
@@ -101,7 +101,7 @@ class VectorStore:
             self.remove(key)
 
         vec = self._embed(text)
-        self._index.add(vec)  # type: ignore[arg-type]
+        self._index.add(vec)
         pos = len(self._metadata)
         self._metadata.append({"key": key, "text": text, "metadata": metadata or {}})
         self._key_to_pos[key] = pos
@@ -123,7 +123,7 @@ class VectorStore:
 
         vec = self._embed(query)
         k = min(k, self._index.ntotal)
-        scores, indices = self._index.search(vec, k)  # type: ignore[arg-type]
+        scores, indices = self._index.search(vec, k)
 
         results = []
         for score, idx in zip(scores[0], indices[0]):
@@ -163,11 +163,11 @@ class VectorStore:
         self._metadata = [m for _, m in remaining]
         self._key_to_pos = {m["key"]: i for i, m in enumerate(self._metadata)}
 
-        self._index = faiss.IndexFlatIP(self._dim)  # type: ignore[attr-defined]
+        self._index = faiss.IndexFlatIP(self._dim)
         if self._metadata:
             texts = [m["text"] for m in self._metadata]
             vecs = self._provider.encode(texts, normalize_embeddings=True)
-            self._index.add(vecs)  # type: ignore[arg-type]
+            self._index.add(vecs)
 
         self._save()
 

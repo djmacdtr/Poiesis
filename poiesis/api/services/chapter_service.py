@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from poiesis.db.database import Database
 
 # 数据库章节状态 → 前端期望状态的映射
@@ -18,7 +20,7 @@ def _map_status(raw: str | None) -> str:
     return _STATUS_MAP.get(raw or "draft", raw or "draft")
 
 
-def _normalize_chapter(row: dict) -> dict:
+def _normalize_chapter(row: dict[str, Any]) -> dict[str, Any]:
     """标准化章节记录，统一处理空值与状态映射。"""
     row = dict(row)
     row["title"] = row.get("title") or ""
@@ -29,13 +31,13 @@ def _normalize_chapter(row: dict) -> dict:
     return row
 
 
-def list_chapters(db: Database) -> list[dict]:
+def list_chapters(db: Database) -> list[dict[str, Any]]:
     """返回所有章节的摘要列表（不含正文）。"""
     rows = db.list_chapters()
     return [_normalize_chapter(r) for r in rows]
 
 
-def get_chapter(db: Database, chapter_id: int) -> dict | None:
+def get_chapter(db: Database, chapter_id: int) -> dict[str, Any] | None:
     """按章节行 id（primary key）查询章节详情，不存在时返回 None。"""
     row = db.get_chapter_by_id(chapter_id)
     if row is None:
