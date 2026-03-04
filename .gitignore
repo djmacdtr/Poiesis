@@ -213,5 +213,8 @@ __marimo__/
 data/poiesis.db
 data/vector_store/
 
+# 排除对前端源代码 lib 目录的误忽略（根级 lib/ 规则会误匹配 frontend/src/lib）
+!frontend/src/lib/
+
 # Docker 环境变量文件（含密钥，不提交）
 .env
