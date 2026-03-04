@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1
+# Poiesis Embedding Service 容器
+#
+# 提供真实语义向量（sentence-transformers + PyTorch）
+# 端口：9000
+# 健康检查：GET /health
+#
+# 使用方式：
+#   docker build -f docker/Dockerfile.embed -t poiesis-embed .
+#   docker run -p 9000:9000 poiesis-embed
+#
+# 与 docker-compose 集成：
+#   docker compose --profile full up -d   # 完整功能（api + web + embed）
+#   docker compose up -d                  # 轻量模式（api + web，无 embed）
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# 安装系统依赖（sentence-transformers 间接依赖）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制依赖声明（缓存友好：依赖未变时此层命中缓存）
+COPY services/embed/requirements.txt ./requirements.txt
+
+# 安装 Python 依赖（不缓存 pip 下载内容，减小镜像体积）
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -U pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# 复制服务源码
+COPY services/ ./services/
+
+# 模型缓存目录（可通过 -v 挂载宿主机目录避免每次重新下载）
+RUN mkdir -p /app/model_cache
+ENV SENTENCE_TRANSFORMERS_HOME=/app/model_cache
+
+# 支持的环境变量：
+#   POIESIS_EMBEDDING_MODEL  — 使用的模型，默认 sentence-transformers/all-MiniLM-L6-v2
+#   SENTENCE_TRANSFORMERS_HOME — 模型缓存目录（建议挂载 volume 持久化）
+ENV POIESIS_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+
+# 暴露服务端口
+EXPOSE 9000
+
+# 健康检查：GET /health
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:9000/health || exit 1
+
+# 启动命令（使用 uvicorn，绑定所有网卡）
+CMD ["uvicorn", "services.embed.main:app", "--host", "0.0.0.0", "--port", "9000"]

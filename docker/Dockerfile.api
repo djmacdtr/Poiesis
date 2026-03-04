@@ -1,22 +1,14 @@
 # syntax=docker/dockerfile:1
 # 后端 API 容器（多阶段精简构建）
 #
-# 构建参数：
-#   EMBEDDING_MODE=dummy（默认）：仅安装核心依赖，镜像约 500MB
-#   EMBEDDING_MODE=real          ：额外安装 sentence-transformers（含 PyTorch），镜像约 3GB
+# poiesis-api 镜像始终保持轻量（约 500MB），不包含 sentence-transformers/PyTorch。
+# 真实语义向量通过独立的 poiesis-embed 服务提供（POIESIS_EMBEDDING_PROVIDER=remote）。
 #
 # 使用方式：
-#   # 默认 dummy 模式（推荐生产，语义搜索使用哈希向量）
 #   docker build -f docker/Dockerfile.api .
-#
-#   # real 模式（需要真实语义向量时使用）
-#   docker build -f docker/Dockerfile.api --build-arg EMBEDDING_MODE=real .
 
 # ── 阶段一：构建器（安装依赖）────────────────────────────────────
 FROM python:3.11-slim AS builder
-
-# 声明构建参数（决定是否安装 sentence-transformers）
-ARG EMBEDDING_MODE=dummy
 
 WORKDIR /app
 
@@ -31,23 +23,12 @@ COPY pyproject.toml ./
 # 2. 创建占位包结构，使 pip 能解析 pyproject.toml 而无需完整源码
 RUN mkdir -p poiesis && touch poiesis/__init__.py
 # 3. 安装所有运行时依赖（利用 BuildKit pip 缓存，跨构建复用下载内容）
+#    注意：不安装 real-embedding 扩展，保持镜像轻量（约 500MB）
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -U pip && pip install .
-# 4. 若 EMBEDDING_MODE=real，额外安装 sentence-transformers（含 PyTorch，体积约 2GB）
-#    dummy 模式下跳过此步骤，显著缩减镜像体积
-RUN --mount=type=cache,target=/root/.cache/pip \
-    if [ "$EMBEDDING_MODE" = "real" ]; then \
-        echo "安装 real-embedding 扩展（sentence-transformers + PyTorch）..." && \
-        pip install ".[real-embedding]"; \
-    else \
-        echo "dummy 模式：跳过 sentence-transformers 安装（节省约 2GB）"; \
-    fi
 
 # ── 阶段二：最终运行镜像 ──────────────────────────────────────────
 FROM python:3.11-slim
-
-# 继承构建参数（用于设置运行时默认环境变量）
-ARG EMBEDDING_MODE=dummy
 
 WORKDIR /app
 
@@ -70,13 +51,16 @@ RUN pip install --no-deps --no-cache-dir .
 EXPOSE 8000
 
 # 支持的环境变量：
-#   OPENAI_API_KEY         - OpenAI API 密钥
-#   ANTHROPIC_API_KEY      - Anthropic API 密钥
-#   POIESIS_EMBEDDING_MODE - embedding 模式：
-#                            dummy（默认）：确定性哈希向量，无需额外依赖
-#                            real         ：真实语义向量（需以 EMBEDDING_MODE=real 构建镜像）
-#   POIESIS_CONFIG         - 配置文件路径（默认 /app/config.yaml）
-ENV POIESIS_EMBEDDING_MODE=dummy
+#   OPENAI_API_KEY             - OpenAI API 密钥
+#   ANTHROPIC_API_KEY          - Anthropic API 密钥
+#   POIESIS_EMBEDDING_PROVIDER - embedding 提供者：
+#                                local（默认）：确定性哈希向量，零依赖、纯离线
+#                                remote       ：通过 HTTP 调用独立 poiesis-embed 服务
+#   POIESIS_EMBEDDING_URL      - Embedding Service 地址（remote 模式时使用）
+#                                默认：http://poiesis-embed:9000
+#   POIESIS_CONFIG             - 配置文件路径（默认 /app/config.yaml）
+ENV POIESIS_EMBEDDING_PROVIDER=local
 
 # 启动命令：通过 CLI serve 子命令启动，读取挂载的 config.yaml
 CMD ["poiesis", "serve", "--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "8000"]
+

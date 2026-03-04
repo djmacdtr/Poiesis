@@ -148,20 +148,93 @@ docker compose run --rm api poiesis init \
   docker compose exec web wget -qO- http://api:8000/api/openapi.json
   ```
 - 触发生成任务后报错（缺少 Key）→ 属于预期，在浏览器系统设置或 `.env` 中配置 API Key
-- 服务启动失败（embedding 下载超时）→ 在 `.env` 设置 `POIESIS_EMBEDDING_MODE=dummy` 先跑通页面
+- 服务启动失败（embedding 下载超时）→ 使用轻量模式：`.env` 中设置 `POIESIS_EMBEDDING_PROVIDER=local`，无需 embed 容器
+- **Embedding Service 排障**（`POIESIS_EMBEDDING_PROVIDER=remote` 时）：
+  - **embed 容器未启动** → 完整模式需加 `--profile full`：`docker compose --profile full up -d`
+  - **连接被拒绝**（`无法连接到 Embedding Service`）→ 检查 embed 容器状态：
+    ```bash
+    docker compose --profile full ps          # 确认 embed 容器为 Up
+    docker compose --profile full logs embed  # 查看 embed 容器日志
+    ```
+  - **模型下载超时** → embed 容器首次启动需从 HuggingFace 下载模型（约 90MB）：
+    ```bash
+    docker compose --profile full logs -f embed   # 实时查看下载进度
+    ```
+  - **切回轻量模式** → `.env` 中设置 `POIESIS_EMBEDDING_PROVIDER=local`，重启 api 即可
 - **磁盘空间不足（系统盘写满）** → 清理 Docker 缓存：
   ```bash
   bash scripts/cleanup.sh
   # 或手动：docker builder prune -af && docker system prune -af
   ```
   > 清理后下次构建需重新下载依赖；建议在 `daemon.json` 中设置 `defaultKeepStorage=8GB` 防止再次写满（见上方 BuildKit 加速构建章节）
-- **首次使用 `real` 模式**（`POIESIS_EMBEDDING_MODE=real`）→ 容器启动时会从 HuggingFace 下载语义模型：
-  - 模型：`all-MiniLM-L6-v2`（约 80MB），请确保网络可达
-  - 模型会缓存在持久化目录（可通过 `HF_HOME` 环境变量指定缓存路径），后续启动无需重新下载
-  - 若网络受限，建议提前将模型目录挂载到容器内，或继续使用 `dummy` 模式
 - 数据持久化在 `data/` 目录 → 备份时复制该目录即可
 
 > **安全提醒**：生产环境请务必在 `.env` 中设置强密码的 `POIESIS_SECRET_KEY` 和 `POIESIS_ADMIN_PASS`。
+
+---
+
+## 推荐部署路径
+
+### 两种部署模式
+
+Poiesis 支持两种部署模式，可根据需求选择：
+
+#### 🪶 轻量模式（默认）
+
+- **镜像体积**：约 550MB（api ~500MB + web ~50MB）
+- **Embedding**：本地确定性哈希向量（无语义相似度，纯离线）
+- **适用场景**：快速启动、资源受限环境、不依赖精确语义搜索的场景
+
+```bash
+# 轻量模式启动（默认）
+cp .env.example .env        # 填写 POIESIS_SECRET_KEY 与 LLM API Key
+mkdir -p data
+docker compose up -d
+```
+
+配置（`.env`）：
+```dotenv
+POIESIS_EMBEDDING_PROVIDER=local   # 使用本地哈希向量（默认）
+```
+
+#### 🔮 完整模式（含真实语义向量）
+
+- **镜像体积**：约 3.5GB（含 poiesis-embed 约 3GB）
+- **Embedding**：sentence-transformers 真实语义向量（all-MiniLM-L6-v2）
+- **适用场景**：生产部署、需要语义相似度搜索（防重复章节检测等）的场景
+
+```bash
+# 完整模式启动（api + web + embed）
+cp .env.example .env        # 填写配置
+
+# 在 .env 中添加：
+# POIESIS_EMBEDDING_PROVIDER=remote
+# POIESIS_EMBEDDING_URL=http://embed:9000
+
+mkdir -p data
+docker compose --profile full up -d
+```
+
+配置（`.env`）：
+```dotenv
+POIESIS_EMBEDDING_PROVIDER=remote                    # 调用 embed 服务
+POIESIS_EMBEDDING_URL=http://embed:9000              # embed 服务地址（容器内网）
+POIESIS_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2  # 可选
+```
+
+> **提示**：首次完整模式启动时，embed 容器会从 HuggingFace 下载模型（约 90MB）。
+> 模型文件缓存在 `embed_model_cache` volume 中，后续重启无需重新下载。
+
+### 两种模式对比
+
+| 特性 | 轻量模式（local） | 完整模式（remote） |
+|------|-------------------|-------------------|
+| 启动命令 | `docker compose up -d` | `docker compose --profile full up -d` |
+| 镜像总体积 | ~550MB | ~3.5GB |
+| 首次启动时间 | 快速（无需下载模型） | 较慢（需下载 ~90MB 模型） |
+| 语义相似度 | ❌ 哈希向量（无语义） | ✅ 真实语义向量 |
+| 防重复章节检测 | 基础（基于哈希距离） | 精确（基于语义距离） |
+| 网络依赖 | 无 | 需访问 HuggingFace（首次） |
 
 ---
 
@@ -169,7 +242,8 @@ docker compose run --rm api poiesis init \
 
 | 模式 | 适用场景 | 启动方式 |
 |------|----------|----------|
-| 首次部署 | 全新安装 | `docker compose up -d --build`（或 `bash scripts/rebuild.sh`） |
+| 首次部署（轻量） | 全新安装，快速启动 | `docker compose up -d` |
+| 首次部署（完整） | 需要真实语义向量 | `docker compose --profile full up -d` |
 | 日常重启 | 代码无变更，仅重启服务 | `docker compose up -d`（或 `bash scripts/up.sh`）**无需 `--build`** |
 | 代码更新后重建 | 拉取新代码后重新构建 | `bash scripts/rebuild.sh` |
 | 一键更新部署 | 服务器上自动拉代码+重建 | `bash scripts/update.sh` |

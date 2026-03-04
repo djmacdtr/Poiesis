@@ -1,0 +1,42 @@
+# docker-compose.full.yml
+# 完整模式覆盖配置：启用真实语义向量（api 调用 embed 服务）
+#
+# 使用方式（二选一）：
+#   # 方式 1：使用 profile（推荐）
+#   docker compose --profile full up -d
+#
+#   # 方式 2：使用 override 文件（自动设置所有 remote 配置）
+#   docker compose -f docker-compose.yml -f docker-compose.full.yml up -d
+#
+# 两种方式效果相同，方式 2 会自动将 api 的 POIESIS_EMBEDDING_PROVIDER 设为 remote。
+
+services:
+  # 覆盖 api 服务的 embedding 配置，自动切换到 remote 模式
+  api:
+    environment:
+      - POIESIS_EMBEDDING_PROVIDER=remote
+      - POIESIS_EMBEDDING_URL=http://embed:9000
+    depends_on:
+      embed:
+        condition: service_healthy
+
+  # 启动 embed 服务（无需 --profile full）
+  embed:
+    image: ghcr.io/djmacdtr/poiesis-embed:${POIESIS_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      - POIESIS_EMBEDDING_MODEL=${POIESIS_EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      - SENTENCE_TRANSFORMERS_HOME=/app/model_cache
+    volumes:
+      - embed_model_cache:/app/model_cache
+    networks:
+      - poiesis_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  embed_model_cache:
