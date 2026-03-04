@@ -47,6 +47,9 @@ poiesis = "poiesis.cli:main"
 where = ["."]
 include = ["poiesis*"]
 
+[tool.setuptools.package-data]
+poiesis = ["db/schema.sql"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true
