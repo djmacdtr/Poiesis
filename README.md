@@ -20,12 +20,39 @@ cp .env.example .env
 # 3. 创建数据持久化目录
 mkdir -p data
 
-# 4. 首次构建并启动（推荐开启 BuildKit 以加速构建）
-export DOCKER_BUILDKIT=1
-export COMPOSE_DOCKER_CLI_BUILD=1
-docker compose up -d --build
-# 或：bash scripts/rebuild.sh
+# 4. 拉取预构建镜像并启动（无需本地编译）
+docker compose pull
+docker compose up -d
 ```
+
+### ⚡ 快速验收
+
+启动后执行以下命令确认服务就绪：
+
+```bash
+# 检查容器状态（api 和 web 均应为 Up）
+docker compose ps
+
+# 验证前端可达
+curl -I http://127.0.0.1:18080/
+
+# 验证后端 API 可达
+curl -I http://127.0.0.1:18080/api/openapi.json
+```
+
+### 🔖 锁定镜像版本
+
+在 `.env` 中设置 `POIESIS_IMAGE_TAG` 可固定使用指定版本：
+
+```bash
+# 使用特定版本（推荐生产环境锁版本）
+POIESIS_IMAGE_TAG=v0.1.0
+
+# 使用最新构建（默认值）
+POIESIS_IMAGE_TAG=latest
+```
+
+修改后执行 `docker compose pull && docker compose up -d` 即可切换版本。
 
 ### 🔄 何时需要 `--build`？
 
@@ -108,6 +135,10 @@ docker compose run --rm api poiesis init \
 
 **常见问题：**
 
+- **拉取镜像时报 401 Unauthorized** → GHCR 软件包尚未设为公开，或本地未登录。
+  解决方式（二选一）：
+  1. **推荐**：在 GitHub → 你的 Profile → Packages → `poiesis-api` / `poiesis-web` → Package settings → 将可见性改为 **Public**，之后无需 `docker login` 即可拉取。
+  2. 若软件包保持私有，需先登录：`docker login ghcr.io -u <你的 GitHub 用户名> --password-stdin`（输入 Personal Access Token）。
 - 页面能打开但 `/api` 返回 404 → 检查 `docker/nginx.conf` 中 `/api/` 的 `proxy_pass` 配置
 - `/api` 返回 502 → 检查 `api` 与 `web` 容器是否在同一网络，以及 web 容器内能否解析 `api` 服务名：
   ```bash
