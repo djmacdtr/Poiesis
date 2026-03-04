@@ -9,9 +9,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
 from fastapi.testclient import TestClient
 
 from poiesis.api.main import app
@@ -29,7 +26,9 @@ def _make_client(tmp_db: Database) -> TestClient:
     # 覆盖 get_db 依赖，返回临时数据库
     app.dependency_overrides[deps.get_db] = lambda: tmp_db
     # 绕过 admin 权限守卫（测试环境无需真实认证）
-    app.dependency_overrides[deps.require_admin] = lambda: {"sub": "1", "username": "test_admin", "role": "admin"}
+    app.dependency_overrides[deps.require_admin] = lambda: {
+        "sub": "1", "username": "test_admin", "role": "admin"
+    }
     client = TestClient(app, raise_server_exceptions=True)
     return client
 

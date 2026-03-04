@@ -28,7 +28,9 @@ from poiesis.writer import ChapterWriter
 console = Console()
 
 
-def _build_llm(cfg: Any, openai_key: str | None = None, anthropic_key: str | None = None) -> LLMClient:
+def _build_llm(
+    cfg: Any, openai_key: str | None = None, anthropic_key: str | None = None
+) -> LLMClient:
     """Instantiate an LLM client from a ModelConfig."""
     if cfg.provider == "anthropic":
         return AnthropicClient(
@@ -67,8 +69,12 @@ class RunLoop:
         openai_key = self._load_key_from_db("OPENAI_API_KEY")
         anthropic_key = self._load_key_from_db("ANTHROPIC_API_KEY")
 
-        self._writer_llm = _build_llm(self._config.llm, openai_key=openai_key, anthropic_key=anthropic_key)
-        self._planner_llm = _build_llm(self._config.planner_llm, openai_key=openai_key, anthropic_key=anthropic_key)
+        self._writer_llm = _build_llm(
+            self._config.llm, openai_key=openai_key, anthropic_key=anthropic_key
+        )
+        self._planner_llm = _build_llm(
+            self._config.planner_llm, openai_key=openai_key, anthropic_key=anthropic_key
+        )
 
         gen = self._config.generation
         self._planner = ChapterPlanner(
@@ -93,7 +99,10 @@ class RunLoop:
             from poiesis.api.services.system_config_service import get_decrypted_key
             return get_decrypted_key(self._db, config_key)
         except Exception as exc:  # noqa: BLE001
-            console.print(f"[yellow]读取数据库配置 {config_key} 失败（已回退环境变量）：{type(exc).__name__}[/yellow]")
+            console.print(
+                f"[yellow]读取数据库配置 {config_key} 失败（已回退环境变量）："
+                f"{type(exc).__name__}[/yellow]"
+            )
             return None
 
     # ------------------------------------------------------------------

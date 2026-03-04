@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import uuid
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import Lock
 from typing import Any
-
 
 # 日志环形缓冲区最大行数
 _MAX_LOG_LINES = 200
@@ -26,7 +25,7 @@ class TaskInfo:
         self.total_chapters: int = total_chapters
         self.current_chapter: int = 0
         self.error: str | None = None
-        self.created_at: str = datetime.now(timezone.utc).isoformat()
+        self.created_at: str = datetime.now(UTC).isoformat()
         self.updated_at: str = self.created_at
         # 最近 N 行日志（环形缓冲）
         self._logs: deque[str] = deque(maxlen=_MAX_LOG_LINES)
@@ -34,7 +33,7 @@ class TaskInfo:
     def add_log(self, message: str) -> None:
         """追加一条日志，并更新 updated_at。"""
         self._logs.append(message)
-        self.updated_at = datetime.now(timezone.utc).isoformat()
+        self.updated_at = datetime.now(UTC).isoformat()
 
     @property
     def logs(self) -> list[str]:

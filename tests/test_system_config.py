@@ -9,8 +9,6 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -24,7 +22,9 @@ def _make_client(tmp_db: Database) -> TestClient:
 
     app.dependency_overrides[deps.get_db] = lambda: tmp_db
     # 绕过 admin 权限守卫（测试环境无需真实认证）
-    app.dependency_overrides[deps.require_admin] = lambda: {"sub": "1", "username": "test_admin", "role": "admin"}
+    app.dependency_overrides[deps.require_admin] = lambda: {
+        "sub": "1", "username": "test_admin", "role": "admin"
+    }
     return TestClient(app, raise_server_exceptions=True)
 
 
