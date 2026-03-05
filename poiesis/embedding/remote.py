@@ -122,6 +122,6 @@ class RemoteEmbeddingProvider(EmbeddingProvider):
             norms = np.linalg.norm(arr, axis=1, keepdims=True)
             # 避免除以零
             norms = np.where(norms > 1e-10, norms, 1.0)
-            arr = arr / norms
+            arr = (arr / norms).astype(np.float32)
 
         return arr
