@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -19,7 +18,6 @@ from poiesis.embedding.base import EmbeddingProvider
 from poiesis.embedding.dummy import DummyEmbeddingProvider
 from poiesis.embedding.remote import RemoteEmbeddingProvider
 from poiesis.vector_store.providers import get_embedding_provider
-
 
 # ─────────────────────────────────────────────────────────────────
 # 测试 1：DummyEmbeddingProvider

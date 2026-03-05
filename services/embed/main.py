@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
@@ -42,7 +41,7 @@ class EmbedRequest(BaseModel):
     """POST /embed 请求体。"""
 
     texts: list[str]
-    model: Optional[str] = None  # 可选，默认使用环境变量中配置的模型
+    model: str | None = None  # 可选，默认使用环境变量中配置的模型
 
 
 class EmbedResponse(BaseModel):
