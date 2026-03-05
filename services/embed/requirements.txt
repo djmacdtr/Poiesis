@@ -1,0 +1,8 @@
+# Embedding Service 依赖
+# 使用方式：pip install -r services/embed/requirements.txt
+
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+sentence-transformers>=2.2.0
+numpy>=1.24.0
+pydantic>=2.0.0
