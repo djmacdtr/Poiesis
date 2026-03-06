@@ -39,7 +39,9 @@ class TestGetSystemConfig:
         body = resp.json()
         assert body["has_openai_api_key"] is False
         assert body["has_anthropic_api_key"] is False
-        assert body["embedding_mode"] is None
+        assert body["embedding_provider"] is None
+        assert body["embedding_provider_effective"] in ("local", "remote")
+        assert body["embedding_service_health"] is None
         assert body["default_chapter_count"] is None
 
 
@@ -80,17 +82,81 @@ class TestPostSystemConfig:
         resp_text = resp.text
         assert "sk-secret-should-not-appear" not in resp_text
 
-    def test_save_embedding_mode_and_chapter_count(self, tmp_db: Database) -> None:
-        """保存 embedding_mode 与 default_chapter_count 应正确返回。"""
+    def test_save_embedding_provider_and_chapter_count(self, tmp_db: Database) -> None:
+        """保存 embedding_provider 与 default_chapter_count 应正确返回。"""
         client = _make_client(tmp_db)
         resp = client.post(
             "/api/system/config",
-            json={"embedding_mode": "dummy", "default_chapter_count": 3},
+            json={"embedding_provider": "local", "default_chapter_count": 3},
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["embedding_mode"] == "dummy"
+        assert body["embedding_provider"] == "local"
+        assert body["embedding_provider_effective"] in ("local", "remote")
+        assert body["embedding_service_health"] is None
         assert body["default_chapter_count"] == 3
+
+    def test_save_remote_provider_requires_reachable_service(self, tmp_db: Database) -> None:
+        """保存 remote 时若 embed 不可达，应返回 422。"""
+        from poiesis.api.services import system_config_service
+
+        client = _make_client(tmp_db)
+
+        original = system_config_service._check_embedding_service_health
+        def _fake_unreachable() -> dict[str, str | bool | None]:
+            return {
+                "provider": "remote",
+                "reachable": False,
+                "url": "http://embed:9000",
+                "status": "unreachable",
+                "error_msg": "connection refused",
+                "checked_at": "2026-03-07T00:00:00+00:00",
+            }
+
+        system_config_service._check_embedding_service_health = _fake_unreachable
+        try:
+            resp = client.post(
+                "/api/system/config",
+                json={"embedding_provider": "remote"},
+            )
+        finally:
+            system_config_service._check_embedding_service_health = original
+
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["detail"]["code"] == "EMBEDDING_SERVICE_UNREACHABLE"
+
+    def test_save_remote_provider_when_service_reachable(self, tmp_db: Database) -> None:
+        """保存 remote 且 embed 可达时应成功。"""
+        from poiesis.api.services import system_config_service
+
+        client = _make_client(tmp_db)
+
+        original = system_config_service._check_embedding_service_health
+        def _fake_reachable() -> dict[str, str | bool | None]:
+            return {
+                "provider": "remote",
+                "reachable": True,
+                "url": "http://embed:9000",
+                "status": "ok",
+                "error_msg": None,
+                "checked_at": "2026-03-07T00:00:00+00:00",
+            }
+
+        system_config_service._check_embedding_service_health = _fake_reachable
+        try:
+            resp = client.post(
+                "/api/system/config",
+                json={"embedding_provider": "remote"},
+            )
+        finally:
+            system_config_service._check_embedding_service_health = original
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["embedding_provider"] == "remote"
+        assert body["embedding_service_health"] is not None
+        assert body["embedding_service_health"]["reachable"] is True
 
     def test_key_stored_encrypted_in_db(self, tmp_db: Database) -> None:
         """API Key 在数据库中应以密文存储，不能直接读出明文。"""

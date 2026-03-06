@@ -14,7 +14,7 @@ def empty_vector_store(tmp_path: Path) -> VectorStore:  # noqa: F821
     """Return an empty VectorStore backed by the dummy embedding provider."""
     from poiesis.vector_store.store import VectorStore
 
-    # POIESIS_EMBEDDING_MODE=dummy 由 conftest 的 force_dummy_embedding fixture 保证
+    # POIESIS_EMBEDDING_PROVIDER=local 由 conftest 的 force_dummy_embedding fixture 保证
     return VectorStore(store_path=str(tmp_path / "vs"))
 
 

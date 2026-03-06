@@ -1,5 +1,5 @@
 /**
- * 系统设置页：配置 API Key、Embedding 模式，以及初始化世界
+ * 系统设置页：配置 API Key、Embedding Provider，以及初始化世界
  */
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -15,7 +15,7 @@ export default function SettingsPage() {
   // 表单状态
   const [openaiKey, setOpenaiKey] = useState('')
   const [anthropicKey, setAnthropicKey] = useState('')
-  const [embeddingMode, setEmbeddingMode] = useState<'real' | 'dummy' | ''>('')
+  const [embeddingProvider, setEmbeddingProvider] = useState<'local' | 'remote' | ''>('')
   const [defaultChapterCount, setDefaultChapterCount] = useState<number | ''>('')
   const [isInitializing, setIsInitializing] = useState(false)
 
@@ -48,7 +48,7 @@ export default function SettingsPage() {
     const payload: SystemConfigRequest = {}
     if (openaiKey !== '') payload.openai_api_key = openaiKey
     if (anthropicKey !== '') payload.anthropic_api_key = anthropicKey
-    if (embeddingMode !== '') payload.embedding_mode = embeddingMode
+    if (embeddingProvider !== '') payload.embedding_provider = embeddingProvider
     if (defaultChapterCount !== '') payload.default_chapter_count = Number(defaultChapterCount)
     saveMutation.mutate(payload)
   }
@@ -142,19 +142,30 @@ export default function SettingsPage() {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="embedding-mode">
-              Embedding 模式
+            <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="embedding-provider">
+              Embedding Provider
             </label>
             <select
-              id="embedding-mode"
-              value={embeddingMode}
-              onChange={(e) => setEmbeddingMode(e.target.value as 'real' | 'dummy' | '')}
+              id="embedding-provider"
+              value={embeddingProvider}
+              onChange={(e) => setEmbeddingProvider(e.target.value as 'local' | 'remote' | '')}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
             >
-              <option value="">— 不修改（当前：{configStatus?.embedding_mode ?? '未设置'}）</option>
-              <option value="real">real（使用真实向量模型）</option>
-              <option value="dummy">dummy（使用随机向量，适合测试）</option>
+              <option value="">— 不修改（已保存：{configStatus?.embedding_provider ?? '未设置'}）</option>
+              <option value="local">local（轻量离线）</option>
+              <option value="remote">remote（依赖 embed 服务）</option>
             </select>
+            <p className="mt-1 text-xs text-gray-500">
+              当前生效：{configStatus?.embedding_provider_effective ?? 'local'}
+            </p>
+            {configStatus?.embedding_service_health && (
+              <p className={`mt-1 text-xs ${configStatus.embedding_service_health.reachable ? 'text-green-600' : 'text-amber-600'}`}>
+                remote 健康状态：{configStatus.embedding_service_health.reachable ? '可达' : '不可达'}
+                {!configStatus.embedding_service_health.reachable && configStatus.embedding_service_health.error_msg
+                  ? `（${configStatus.embedding_service_health.error_msg}）`
+                  : ''}
+              </p>
+            )}
           </div>
 
           <div>

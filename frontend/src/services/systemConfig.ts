@@ -7,7 +7,16 @@ import { get, post } from '@/services/http'
 export interface SystemConfigStatus {
   has_openai_api_key: boolean
   has_anthropic_api_key: boolean
-  embedding_mode: string | null
+  embedding_provider: 'local' | 'remote' | null
+  embedding_provider_effective: 'local' | 'remote'
+  embedding_service_health: {
+    provider: 'remote'
+    reachable: boolean
+    url: string
+    status: 'ok' | 'unreachable' | 'error'
+    error_msg: string | null
+    checked_at: string
+  } | null
   default_chapter_count: number | null
 }
 
@@ -15,7 +24,7 @@ export interface SystemConfigStatus {
 export interface SystemConfigRequest {
   openai_api_key?: string
   anthropic_api_key?: string
-  embedding_mode?: string
+  embedding_provider?: 'local' | 'remote'
   default_chapter_count?: number
 }
 

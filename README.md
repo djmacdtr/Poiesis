@@ -114,7 +114,7 @@ docker compose up -d
 ```bash
 docker compose ps
 curl -I http://127.0.0.1:18080/
-curl -I http://127.0.0.1:18080/api/openapi.json
+curl -I http://127.0.0.1:18080/openapi.json
 ```
 
 ### 4. Open Console
@@ -166,7 +166,7 @@ npm run dev
 
 - `/api` 返回 502: 确认 `api` 容器健康且 `web` 能解析服务名 `api`
 - 运行任务报缺少 Key: 在系统设置或 `.env` 补齐 LLM Key
-- 完整模式不可用: 使用 `--profile full` 启动并检查 `embed` 健康状态
+- 选择 `remote` provider 失败: 使用 `--profile full` 启动并检查 `embed` 健康状态
 
 更多排障细节见项目文档与脚本注释。
 

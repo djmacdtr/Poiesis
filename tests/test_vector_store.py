@@ -1,6 +1,6 @@
-"""Dummy Embedding 模式下的 VectorStore 与 OriginalityChecker 离线测试。
+"""Local Embedding Provider 下的 VectorStore 与 OriginalityChecker 离线测试。
 
-测试目标（均在 POIESIS_EMBEDDING_MODE=dummy 下运行，无外网依赖）：
+测试目标（均在 POIESIS_EMBEDDING_PROVIDER=local 下运行，无外网依赖）：
 1. VectorStore 初始化不触网（不加载 sentence-transformers 模型）
 2. VectorStore.add / search 行为结构正确
 3. OriginalityChecker 在 dummy 模式下可执行并返回合法分数
@@ -20,15 +20,15 @@ from poiesis.vector_store.store import VectorStore
 
 
 class TestVectorStoreOfflineInit:
-    """验证 dummy 模式下 VectorStore 初始化无需访问网络。"""
+    """验证 local provider 下 VectorStore 初始化无需访问网络。"""
 
     def test_init_uses_dummy_provider(self, tmp_path: Path) -> None:
-        """VectorStore 在 dummy 模式下应使用 DummyEmbeddingProvider，不加载远程模型。"""
-        # force_dummy_embedding fixture (conftest autouse) 已设置 POIESIS_EMBEDDING_MODE=dummy
+        """VectorStore 在 local provider 下应使用 DummyEmbeddingProvider，不加载远程模型。"""
+        # force_dummy_embedding fixture (conftest autouse) 已设置 POIESIS_EMBEDDING_PROVIDER=local
         vs = VectorStore(store_path=str(tmp_path / "vs"))
         # 确认内部 provider 是 DummyEmbeddingProvider（不是 RealEmbeddingProvider）
         assert isinstance(vs._provider, DummyEmbeddingProvider), (
-            "dummy 模式下应使用 DummyEmbeddingProvider，而非真实模型"
+            "local provider 下应使用 DummyEmbeddingProvider，而非远程服务"
         )
 
     def test_init_creates_store_directory(self, tmp_path: Path) -> None:
@@ -39,7 +39,7 @@ class TestVectorStoreOfflineInit:
         assert store_path.is_dir()
 
     def test_dim_correct(self, tmp_path: Path) -> None:
-        """dummy 模式下向量维度应为 384。"""
+        """local provider 下向量维度应为 384。"""
         vs = VectorStore(store_path=str(tmp_path / "vs"))
         assert vs._dim == 384
 
@@ -50,7 +50,7 @@ class TestVectorStoreOfflineInit:
 
 
 class TestVectorStoreAddSearch:
-    """验证 dummy 模式下 add / search 行为的结构正确性。"""
+    """验证 local provider 下 add / search 行为的结构正确性。"""
 
     def test_add_increases_length(self, tmp_path: Path) -> None:
         """add() 后 VectorStore 长度应增加。"""

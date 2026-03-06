@@ -23,8 +23,17 @@ export async function request<T>(
   if (!res.ok) {
     let message = `请求失败：${res.status} ${res.statusText}`
     try {
-      const body = await res.json() as { detail?: string; message?: string }
-      message = body.detail ?? body.message ?? message
+      const body = await res.json() as {
+        detail?: string | { message?: string }
+        message?: string
+      }
+      if (typeof body.detail === 'string') {
+        message = body.detail
+      } else if (body.detail?.message) {
+        message = body.detail.message
+      } else {
+        message = body.message ?? message
+      }
     } catch {
       // 忽略 JSON 解析错误
     }
