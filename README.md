@@ -1,22 +1,31 @@
 # Poiesis
+### Narrative Generation Engine for Long-Form Fiction
 
-> 自托管长篇叙事生成引擎（Web Console + API + Optional Embedding Service）
+<p align="left">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white">
+  <img alt="React" src="https://img.shields.io/badge/React-Frontend-61DAFB?logo=react&logoColor=0B0F19">
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white">
+  <img alt="License" src="https://img.shields.io/badge/License-AGPLv3-black">
+</p>
 
-Poiesis 用于自动生成连贯、自洽的长篇小说：
-- 用 LLM 生成章节内容（Plan -> Write -> Verify -> Edit）
-- 跨章节维护世界观一致性（角色/规则/时间线/伏笔）
-- 通过 staging 审批机制，将“新事实”可控地合并到 canon
+> 🚀 自托管长篇叙事生成引擎（Web Console + API + Optional Embedding Service）
+> 🎯 聚焦“持续一致性”而不是“一次性生成”。
 
-## Why Poiesis
+---
 
-- 一致性优先：不是一次性文本生成，而是持续世界模型管理
-- 可运营：内置 Web 控制台、运行状态、审批流、统计页
-- 可部署：默认轻量模式，按需切换真实语义 embedding
-- 可扩展：模块化 pipeline，支持 OpenAI/Anthropic
+## ✨ Why Poiesis
 
-## Architecture
+- 🧠 **Consistency First**: 通过 world model 维护角色、规则、时间线、伏笔一致性
+- 🛠️ **Operational Ready**: 内置控制台、任务编排、审批流、统计页
+- 🔌 **Deployment Flexible**: 默认轻量模式，按需切换 remote embedding
+- 🧩 **Composable Pipeline**: Planner -> Writer -> Extractor -> Verifier -> Editor -> Merger -> Summarizer
 
-### System Topology
+---
+
+## 🏗️ Architecture
+
+### 🧭 System Topology
 
 ```mermaid
 flowchart LR
@@ -36,7 +45,7 @@ flowchart LR
   A --> VS
 ```
 
-### Generation Pipeline (RunLoop)
+### 🔄 Generation Pipeline (RunLoop)
 
 ```mermaid
 flowchart TD
@@ -65,17 +74,19 @@ flowchart TD
   O --> VS
 ```
 
-### Three-Layer World Model
+### 🧱 Three-Layer World Model
 
-| 层级 | 内容 | 可变性 |
+| Layer | 内容 | 可变性 |
 |---|---|---|
 | `canon` | 已审批的权威世界事实 | 追加 / 更新 |
 | `staging` | 来自新章节的待审改动 | 待审核 |
-| `archive` | 已拒绝的改动及原因 | 不可变审计日志 |
+| `archive` | 已拒绝改动及原因 | 不可变审计日志 |
 
-## System Requirements
+---
 
-### 轻量模式（local embedding）最低配置
+## 🖥️ System Requirements
+
+### ⚡ 轻量模式（local embedding）最低配置
 
 | 资源 | 最低要求 |
 |---|---|
@@ -83,7 +94,7 @@ flowchart TD
 | 内存 | 2 GB |
 | 磁盘 | 2 GB（镜像约 550MB + 数据目录） |
 
-### 完整模式（remote embedding + embed 服务）推荐配置
+### 🚀 完整模式（remote embedding + embed 服务）推荐配置
 
 | 资源 | 推荐配置 | 最低可用 |
 |---|---|---|
@@ -91,9 +102,11 @@ flowchart TD
 | 内存 | 8 GB | 4 GB（可能较慢或 OOM） |
 | 磁盘 | 10 GB | 含镜像约 3.5GB + 模型缓存约 90MB + 数据目录 |
 
-## Quick Start (Docker)
+---
 
-### 1. Prepare
+## 🚀 Quick Start (Docker)
+
+### 1. 📦 Prepare
 
 ```bash
 git clone https://github.com/djmacdtr/Poiesis.git
@@ -102,14 +115,14 @@ cp .env.example .env
 mkdir -p data
 ```
 
-### 2. Start (lightweight mode, default)
+### 2. ▶️ Start (lightweight mode, default)
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-### 3. Verify
+### 3. ✅ Verify
 
 ```bash
 docker compose ps
@@ -117,7 +130,7 @@ curl -I http://127.0.0.1:18080/
 curl -I http://127.0.0.1:18080/openapi.json
 ```
 
-### 4. Open Console
+### 4. 🌐 Open Console
 
 - Web: `http://127.0.0.1:18080`
 - API: `http://127.0.0.1:18000`
@@ -128,12 +141,14 @@ curl -I http://127.0.0.1:18080/openapi.json
 3. 初始化世界（UI 或 CLI）
 4. 在 Run 页面设置章节数并启动任务
 
-## Deployment Modes
+---
+
+## 🎛️ Deployment Modes
 
 | Mode | Command | Use Case |
 |---|---|---|
 | `local` (default) | `docker compose up -d` | 快速启动、低资源、离线可用 |
-| `remote` (semantic) | `docker compose --profile full up -d` | 需要真实语义检索与更好的一致性 |
+| `remote` (semantic) | `docker compose --profile full up -d` | 真实语义检索与更强一致性 |
 
 完整模式需要在 `.env` 中设置：
 
@@ -142,7 +157,9 @@ POIESIS_EMBEDDING_PROVIDER=remote
 POIESIS_EMBEDDING_URL=http://embed:9000
 ```
 
-## Local Development (Minimal)
+---
+
+## 🛠️ Local Development (Minimal)
 
 ```bash
 # Backend
@@ -155,33 +172,51 @@ npm install
 npm run dev
 ```
 
-## Documentation
+---
+
+## 📚 Documentation
 
 - Developer Guide: `docs/developer_guide.md`
 - Frontend Guide: `frontend/README.md`
 - Docker Topology: `docker-compose.yml`
 - API Smoke Test: `scripts/smoke_test_api.py`
 
-## Common Issues
+---
 
-- `/api` 返回 502: 确认 `api` 容器健康且 `web` 能解析服务名 `api`
+## 🧯 Common Issues
+
+- `/api` 返回 502: 确认 `api` 容器健康且 `web` 可解析服务名 `api`
 - 运行任务报缺少 Key: 在系统设置或 `.env` 补齐 LLM Key
 - 选择 `remote` provider 失败: 使用 `--profile full` 启动并检查 `embed` 健康状态
 
-更多排障细节见项目文档与脚本注释。
+---
 
-## Contributing
+## 🤝 Contributing
 
-欢迎 PR。
+参与贡献
 
-```bash
-pip install -e ".[dev]"
-pre-commit install
-pytest
-```
+1. Fork 本仓库并创建功能分支。
+2. 如需添加新功能，请先通过 Issue 讨论需求与方案。
+3. 安装开发依赖：`pip install -e ".[dev]"`
+4. 安装 pre-commit 钩子：`pre-commit install`
+5. 为新功能编写测试用例。
+6. 确保 `ruff check poiesis tests` 和 `mypy poiesis` 通过检查。
+7. 向 `main` 分支提交 Pull Request。
 
-详细贡献与扩展指引请见 `docs/developer_guide.md`。
+添加新的 LLM 提供商
 
-## License
+参见 `docs/developer_guide.md`。
 
-Apache-2.0. See `LICENSE`.
+扩展验证规则
+
+参见 `docs/developer_guide.md`。
+
+如果喜欢本项目，欢迎点亮 Star，并通过 Issue 或 Pull Request 提交反馈与改进建议。
+
+---
+
+## 📄 License
+
+本项目采用 GNU AGPLv3 协议：允许使用、修改与分发；若将修改版本用于对外网络服务，也需向用户提供对应源码。
+
+GNU AGPLv3. See `LICENSE`.
