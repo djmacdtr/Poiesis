@@ -1,8 +1,8 @@
 """基于 FAISS 和可配置 EmbeddingProvider 的向量存储。
 
-通过 POIESIS_EMBEDDING_MODE 环境变量选择 embedding 实现：
-  - real  （默认）：sentence-transformers 真实语义向量
-  - dummy ：确定性哈希向量，离线/CI 测试专用
+通过 POIESIS_EMBEDDING_PROVIDER 环境变量选择 embedding 实现：
+    - remote：调用独立 Embedding Service，使用真实语义向量
+    - local ：确定性哈希向量，离线/CI 测试专用
 """
 
 from __future__ import annotations
@@ -37,13 +37,13 @@ class VectorStore:
 
         Args:
             store_path: Directory where index files are persisted.
-            embedding_model: Sentence-transformers model name（real 模式使用）。
+            embedding_model: Embedding 模型名称（remote 模式时传递给服务端）。
             provider: 可选的自定义 EmbeddingProvider；若为 None 则由环境变量决定。
         """
         self.store_path = Path(store_path)
         self.store_path.mkdir(parents=True, exist_ok=True)
 
-        # 优先使用传入的 provider，否则根据 POIESIS_EMBEDDING_MODE 决定
+        # 优先使用传入的 provider，否则根据 POIESIS_EMBEDDING_PROVIDER 决定
         self._provider: EmbeddingProvider = provider or get_embedding_provider(embedding_model)
         self._dim: int = self._provider.dim
 

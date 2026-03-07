@@ -27,7 +27,6 @@ from poiesis.world import WorldModel
 @pytest.fixture(autouse=True)
 def force_dummy_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
     """在所有测试中强制使用本地 dummy embedding，确保无外网依赖。"""
-    monkeypatch.setenv("POIESIS_EMBEDDING_MODE", "dummy")
     monkeypatch.setenv("POIESIS_EMBEDDING_PROVIDER", "local")
 
 # ---------------------------------------------------------------------------

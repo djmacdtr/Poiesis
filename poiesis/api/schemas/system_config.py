@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -14,8 +16,8 @@ class SystemConfigRequest(BaseModel):
     anthropic_api_key: str | None = None
     """Anthropic API Key（明文，将在服务端加密存储）。"""
 
-    embedding_mode: str | None = None
-    """Embedding 模式：real 或 dummy。"""
+    embedding_provider: str | None = None
+    """Embedding 提供者：local 或 remote。"""
 
     default_chapter_count: int | None = None
     """默认章节生成数。"""
@@ -30,8 +32,14 @@ class SystemConfigStatus(BaseModel):
     has_anthropic_api_key: bool = False
     """是否已配置 Anthropic API Key。"""
 
-    embedding_mode: str | None = None
-    """当前 Embedding 模式。"""
+    embedding_provider: str | None = None
+    """已保存的 Embedding 提供者（来自系统配置）。"""
+
+    embedding_provider_effective: Literal["local", "remote"] = "local"
+    """当前运行时实际使用的 Embedding 提供者（来自环境变量）。"""
+
+    embedding_service_health: dict[str, str | bool | None] | None = None
+    """remote 模式下 Embedding Service 健康状态。"""
 
     default_chapter_count: int | None = None
     """当前默认章节生成数。"""

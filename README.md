@@ -1,718 +1,247 @@
-# Poiesis
+# Poiesis / 长篇叙事生成引擎
+### Narrative Generation Engine for Long-Form Fiction
 
-> **自主长篇叙事生成引擎**
+<p align="left">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white">
+  <img alt="React" src="https://img.shields.io/badge/React-Frontend-61DAFB?logo=react&logoColor=0B0F19">
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white">
+  <img alt="License" src="https://img.shields.io/badge/License-AGPLv3-black">
+</p>
 
-Poiesis 是一个基于 Python 3.11+ 的框架，可使用大语言模型（LLM）生成连贯、自洽的长篇小说。
-它强制执行世界规则的不变性，跨章节追踪叙事连续性，并维护一个随故事发展而演进的动态世界模型——
-全程无需人工干预。
+> 🚀 自托管长篇叙事生成引擎（Web Console + API + Optional Embedding Service）
+> 🎯 聚焦“持续一致性”而不是“一次性生成”。
 
-Poiesis 是一个可自托管的长篇叙事生成引擎，提供 Web 控制台 + API，并支持可选的语义向量服务（Embedding Service）用于更真实的检索与一致性校验。
+Poiesis 是一个面向长篇小说与系列化叙事的开源生成系统，提供从世界观建模、章节生成、事实提取、冲突验证到内容修订的完整工作流。项目通过可审计的世界模型（`canon/staging/archive`）和多阶段 RunLoop pipeline，将“可读文本生成”升级为“可持续演进的叙事工程”。
 
-> *Poiesis is a self-hosted long-form narrative generation engine with optional embedding service.*
-
----
-
-## Architecture
-
-```
-Browser
-   |
-   v
-Web（Nginx，SPA 前端静态文件）
-   |
-   v
-Poiesis API（FastAPI）
-   |
-   +----------------------------------+
-   |                                  |
-   v                                  v
-local embedding（哈希向量）      Embedding Service（sentence-transformers）
-[轻量模式：POIESIS_EMBEDDING_PROVIDER=local]   [完整模式：POIESIS_EMBEDDING_PROVIDER=remote]
-```
-
-- **Poiesis API** 负责世界观生成、章回写作、一致性校验、任务编排，是核心服务。
-- **local 模式**：使用内置确定性哈希向量（离线、零依赖、速度快），不具备语义相似度，适合快速启动和资源受限环境。
-- **remote 模式**：API 通过 HTTP 调用独立 **Embedding Service**（`poiesis-embed` 容器）获取语义向量，功能完整、语义精准，体积较大（约 3GB）。
-- **真实语义 embedding 不内置在 `poiesis-api` 镜像中**，完整模式必须单独启动 embed 服务。
+与通用聊天式写作不同，Poiesis 重点解决长文本场景中的结构性问题：角色设定漂移、时间线冲突、设定遗忘、伏笔回收失败和多章节语义断裂。系统支持 API 与 Web Console 协同，便于团队化运营、人工审核与质量追踪。
 
 ---
 
-## System Requirements
+## ✨ Why Poiesis / 为什么选择 Poiesis
 
-### 🪶 轻量模式（local embedding）最低配置
+### 项目定位 / Positioning
+
+Poiesis 面向“需要长期稳定产出叙事内容”的个人作者与内容团队，强调生成质量的可控性、过程可追溯性与部署自主权。
+
+### 解决的问题 / Problems Solved
+
+- 🧠 **跨章节一致性难题**: 通过 `WorldModel` 维护角色关系、规则约束与时间线，降低设定漂移。
+- 🧪 **生成质量不可控**: `Verifier + Editor` 形成闭环，自动识别违规设定并触发修订。
+- 🗂️ **新事实引入风险高**: 使用 `staging -> review -> canon` 审批机制，避免错误事实直接污染主设定。
+- 📉 **长流程缺乏观测**: 提供任务状态、统计与配置界面，支持运营化管理。
+
+### 关键技术 / Key Technologies
+
+- ⚙️ **Backend**: FastAPI + Pydantic + SQLite，提供任务编排、鉴权与配置管理。
+- 🌐 **Frontend**: React + TypeScript + Vite，构建可视化控制台与运行观测能力。
+- 🔄 **Pipeline**: Planner -> Writer -> Extractor -> Verifier -> Editor -> Merger -> Summarizer。
+- 🧩 **Embedding Strategy**: 支持 `local`（轻量）与 `remote`（语义检索增强）两种模式。
+- 🐳 **Deployment**: Docker Compose 一键部署，支持从轻量启动到完整语义能力扩展。
+
+### 项目特点 / What Makes It Different
+
+- 🔍 **以世界模型为中心，而非单次 Prompt**。
+- 🧾 **变更可审计，便于团队协作与内容治理**。
+- 🛡️ **支持人机协同审批，适合生产环境迭代**。
+- 🔓 **完全自托管开源，便于二次开发与私有化部署**。
+
+---
+
+## 🏗️ Architecture / 系统架构
+
+### 🧭 System Topology
+
+```mermaid
+flowchart LR
+  U[Browser]
+  W[Web Container\nNginx + SPA]
+  A[Poiesis API\nFastAPI]
+  EL[Local Embedding\nDeterministic Hash]
+  ER[Embedding Service\npoiesis-embed]
+  DB[(SQLite\npoiesis.db)]
+  VS[(vector_store/)]
+
+  U -->|HTTP| W
+  W -->|/api| A
+  A -->|local mode| EL
+  A -->|remote mode| ER
+  A --> DB
+  A --> VS
+```
+
+### 🔄 Generation Pipeline (RunLoop)
+
+```mermaid
+flowchart TD
+  Seed[World Seed\nYAML] --> RL
+
+  subgraph RL[RunLoop]
+    P[Planner\n规划器] -->|计划| W[Writer\n写作器]
+    W -->|章节内容| X[Extractor\n提取器]
+    X -->|proposed changes| V[Verifier\n验证器]
+    V -->|violations| E[Editor\n编辑器]
+    E -->|已修正内容| V
+
+    WM[WorldModel\ncanon / staging / archive] --> P
+    WM --> X
+    WM --> V
+    V -->|通过| M[Merger\n合并器]
+    X --> M
+
+    W --> O[Originality Checker\n原创检测]
+    M --> S[Summarizer\n摘要器]
+  end
+
+  M --> DB[(poiesis.db)]
+  M --> VS[(vector_store/)]
+  S --> DB
+  O --> VS
+```
+
+### 🧱 Three-Layer World Model
+
+| Layer | 内容 | 可变性 |
+|---|---|---|
+| `canon` | 已审批的权威世界事实 | 追加 / 更新 |
+| `staging` | 来自新章节的待审改动 | 待审核 |
+| `archive` | 已拒绝改动及原因 | 不可变审计日志 |
+
+---
+
+## 🖥️ System Requirements / 系统要求
+
+### ⚡ 轻量模式（local embedding）最低配置
 
 | 资源 | 最低要求 |
-|------|----------|
-| CPU  | 2 核     |
-| 内存 | 2 GB     |
+|---|---|
+| CPU | 2 核 |
+| 内存 | 2 GB |
 | 磁盘 | 2 GB（镜像约 550MB + 数据目录） |
 
-### 🔮 完整模式（remote embedding + embed 服务）推荐配置
+### 🚀 完整模式（remote embedding + embed 服务）推荐配置
 
 | 资源 | 推荐配置 | 最低可用 |
-|------|----------|----------|
-| CPU  | 4 核     | 2 核（较慢） |
-| 内存 | 8 GB     | 4 GB（可能较慢或 OOM） |
-| 磁盘 | 10 GB    | 含镜像约 3.5GB + 模型缓存约 90MB + 数据目录 |
-
-> **提示**：完整模式首次启动时 embed 容器需从 HuggingFace 下载模型（约 90MB），请确保网络可达。
+|---|---|---|
+| CPU | 4 核 | 2 核（较慢） |
+| 内存 | 8 GB | 4 GB（可能较慢或 OOM） |
+| 磁盘 | 10 GB | 含镜像约 3.5GB + 模型缓存约 90MB + 数据目录 |
 
 ---
 
-## 🚀 推荐：Docker 一键启动（部署/演示）
+## 🚀 Quick Start (Docker) / 快速开始（Docker）
+
+### 1. 📦 Prepare
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/djmacdtr/Poiesis.git && cd Poiesis
-
-# 2. 准备环境变量（填写 POIESIS_SECRET_KEY 与管理员密码）
+git clone https://github.com/djmacdtr/Poiesis.git
+cd Poiesis
 cp .env.example .env
-
-# 3. 创建数据持久化目录
 mkdir -p data
+```
 
-# 4. 拉取预构建镜像并启动（无需本地编译）
+### 2. ▶️ Start (lightweight mode, default)
+
+```bash
 docker compose pull
 docker compose up -d
 ```
 
-### ⚡ 快速验收
-
-启动后执行以下命令确认服务就绪：
+### 3. ✅ Verify
 
 ```bash
-# 检查容器状态（api 和 web 均应为 Up）
 docker compose ps
-
-# 验证前端可达
 curl -I http://127.0.0.1:18080/
-
-# 验证后端 API 可达
-curl -I http://127.0.0.1:18080/api/openapi.json
+curl -I http://127.0.0.1:18080/openapi.json
 ```
 
-**完整模式（`--profile full`）额外验证**：若使用 `docker compose --profile full up -d` 启动，还需确认 embed 服务健康：
+### 4. 🌐 Open Console
 
-```bash
-# 在 api 容器内访问 embed 服务健康检查端点
-docker compose --profile full exec api wget -qO- http://embed:9000/health
-# 若返回 {"status":"ok"} 或 HTTP 200，即表示 embed 服务可用
-```
+- Web: `http://127.0.0.1:18080`
+- API: `http://127.0.0.1:18000`
 
-### 🔖 锁定镜像版本
-
-在 `.env` 中设置 `POIESIS_IMAGE_TAG` 可固定使用指定版本：
-
-```bash
-# 使用特定版本（推荐生产环境锁版本）
-POIESIS_IMAGE_TAG=v0.1.0
-
-# 使用最新构建（默认值）
-POIESIS_IMAGE_TAG=latest
-```
-
-修改后执行 `docker compose pull && docker compose up -d` 即可切换版本。
-
-### 🔄 何时需要 `--build`？
-
-| 场景 | 推荐命令 |
-|------|---------|
-| **首次部署** | `docker compose up -d --build`（或 `bash scripts/rebuild.sh`） |
-| **日常重启**（代码无变更） | `docker compose up -d`（或 `bash scripts/up.sh`）**不要加 `--build`，速度更快** |
-| **代码有更新后重新部署** | `bash scripts/rebuild.sh` 或 `docker compose up -d --build` |
-| **一键更新（含 git pull）** | `bash scripts/update.sh`（自动拉代码 + 清理 + 重建） |
-
-> **提示**：每次加 `--build` 会重新构建镜像，耗时较长。
-> 日常重启只需 `docker compose up -d`，几秒即可完成。
-
-### ⚡ BuildKit 加速构建
-
-Dockerfile 已启用 BuildKit 缓存挂载（pip / npm），**第二次及后续构建将显著更快**：
-- `api` 镜像：pip 依赖缓存复用，仅重装变更的包
-- `web` 镜像：npm 缓存复用，仅重装变更的包
-
-建议在执行构建前设置以下环境变量以确保 BuildKit 开启：
-
-```bash
-export DOCKER_BUILDKIT=1
-export COMPOSE_DOCKER_CLI_BUILD=1
-```
-
-> Docker Desktop 及 Docker Engine 23.0+ 已默认开启 BuildKit，无需手动设置。
-
-### 🗄️ 控制 BuildKit 缓存上限（防止写满系统盘）
-
-BuildKit 缓存默认无上限，长期运行可能占用大量磁盘空间。建议在 Docker daemon 配置中设置 GC 上限：
-
-**编辑 `/etc/docker/daemon.json`（或 Docker Desktop → Settings → Docker Engine）：**
-
-```json
-{
-  "builder": {
-    "gc": {
-      "enabled": true,
-      "defaultKeepStorage": "8GB"
-    }
-  }
-}
-```
-
-修改后重启 Docker 使配置生效：
-
-```bash
-sudo systemctl restart docker   # Linux
-# Docker Desktop：重启应用即可
-```
-
-### 🧹 手动清理磁盘（磁盘满时）
-
-```bash
-# 一键清理（删除 7 天前 build 缓存 + 停止的容器/镜像）
-bash scripts/cleanup.sh
-
-# 或手动执行（两条命令均需运行）：
-docker builder prune -af --filter "until=168h" && docker system prune -af
-```
-
-访问：
-- **Web 控制台**：http://127.0.0.1:18080
-- **后端 API**：http://127.0.0.1:18000（调试用，仅本机）
-
-启动后在浏览器中完成：
-1. 登录（默认账号 `admin`，密码见 `.env` 中的 `POIESIS_ADMIN_PASS`）
-2. **系统设置** → 配置 OpenAI/Anthropic API Key
-3. **系统设置** → 点击 **初始化世界**
-4. **运行控制** → 设置章节数 → 点击 **开始生成**
-
-**初始化世界（首次，也可通过浏览器完成）：**
-
-```bash
-docker compose run --rm api poiesis init \
-    --config /app/config.yaml \
-    --seed /app/examples/world_seed.yaml
-```
-
-**常见问题：**
-
-- **拉取镜像时报 401 Unauthorized** → GHCR 软件包尚未设为公开，或本地未登录。
-  解决方式（二选一）：
-  1. **推荐**：在 GitHub → 你的 Profile → Packages → `poiesis-api` / `poiesis-web` → Package settings → 将可见性改为 **Public**，之后无需 `docker login` 即可拉取。
-  2. 若软件包保持私有，需先登录：`docker login ghcr.io -u <你的 GitHub 用户名> --password-stdin`（输入 Personal Access Token）。
-- 页面能打开但 `/api` 返回 404 → 检查 `docker/nginx.conf` 中 `/api/` 的 `proxy_pass` 配置
-- `/api` 返回 502 → 检查 `api` 与 `web` 容器是否在同一网络，以及 web 容器内能否解析 `api` 服务名：
-  ```bash
-  # 查看网络成员，确认 api 与 web 均在 poiesis_net
-  docker network inspect poiesis_net
-  # 在 web 容器内验证服务名可解析且后端可达
-  docker compose exec web wget -qO- http://api:8000/api/openapi.json
-  ```
-- 触发生成任务后报错（缺少 Key）→ 属于预期，在浏览器系统设置或 `.env` 中配置 API Key
-- 服务启动失败（embedding 下载超时）→ 使用轻量模式：`.env` 中设置 `POIESIS_EMBEDDING_PROVIDER=local`，无需 embed 容器
-- **Embedding Service 排障**（`POIESIS_EMBEDDING_PROVIDER=remote` 时）：
-  - **embed 容器未启动** → 完整模式需加 `--profile full`：`docker compose --profile full up -d`
-  - **连接被拒绝**（`无法连接到 Embedding Service`）→ 检查 embed 容器状态：
-    ```bash
-    docker compose --profile full ps          # 确认 embed 容器为 Up
-    docker compose --profile full logs embed  # 查看 embed 容器日志
-    ```
-  - **模型下载超时** → embed 容器首次启动需从 HuggingFace 下载模型（约 90MB）：
-    ```bash
-    docker compose --profile full logs -f embed   # 实时查看下载进度
-    ```
-  - **切回轻量模式** → `.env` 中设置 `POIESIS_EMBEDDING_PROVIDER=local`，重启 api 即可
-- **磁盘空间不足（系统盘写满）** → 清理 Docker 缓存：
-  ```bash
-  bash scripts/cleanup.sh
-  # 或手动：docker builder prune -af && docker system prune -af
-  ```
-  > 清理后下次构建需重新下载依赖；建议在 `daemon.json` 中设置 `defaultKeepStorage=8GB` 防止再次写满（见上方 BuildKit 加速构建章节）
-- 数据持久化在 `data/` 目录 → 备份时复制该目录即可
-
-> **安全提醒**：生产环境请务必在 `.env` 中设置强密码的 `POIESIS_SECRET_KEY` 和 `POIESIS_ADMIN_PASS`。
+首次进入建议流程：
+1. 登录（默认账号 `admin`，密码见 `.env` 的 `POIESIS_ADMIN_PASS`）
+2. 在系统设置配置 OpenAI/Anthropic Key
+3. 初始化世界（UI 或 CLI）
+4. 在 Run 页面设置章节数并启动任务
 
 ---
 
-## 推荐部署路径
+## 🎛️ Deployment Modes / 部署模式
 
-### 两种部署模式
+| Mode | Command | Use Case |
+|---|---|---|
+| `local` (default) | `docker compose up -d` | 快速启动、低资源、离线可用 |
+| `remote` (semantic) | `docker compose --profile full up -d` | 真实语义检索与更强一致性 |
 
-Poiesis 支持两种部署模式，可根据需求选择：
+完整模式需要在 `.env` 中设置：
 
-#### 🪶 轻量模式（默认）
-
-- **镜像体积**：约 550MB（api ~500MB + web ~50MB）
-- **Embedding**：本地确定性哈希向量（无语义相似度，纯离线）
-- **适用场景**：快速启动、资源受限环境、不依赖精确语义搜索的场景
-
-```bash
-# 轻量模式启动（默认）
-cp .env.example .env        # 填写 POIESIS_SECRET_KEY 与 LLM API Key
-mkdir -p data
-docker compose up -d
-```
-
-配置（`.env`）：
 ```dotenv
-POIESIS_EMBEDDING_PROVIDER=local   # 使用本地哈希向量（默认）
+POIESIS_EMBEDDING_PROVIDER=remote
+POIESIS_EMBEDDING_URL=http://embed:9000
 ```
 
-#### 🔮 完整模式（含真实语义向量）
+---
 
-- **镜像体积**：约 3.5GB（含 poiesis-embed 约 3GB）
-- **Embedding**：sentence-transformers 真实语义向量（all-MiniLM-L6-v2）
-- **适用场景**：生产部署、需要语义相似度搜索（防重复章节检测等）的场景
+## 🛠️ Local Development (Minimal) / 本地开发（最小流程）
 
 ```bash
-# 完整模式启动（api + web + embed）
-cp .env.example .env        # 填写配置
-
-# 在 .env 中添加：
-# POIESIS_EMBEDDING_PROVIDER=remote
-# POIESIS_EMBEDDING_URL=http://embed:9000
-
-mkdir -p data
-docker compose --profile full up -d
-```
-
-配置（`.env`）：
-```dotenv
-POIESIS_EMBEDDING_PROVIDER=remote                    # 调用 embed 服务
-POIESIS_EMBEDDING_URL=http://embed:9000              # embed 服务地址（容器内网）
-POIESIS_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2  # 可选
-```
-
-> **提示**：首次完整模式启动时，embed 容器会从 HuggingFace 下载模型（约 90MB）。
-> 模型文件缓存在 `embed_model_cache` volume 中，后续重启无需重新下载。
-
-> **端口与安全说明**：Embedding Service 默认监听容器端口 **9000**，仅在 Docker 内部网络（`poiesis_net`）中通过服务名 `embed:9000` 访问，**不映射到宿主机端口，不对公网暴露**。
-
-### 两种模式对比
-
-| 特性 | 轻量模式（local） | 完整模式（remote） |
-|------|-------------------|-------------------|
-| 启动命令 | `docker compose up -d` | `docker compose --profile full up -d` |
-| 镜像总体积 | ~550MB | ~3.5GB |
-| 首次启动时间 | 快速（无需下载模型） | 较慢（需下载 ~90MB 模型） |
-| 语义相似度 | ❌ 哈希向量（无语义） | ✅ 真实语义向量 |
-| 防重复章节检测 | 基础（基于哈希距离） | 精确（基于语义距离） |
-| 网络依赖 | 无 | 需访问 HuggingFace（首次） |
-
----
-
-## 部署模式对照
-
-| 模式 | 适用场景 | 启动方式 |
-|------|----------|----------|
-| 首次部署（轻量） | 全新安装，快速启动 | `docker compose up -d` |
-| 首次部署（完整） | 需要真实语义向量 | `docker compose --profile full up -d` |
-| 日常重启 | 代码无变更，仅重启服务 | `docker compose up -d`（或 `bash scripts/up.sh`）**无需 `--build`** |
-| 代码更新后重建 | 拉取新代码后重新构建 | `bash scripts/rebuild.sh` |
-| 一键更新部署 | 服务器上自动拉代码+重建 | `bash scripts/update.sh` |
-| 磁盘清理 | 系统盘空间不足时 | `bash scripts/cleanup.sh` |
-| 开发联调（可选） | 前端/后端本地调试 | `poiesis serve` + Vite（见下方章节） |
-
----
-
-```
-世界种子 (YAML)
-      │
-      ▼
-┌─────────────────────────────────────────────────────────────┐
-│                        RunLoop（运行循环）                   │
-│                                                             │
-│  ┌──────────┐  计划   ┌──────────┐  内容    ┌──────────┐   │
-│  │ Planner  │────────▶│  Writer  │─────────▶│Extractor │   │
-│  │（规划器） │         │（写作器）│          │（提取器）│   │
-│  └──────────┘         └──────────┘          └────┬─────┘   │
-│                                           变更│            │
-│  ┌──────────┐  重写   ┌──────────┐             ▼           │
-│  │  Editor  │◀────────│ Verifier │◀──────── WorldModel      │
-│  │（编辑器）│         │（验证器）│          （世界模型）     │
-│  └──────────┘         └──────────┘          （3层结构）     │
-│       │                                          │          │
-│       └──────── 已修正 ──────────── ┌─────────────┘         │
-│                                    │  Merger（合并器）       │
-│  ┌─────────────┐                   │  Summarizer（摘要器）   │
-│  │Originality  │◀──── 章节文本     │  DB + VectorStore      │
-│  │ Checker     │                   └────────────────────────┘
-│  │（原创检测器）│                                            │
-│  └─────────────┘                                            │
-└─────────────────────────────────────────────────────────────┘
-         │
-         ▼
-   poiesis.db  +  vector_store/
-```
-
-### 三层世界知识模型
-
-| 层级       | 内容                           | 可变性               |
-|------------|--------------------------------|----------------------|
-| `canon`    | 已审批的权威世界事实           | 追加 / 更新          |
-| `staging`  | 来自新章节的待审改动           | 待审核               |
-| `archive`  | 已拒绝的改动及原因             | 不可变审计日志       |
-
----
-
-## CLI 模式（高级/开发者）
-
-### 1. 安装
-
-```bash
+# Backend
 pip install -e ".[dev]"
-```
-
-### 2. 设置 API 密钥
-
-```bash
-export OPENAI_API_KEY="sk-..."
-# 或
-export ANTHROPIC_API_KEY="sk-ant-..."
-```
-
-### 3. 初始化世界
-
-```bash
-poiesis init --config config.yaml --seed examples/world_seed.yaml
-```
-
-### 4. 生成章节
-
-```bash
-# 按 config.yaml 中设定的 max_chapters 生成
-poiesis run --config config.yaml
-
-# 覆盖最大章节数
-poiesis run --config config.yaml --max-chapters 5
-
-# 查看当前进度
-poiesis status --config config.yaml
-```
-
-### 5. 直接使用 Python API
-
-```python
-from poiesis.run_loop import RunLoop
-
-loop = RunLoop(config_path="config.yaml")
-loop.load_world_seed()
-loop.run(max_chapters=10)
-```
-
----
-
-## 配置参考
-
-所有设置均位于 `config.yaml`，完整示例见 `examples/config.yaml`。
-
-```yaml
-llm:
-  provider: "openai"          # 可选 "openai" 或 "anthropic"
-  model: "gpt-4o"
-  temperature: 0.8
-  max_tokens: 4000
-
-planner_llm:                  # 规划专用 LLM，温度较低以确保结构稳定
-  provider: "openai"
-  model: "gpt-4o"
-  temperature: 0.3
-  max_tokens: 2000
-
-similarity:
-  originality_threshold: 0.85 # 余弦相似度超过该阈值时标记为重复风险
-  fact_retrieval_k: 10
-  chapter_similarity_k: 5
-
-generation:
-  max_chapters: 100
-  rewrite_retries: 3          # 每次验证失败后编辑器的最大重试次数
-  new_rule_budget: 5          # 每章最多允许引入的新世界事实数
-  target_word_count: 3000
-
-database:
-  path: "poiesis.db"
-
-vector_store:
-  path: "vector_store"
-  embedding_model: "all-MiniLM-L6-v2"
-
-world_seed: "examples/world_seed.yaml"
-```
-
----
-
-## 模块说明
-
-| 模块                              | 功能描述                                         |
-|-----------------------------------|--------------------------------------------------|
-| `poiesis/config.py`               | Pydantic v2 配置模型 + `load_config()` 加载函数  |
-| `poiesis/db/database.py`          | 所有世界状态的 SQLite 持久化管理                 |
-| `poiesis/llm/base.py`             | 带重试逻辑的抽象 `LLMClient` 基类               |
-| `poiesis/llm/openai_client.py`    | OpenAI Chat Completions 接口实现                 |
-| `poiesis/llm/anthropic_client.py` | Anthropic Messages API 接口实现                  |
-| `poiesis/vector_store/store.py`   | 基于 FAISS + sentence-transformers 的向量存储    |
-| `poiesis/world.py`                | `WorldModel` — 三层知识管理                      |
-| `poiesis/planner.py`              | `ChapterPlanner` — 结构化 JSON 章节规划          |
-| `poiesis/writer.py`               | `ChapterWriter` — 根据规划生成散文               |
-| `poiesis/extractor.py`            | `FactExtractor` — 从文本中挖掘新世界事实         |
-| `poiesis/verifier.py`             | `ConsistencyVerifier` — 检测规则违反             |
-| `poiesis/editor.py`               | `ChapterEditor` — 针对违规的精准重写             |
-| `poiesis/merger.py`               | `WorldMerger` — 将已批准的改动应用到 canon 层    |
-| `poiesis/summarizer.py`           | `ChapterSummarizer` — 生成章节存档摘要           |
-| `poiesis/originality.py`          | `OriginalityChecker` — 余弦相似度原创性检测      |
-| `poiesis/run_loop.py`             | `RunLoop` — 完整生成管线的编排与调度             |
-| `poiesis/cli.py`                  | Click 命令行接口：`run`、`init`、`status`        |
-
----
-
-## 运行测试
-
-```bash
-pytest                  # 运行全部测试并生成覆盖率报告
-pytest --no-cov -v      # 详细输出，不生成覆盖率报告
-pytest tests/test_database.py -v
-```
-
----
-
-## 后端 API 服务
-
-Poiesis 内置了一个基于 **FastAPI** 的 HTTP API 服务层，供前端控制台（`frontend/`）调用真实数据。
-
-### 启动 API 服务
-
-```bash
-# 方式一：通过 CLI 子命令（推荐）
 poiesis serve --config config.yaml
 
-# 方式二：直接运行模块
-python -m poiesis.api.main --config config.yaml
-
-# 可选参数
-poiesis serve --config config.yaml --host 127.0.0.1 --port 8000 --reload
-```
-
-服务默认监听 `http://localhost:8000`，可通过 `--host` / `--port` 调整。
-
-启动后可访问自动生成的 API 文档：
-- Swagger UI：`http://localhost:8000/docs`
-- ReDoc：`http://localhost:8000/redoc`
-
-### 环境变量
-
-| 变量名 | 说明 | 默认值 |
-|--------|------|--------|
-| `POIESIS_CONFIG` | 配置文件路径（同 `--config`） | `config.yaml` |
-| `POIESIS_EMBEDDING_PROVIDER` | Embedding 提供者：`local`（本地哈希向量，离线、零依赖）或 `remote`（调用独立 Embedding Service 获取语义向量） | `local` |
-| `POIESIS_EMBEDDING_URL` | Embedding Service 地址（`remote` 模式时使用） | `http://embed:9000` |
-| `POIESIS_EMBEDDING_MODEL` | Embedding 模型名称（`remote` 模式时由 embed 服务使用） | `sentence-transformers/all-MiniLM-L6-v2` |
-
-#### POIESIS_EMBEDDING_PROVIDER 说明
-
-- **`local`**（默认）：使用确定性 SHA-256 哈希生成 384 维向量，纯本地、零网络依赖。  
-  适用场景：快速启动、资源受限环境、pytest、GitHub Actions CI。  
-  **注意**：哈希向量不具备语义相似度，不得用于生产语义判断。
-- **`remote`**：API 通过 HTTP 调用独立 **Embedding Service**（`poiesis-embed` 容器）获取语义向量。  
-  完整模式必须启用 embed 服务（`docker compose --profile full up -d`），真实语义 embedding 不内置在 `poiesis-api` 镜像中。
-
-> **已弃用**：`POIESIS_EMBEDDING_MODE=dummy/real` 为旧版变量，向后兼容但不推荐使用，请迁移至 `POIESIS_EMBEDDING_PROVIDER=local/remote`。
-
-```bash
-# 轻量模式运行测试（本地哈希向量，无网络）
-POIESIS_EMBEDDING_PROVIDER=local pytest
-
-# 生产运行使用轻量模式（默认）
-poiesis serve --config config.yaml
-
-# 启用完整模式（需配合 embed 服务）
-POIESIS_EMBEDDING_PROVIDER=remote poiesis serve --config config.yaml
-```
-
----
-
-## 冒烟测试
-
-使用 `scripts/smoke_test_api.py` 对已启动的后端进行一键联调验证：
-
-```bash
-# 1. 先启动后端
-poiesis serve --config config.yaml
-
-# 2. 另开终端执行冒烟测试
-python scripts/smoke_test_api.py
-
-# 可选：指定非默认地址
-python scripts/smoke_test_api.py --base-url http://localhost:8000
-```
-
-脚本行为：
-- `GET /api/chapters`：期望 200，可为空列表
-- `POST /api/run`：若未配置 LLM Key 返回 4xx，脚本视为"预期失败（缺少配置）"并继续；若配置齐全则轮询任务直至完成（最多 60 秒）
-- 最终输出中文总结："API 冒烟测试通过/失败"
-
----
-
-## 本地开发联调（可选）
-
-### 1. 配置前端 API 地址
-
-在 `frontend/` 目录下，复制并编辑环境变量文件：
-
-```bash
-cd frontend
-cp .env.example .env.local
-# 编辑 .env.local，设置：
-# VITE_API_BASE_URL=http://localhost:8000
-```
-
-### 2. 启动后端
-
-```bash
-# 在项目根目录
-poiesis serve --config config.yaml
-```
-
-### 3. 启动前端
-
-```bash
+# Frontend
 cd frontend
 npm install
 npm run dev
-# 前端默认运行在 http://localhost:5173
 ```
-
-### 4. 最小联调验收流程
-
-1. 打开浏览器访问 `http://localhost:5173`（Dashboard 页面）
-2. 查看 **章节列表**（Chapters 页面）——确认能看到已生成的章节
-3. 点击 **Run**，设置章节数为 1，触发生成任务
-4. 通过轮询 `GET /api/run/{task_id}` 或刷新 Chapters 页面，确认新章节出现
-5. 如有 staging 变更，在 **Staging** 页面审批或拒绝
-
-### 已实现接口清单
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/chapters` | 章节列表 |
-| GET | `/api/chapters/{id}` | 章节详情 |
-| GET | `/api/world/canon` | Canon 快照（规则/角色/时间线/伏笔） |
-| GET | `/api/world/staging` | Staging 变更列表（可 `?status=pending` 筛选） |
-| POST | `/api/world/staging/{id}/approve` | 批准变更 |
-| POST | `/api/world/staging/{id}/reject` | 拒绝变更（必须提供 `reason`） |
-| POST | `/api/run` | 启动写作任务 |
-| GET | `/api/run/{task_id}` | 查询任务状态与日志 |
-| GET | `/api/run/{task_id}/events` | SSE 实时日志流 |
-| GET | `/health` | 健康检查 |
 
 ---
 
-## 参与贡献
+## 📚 Documentation / 文档索引
+
+- Developer Guide: `docs/developer_guide.md`
+- Frontend Guide: `frontend/README.md`
+- Docker Topology: `docker-compose.yml`
+- API Smoke Test: `scripts/smoke_test_api.py`
+
+---
+
+## 🧯 Common Issues / 常见问题
+
+- `/api` 返回 502: 确认 `api` 容器健康且 `web` 可解析服务名 `api`
+- 运行任务报缺少 Key: 在系统设置或 `.env` 补齐 LLM Key
+- 选择 `remote` provider 失败: 使用 `--profile full` 启动并检查 `embed` 健康状态
+
+---
+
+## 🤝 Contributing / 参与贡献
+
+参与贡献
 
 1. Fork 本仓库并创建功能分支。
-2. 安装开发依赖：`pip install -e ".[dev]"`
-3. 安装 pre-commit 钩子：`pre-commit install`
-4. 为新功能编写测试用例。
-5. 确保 `ruff check poiesis tests` 和 `mypy poiesis` 通过检查。
-6. 向 `main` 分支提交 Pull Request。
+2. 如需添加新功能，请先通过 Issue 讨论需求与方案。
+3. 安装开发依赖：`pip install -e ".[dev]"`
+4. 安装 pre-commit 钩子：`pre-commit install`
+5. 为新功能编写测试用例。
+6. 确保 `ruff check poiesis tests` 和 `mypy poiesis` 通过检查。
+7. 向 `main` 分支提交 Pull Request。
 
-### 添加新的 LLM 提供商
+添加新的 LLM 提供商
 
-参见 [docs/developer_guide.md](docs/developer_guide.md#3-how-to-add-a-new-llm-provider)。
+参见 `docs/developer_guide.md`。
 
-### 扩展验证规则
+扩展验证规则
 
-参见 [docs/developer_guide.md](docs/developer_guide.md#4-how-to-extend-verification-rules)。
+参见 `docs/developer_guide.md`。
 
----
-
-## 生产部署（服务器 Nginx 反代）
-
-Docker compose 只提供应用容器，不直接监听公网 80/443 端口。
-生产环境推荐使用服务器上已有的 Nginx 统一管理 HTTPS 与域名，Docker 仅作为应用容器运行。
-
-### 架构说明
-
-```
-外部请求（浏览器）
-      │ HTTPS 443（或 HTTP 80）
-      ▼
- 服务器 Nginx（宿主机）          ← 负责 SSL 证书、域名、访问控制
-      │ proxy_pass http://127.0.0.1:18080
-      ▼
- Docker web 容器（Nginx）        ← 托管前端静态文件，内部反代 /api
-      │ proxy_pass http://api:8000
-      ▼
- Docker api 容器（FastAPI）      ← Poiesis 后端
-```
-
-### 服务器 Nginx 示例配置
-
-将以下配置添加到服务器 Nginx 的 `sites-available/` 目录（如 `/etc/nginx/sites-available/poiesis`）：
-
-```nginx
-# Poiesis Web 控制台 — 服务器 Nginx 反代配置示例
-# 将外部请求转发到 Docker 容器的 web 服务（127.0.0.1:18080）
-
-server {
-    listen 80;
-    server_name your-domain.com;  # 替换为你的域名或服务器 IP
-
-    # 如已配置 HTTPS，可在此添加 HTTP → HTTPS 跳转：
-    # return 301 https://$host$request_uri;
-
-    location / {
-        # 反代到 Docker web 容器
-        proxy_pass         http://127.0.0.1:18080;
-        proxy_http_version 1.1;
-        proxy_set_header   Host              $host;
-        proxy_set_header   X-Real-IP         $remote_addr;
-        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto $scheme;
-        # SSE 实时日志流需要关闭缓冲
-        proxy_buffering    off;
-        proxy_read_timeout 300s;
-    }
-}
-
-# HTTPS 配置示例（需先用 certbot 申请证书）
-# server {
-#     listen 443 ssl;
-#     server_name your-domain.com;
-#
-#     ssl_certificate     /etc/letsencrypt/live/your-domain.com/fullchain.pem;
-#     ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
-#     ssl_protocols       TLSv1.2 TLSv1.3;
-#
-#     location / {
-#         proxy_pass         http://127.0.0.1:18080;
-#         proxy_http_version 1.1;
-#         proxy_set_header   Host              $host;
-#         proxy_set_header   X-Real-IP         $remote_addr;
-#         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
-#         proxy_set_header   X-Forwarded-Proto $scheme;
-#         proxy_buffering    off;
-#         proxy_read_timeout 300s;
-#     }
-# }
-```
-
-启用配置并重载 Nginx：
-
-```bash
-sudo ln -s /etc/nginx/sites-available/poiesis /etc/nginx/sites-enabled/poiesis
-sudo nginx -t          # 语法检查
-sudo systemctl reload nginx
-```
-
-### 配置 HTTPS（Let's Encrypt）
-
-```bash
-sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d your-domain.com
-# certbot 会自动修改 nginx 配置并续期证书
-```
+如果喜欢本项目，欢迎点亮 Star，并通过 Issue 或 Pull Request 提交反馈与改进建议。
 
 ---
 
-## 许可证
+## 📄 License / 开源协议
 
-Apache-2.0 — 详见 [LICENSE](LICENSE)。
+本项目采用 GNU AGPLv3 协议：允许使用、修改与分发；若将修改版本用于对外网络服务，也需向用户提供对应源码。
+
+GNU AGPLv3. See `LICENSE`.

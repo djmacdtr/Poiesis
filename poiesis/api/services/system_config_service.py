@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import os
+from datetime import UTC, datetime
+from typing import Literal
+
+import httpx
+
 from poiesis.api.schemas.system_config import SystemConfigRequest, SystemConfigStatus
 from poiesis.crypto import decrypt, encrypt
 from poiesis.db.database import Database
@@ -9,11 +15,109 @@ from poiesis.db.database import Database
 # 配置键名常量
 KEY_OPENAI = "OPENAI_API_KEY"
 KEY_ANTHROPIC = "ANTHROPIC_API_KEY"
-KEY_EMBEDDING_MODE = "embedding_mode"
+KEY_EMBEDDING_PROVIDER = "embedding_provider"
 KEY_DEFAULT_CHAPTER_COUNT = "default_chapter_count"
 
 # 需要加密存储的键
 _ENCRYPTED_KEYS = {KEY_OPENAI, KEY_ANTHROPIC}
+
+
+class EmbeddingConfigError(Exception):
+    """Embedding 配置校验失败异常。"""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        provider: str,
+        url: str | None = None,
+        error: str | None = None,
+        suggestion: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.provider = provider
+        self.url = url
+        self.error = error
+        self.suggestion = suggestion
+
+    def to_detail(self) -> dict[str, str | None]:
+        """转换为 HTTP 异常 detail 结构。"""
+        return {
+            "code": self.code,
+            "message": self.message,
+            "provider": self.provider,
+            "url": self.url,
+            "error": self.error,
+            "suggestion": self.suggestion,
+        }
+
+
+def _normalize_embedding_provider(provider: str) -> str:
+    """规范化并校验 embedding provider 值。"""
+    value = provider.strip().lower()
+    if value not in {"local", "remote"}:
+        raise EmbeddingConfigError(
+            code="INVALID_EMBEDDING_PROVIDER",
+            message="embedding_provider 仅支持 local 或 remote",
+            provider=value,
+            suggestion="请选择 local（轻量）或 remote（完整模式）",
+        )
+    return value
+
+
+def _get_effective_embedding_provider() -> Literal["local", "remote"]:
+    """读取运行时实际 provider（来自环境变量）。"""
+    provider = os.environ.get("POIESIS_EMBEDDING_PROVIDER", "local").strip().lower()
+    if provider == "remote":
+        return "remote"
+    return "local"
+
+
+def _check_embedding_service_health() -> dict[str, str | bool | None]:
+    """检查 remote embedding 服务健康状态。"""
+    url = os.environ.get("POIESIS_EMBEDDING_URL", "http://embed:9000").rstrip("/")
+    checked_at = datetime.now(UTC).isoformat(timespec="seconds")
+    health_url = f"{url}/health"
+
+    try:
+        resp = httpx.get(health_url, timeout=5.0)
+        if resp.status_code == 200:
+            return {
+                "provider": "remote",
+                "reachable": True,
+                "url": url,
+                "status": "ok",
+                "error_msg": None,
+                "checked_at": checked_at,
+            }
+        return {
+            "provider": "remote",
+            "reachable": False,
+            "url": url,
+            "status": "error",
+            "error_msg": f"HTTP {resp.status_code}",
+            "checked_at": checked_at,
+        }
+    except httpx.TimeoutException:
+        return {
+            "provider": "remote",
+            "reachable": False,
+            "url": url,
+            "status": "unreachable",
+            "error_msg": "timeout",
+            "checked_at": checked_at,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "provider": "remote",
+            "reachable": False,
+            "url": url,
+            "status": "unreachable",
+            "error_msg": str(exc),
+            "checked_at": checked_at,
+        }
 
 
 def save_config(db: Database, req: SystemConfigRequest) -> SystemConfigStatus:
@@ -41,9 +145,21 @@ def save_config(db: Database, req: SystemConfigRequest) -> SystemConfigStatus:
         else:
             db.set_system_config(KEY_ANTHROPIC, "")
 
-    # 保存 Embedding 模式
-    if req.embedding_mode is not None:
-        db.set_system_config(KEY_EMBEDDING_MODE, req.embedding_mode)
+    # 保存 Embedding 提供者（仅支持 local / remote）
+    if req.embedding_provider is not None:
+        provider = _normalize_embedding_provider(req.embedding_provider)
+        if provider == "remote":
+            health = _check_embedding_service_health()
+            if not bool(health["reachable"]):
+                raise EmbeddingConfigError(
+                    code="EMBEDDING_SERVICE_UNREACHABLE",
+                    message="无法保存 remote 配置：Embedding Service 不可达",
+                    provider=provider,
+                    url=str(health["url"]),
+                    error=health["error_msg"] if isinstance(health["error_msg"], str) else None,
+                    suggestion="请先执行 docker compose --profile full up -d，再重试保存",
+                )
+        db.set_system_config(KEY_EMBEDDING_PROVIDER, provider)
 
     # 保存默认章节数
     if req.default_chapter_count is not None:
@@ -63,8 +179,18 @@ def get_config_status(db: Database) -> SystemConfigStatus:
     """
     openai_val = db.get_system_config(KEY_OPENAI)
     anthropic_val = db.get_system_config(KEY_ANTHROPIC)
-    embedding_mode = db.get_system_config(KEY_EMBEDDING_MODE)
+    embedding_provider = db.get_system_config(KEY_EMBEDDING_PROVIDER)
     chapter_count_str = db.get_system_config(KEY_DEFAULT_CHAPTER_COUNT)
+
+    if embedding_provider:
+        embedding_provider = embedding_provider.strip().lower()
+        if embedding_provider not in {"local", "remote"}:
+            embedding_provider = None
+
+    effective_provider = _get_effective_embedding_provider()
+    embedding_service_health: dict[str, str | bool | None] | None = None
+    if embedding_provider == "remote" or effective_provider == "remote":
+        embedding_service_health = _check_embedding_service_health()
 
     default_chapter_count: int | None = None
     if chapter_count_str:
@@ -76,7 +202,9 @@ def get_config_status(db: Database) -> SystemConfigStatus:
     return SystemConfigStatus(
         has_openai_api_key=bool(openai_val),
         has_anthropic_api_key=bool(anthropic_val),
-        embedding_mode=embedding_mode,
+        embedding_provider=embedding_provider,
+        embedding_provider_effective=effective_provider,
+        embedding_service_health=embedding_service_health,
         default_chapter_count=default_chapter_count,
     )
 

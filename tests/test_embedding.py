@@ -3,8 +3,7 @@
 覆盖以下场景：
 1. DummyEmbeddingProvider 行为（确定性、维度、归一化）
 2. RemoteEmbeddingProvider 错误处理（服务不可达、HTTP 错误）
-3. get_embedding_provider() 环境变量路由（local / remote / 旧变量兼容）
-4. vector_store/providers.py 向后兼容性
+3. get_embedding_provider() 环境变量路由（local / remote）
 """
 
 from __future__ import annotations
@@ -218,55 +217,14 @@ class TestGetEmbeddingProvider:
         provider = get_embedding_provider()
         assert isinstance(provider, RemoteEmbeddingProvider)
 
-    def test_legacy_mode_dummy_returns_dummy(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """旧配置 POIESIS_EMBEDDING_MODE=dummy 应返回 DummyEmbeddingProvider。"""
-        monkeypatch.delenv("POIESIS_EMBEDDING_PROVIDER", raising=False)
-        monkeypatch.setenv("POIESIS_EMBEDDING_MODE", "dummy")
-        provider = get_embedding_provider()
-        assert isinstance(provider, DummyEmbeddingProvider)
-
-    def test_legacy_mode_remote_returns_remote(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """旧配置 POIESIS_EMBEDDING_MODE=remote 应返回 RemoteEmbeddingProvider。"""
-        monkeypatch.delenv("POIESIS_EMBEDDING_PROVIDER", raising=False)
-        monkeypatch.setenv("POIESIS_EMBEDDING_MODE", "remote")
-        provider = get_embedding_provider()
-        assert isinstance(provider, RemoteEmbeddingProvider)
-
     def test_default_returns_dummy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """无任何配置时应默认返回 DummyEmbeddingProvider（零依赖）。"""
         monkeypatch.delenv("POIESIS_EMBEDDING_PROVIDER", raising=False)
-        monkeypatch.delenv("POIESIS_EMBEDDING_MODE", raising=False)
         provider = get_embedding_provider()
         assert isinstance(provider, DummyEmbeddingProvider)
 
-    def test_provider_env_takes_precedence_over_mode(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """POIESIS_EMBEDDING_PROVIDER 优先级应高于 POIESIS_EMBEDDING_MODE。"""
-        monkeypatch.setenv("POIESIS_EMBEDDING_PROVIDER", "local")
-        monkeypatch.setenv("POIESIS_EMBEDDING_MODE", "remote")
+    def test_invalid_provider_falls_back_to_local(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """非法 provider 值应回退到 local（DummyEmbeddingProvider）。"""
+        monkeypatch.setenv("POIESIS_EMBEDDING_PROVIDER", "invalid")
         provider = get_embedding_provider()
-        # PROVIDER=local 优先，应返回 Dummy
         assert isinstance(provider, DummyEmbeddingProvider)
-
-    def test_legacy_real_mode_without_url_raises_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """旧配置 POIESIS_EMBEDDING_MODE=real 且无 URL 时应抛出 RuntimeError 并提示迁移。"""
-        monkeypatch.delenv("POIESIS_EMBEDDING_PROVIDER", raising=False)
-        monkeypatch.setenv("POIESIS_EMBEDDING_MODE", "real")
-        monkeypatch.delenv("POIESIS_EMBEDDING_URL", raising=False)
-        with pytest.raises(RuntimeError) as exc_info:
-            get_embedding_provider()
-        assert "remote" in str(exc_info.value)
-        assert "poiesis-embed" in str(exc_info.value)
-
-    def test_legacy_real_mode_with_url_returns_remote(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """旧配置 POIESIS_EMBEDDING_MODE=real 且设置了 URL 时应返回 RemoteEmbeddingProvider。"""
-        monkeypatch.delenv("POIESIS_EMBEDDING_PROVIDER", raising=False)
-        monkeypatch.setenv("POIESIS_EMBEDDING_MODE", "real")
-        monkeypatch.setenv("POIESIS_EMBEDDING_URL", "http://embed:9000")
-        provider = get_embedding_provider()
-        assert isinstance(provider, RemoteEmbeddingProvider)

@@ -32,7 +32,10 @@ def save_system_config(
     _: Any = Depends(require_admin),
 ) -> SystemConfigStatus:
     """保存或更新系统配置（API Key 加密存储，仅 admin 可操作）。"""
-    return system_config_service.save_config(db, body)
+    try:
+        return system_config_service.save_config(db, body)
+    except system_config_service.EmbeddingConfigError as exc:
+        raise HTTPException(status_code=422, detail=exc.to_detail()) from exc
 
 
 class InitRequest(BaseModel):
