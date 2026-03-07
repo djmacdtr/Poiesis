@@ -196,6 +196,28 @@ class TaskRegistry:
         with self._lock:
             return list(self._tasks.values())
 
+    def prune_history(self, keep_recent: int) -> int:
+        """清理历史任务，保留运行中任务与最近 N 条已结束任务。"""
+        keep_recent = max(0, keep_recent)
+        active_statuses = {"pending", "running"}
+
+        with self._lock:
+            tasks = list(self._tasks.values())
+            active_tasks = [task for task in tasks if task.status in active_statuses]
+            terminal_tasks = [task for task in tasks if task.status not in active_statuses]
+            terminal_tasks.sort(key=lambda task: task.updated_at, reverse=True)
+
+            keep_ids = {task.task_id for task in active_tasks}
+            keep_ids.update(task.task_id for task in terminal_tasks[:keep_recent])
+
+            before = len(self._tasks)
+            self._tasks = {task_id: task for task_id, task in self._tasks.items() if task_id in keep_ids}
+            removed = before - len(self._tasks)
+
+        if removed > 0:
+            self._persist()
+        return removed
+
 
 # 应用级单例注册表
 registry = TaskRegistry()

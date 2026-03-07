@@ -12,6 +12,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from poiesis.api.main import app
+from poiesis.api.task_registry import registry
 from poiesis.db.database import Database
 
 # ──────────────────────────────────────────────
@@ -217,3 +218,40 @@ class TestRunTask:
         client = _make_client(tmp_db)
         resp = client.post("/api/run", json={"chapter_count": 0})
         assert resp.status_code == 422
+
+    def test_list_tasks_returns_created_task(self, tmp_db: Database) -> None:
+        """GET /api/run 应返回已创建任务列表。"""
+        client = _make_client(tmp_db)
+        created = client.post("/api/run", json={"chapter_count": 1}).json()
+
+        resp = client.get("/api/run")
+        assert resp.status_code == 200
+
+        tasks = resp.json()
+        assert isinstance(tasks, list)
+        assert any(item.get("task_id") == created["task_id"] for item in tasks)
+
+    def test_prune_history_keeps_recent_terminal_tasks(self, tmp_db: Database) -> None:
+        """DELETE /api/run/history 应按 keep 保留最近已结束任务。"""
+        client = _make_client(tmp_db)
+
+        t1 = client.post("/api/run", json={"chapter_count": 1}).json()["task_id"]
+        t2 = client.post("/api/run", json={"chapter_count": 1}).json()["task_id"]
+
+        # 将两个任务都标记为已结束，避免被“运行中任务始终保留”规则保护。
+        for task_id in (t1, t2):
+            task = registry.get(task_id)
+            assert task is not None
+            task.status = "completed"
+
+        prune_resp = client.delete("/api/run/history?keep=1")
+        assert prune_resp.status_code == 200
+        body = prune_resp.json()
+        assert body["removed"] >= 1
+
+        list_resp = client.get("/api/run")
+        assert list_resp.status_code == 200
+        tasks = list_resp.json()
+
+        task_ids = {item["task_id"] for item in tasks}
+        assert t2 in task_ids or t1 in task_ids

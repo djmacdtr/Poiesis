@@ -5,7 +5,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Play, Square } from 'lucide-react'
 import { toast } from 'sonner'
-import { startRun, fetchTaskStatus } from '@/services/run'
+import { startRun, fetchTaskStatus, fetchTaskList, pruneTaskHistory } from '@/services/run'
 import { getSystemConfig } from '@/services/systemConfig'
 import { LoadingSpinner, ErrorMessage } from '@/components/Feedback'
 import type { TaskDetail } from '@/types'
@@ -29,11 +29,40 @@ const statusColor: Record<string, string> = {
 }
 
 const restartFailureKeywords = ['热重载', '重启', '中断']
+const ACTIVE_TASK_ID_KEY = 'poiesis.activeTaskId'
+const taskFilters = ['all', 'pending', 'running', 'completed', 'failed', 'interrupted'] as const
+type TaskFilter = (typeof taskFilters)[number]
+
+function getTaskProgressPercent(task: TaskDetail): number {
+  if (typeof task.progress === 'number') {
+    return Math.max(0, Math.min(100, Math.round(task.progress * 100)))
+  }
+  if (task.current_chapter != null && task.total_chapters != null && task.total_chapters > 0) {
+    return Math.max(0, Math.min(100, Math.round((task.current_chapter / task.total_chapters) * 100)))
+  }
+  return 0
+}
+
+function getCurrentStepText(task: TaskDetail): string {
+  const latestLog = task.logs?.[task.logs.length - 1]
+  if (latestLog) return latestLog
+  if (task.status === 'completed') return '全部章节已完成'
+  if (task.status === 'interrupted') return '任务因服务重启中断，等待重试'
+  if (task.status === 'failed') return task.error ?? '任务执行失败'
+  if (task.status === 'running') return '任务运行中，等待新日志'
+  return '等待任务启动'
+}
 
 export default function Run() {
   const [chapterCount, setChapterCount] = useState(1)
-  const [taskId, setTaskId] = useState<string | null>(null)
+  const [taskId, setTaskId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null
+    return window.localStorage.getItem(ACTIVE_TASK_ID_KEY)
+  })
   const [isStarting, setIsStarting] = useState(false)
+  const [isPruning, setIsPruning] = useState(false)
+  const [taskFilter, setTaskFilter] = useState<TaskFilter>('all')
+  const [keepRecentCount, setKeepRecentCount] = useState(20)
   const logsEndRef = useRef<HTMLDivElement>(null)
 
   const { data: systemConfig, error: configError } = useQuery({
@@ -57,6 +86,21 @@ export default function Run() {
     },
   })
 
+  const { data: taskList = [], refetch: refetchTaskList } = useQuery<TaskDetail[]>({
+    queryKey: ['taskList'],
+    queryFn: fetchTaskList,
+    refetchInterval: (query) => {
+      const tasks = query.state.data ?? []
+      const hasRunningTask = tasks.some((item) => item.status === 'pending' || item.status === 'running')
+      return hasRunningTask ? 2000 : 5000
+    },
+  })
+
+  const filteredTaskList = taskList.filter((item) => {
+    if (taskFilter === 'all') return true
+    return item.status === taskFilter
+  })
+
   // 任务状态变化通知
   useEffect(() => {
     if (task?.status === 'completed') {
@@ -72,6 +116,15 @@ export default function Run() {
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [task?.logs])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (taskId) {
+      window.localStorage.setItem(ACTIVE_TASK_ID_KEY, taskId)
+      return
+    }
+    window.localStorage.removeItem(ACTIVE_TASK_ID_KEY)
+  }, [taskId])
 
   const handleStart = async () => {
     setIsStarting(true)
@@ -90,6 +143,29 @@ export default function Run() {
     setTaskId(null)
   }
 
+  const handleSelectTask = (selectedTaskId: string) => {
+    setTaskId(selectedTaskId)
+  }
+
+  const handlePruneHistory = async () => {
+    const keep = Number.isFinite(keepRecentCount) ? Math.max(0, Math.floor(keepRecentCount)) : 20
+    setIsPruning(true)
+    try {
+      const result = await pruneTaskHistory(keep)
+      const refreshed = await refetchTaskList()
+      const nextTaskList = refreshed.data ?? []
+      toast.success(`历史清理完成：删除 ${result.removed} 条，剩余 ${result.remaining} 条`)
+      if (taskId) {
+        const stillExists = nextTaskList.some((item) => item.task_id === taskId)
+        if (!stillExists) setTaskId(null)
+      }
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setIsPruning(false)
+    }
+  }
+
   const isRunning = task?.status === 'running' || task?.status === 'pending'
   const taskErrorMessage = taskError ? (taskError as Error).message : null
   const isMissingTaskError =
@@ -103,8 +179,96 @@ export default function Run() {
   const taskStatusColor = task?.status ? (statusColor[task.status] ?? '') : ''
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-6 max-w-4xl">
       <h2 className="text-lg font-semibold text-gray-800">运行控制</h2>
+
+      <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-700">历史任务</h3>
+          <span className="text-xs text-gray-500">可点击继续查看详情</span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {taskFilters.map((filter) => {
+            const active = taskFilter === filter
+            const label = filter === 'all' ? '全部' : (statusLabel[filter] ?? filter)
+            return (
+              <button
+                key={filter}
+                onClick={() => setTaskFilter(filter)}
+                className={`rounded-full px-2.5 py-1 text-xs transition-colors ${active ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 p-3">
+          <span className="text-xs text-gray-600">清理历史：保留最近</span>
+          <input
+            type="number"
+            min={0}
+            max={500}
+            value={keepRecentCount}
+            onChange={(e) => setKeepRecentCount(Number(e.target.value))}
+            className="w-20 rounded border border-gray-300 px-2 py-1 text-xs"
+          />
+          <span className="text-xs text-gray-600">条（运行中任务始终保留）</span>
+          <button
+            onClick={handlePruneHistory}
+            disabled={isPruning}
+            className="ml-auto rounded-md bg-gray-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-900 disabled:opacity-50"
+          >
+            {isPruning ? '清理中…' : '清理历史'}
+          </button>
+        </div>
+
+        {filteredTaskList.length === 0 && (
+          <p className="text-sm text-gray-500">暂无任务记录，点击下方“开始运行”创建新任务。</p>
+        )}
+
+        {filteredTaskList.length > 0 && (
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {filteredTaskList.map((item) => {
+              const percent = getTaskProgressPercent(item)
+              const currentStep = getCurrentStepText(item)
+              const itemStatusLabel = statusLabel[item.status] ?? item.status
+              const itemStatusColor = statusColor[item.status] ?? 'text-gray-700 bg-gray-100'
+
+              return (
+                <button
+                  key={item.task_id}
+                  onClick={() => handleSelectTask(item.task_id)}
+                  className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${taskId === item.task_id ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:bg-gray-50'}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-mono text-[11px] text-gray-500 truncate">{item.task_id}</p>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${itemStatusColor}`}>
+                      {itemStatusLabel}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-600 truncate">当前阶段：{currentStep}</p>
+                  <div className="mt-2 space-y-1">
+                    <div className="flex items-center justify-between text-[11px] text-gray-500">
+                      <span>
+                        写作进度：{item.current_chapter ?? 0} / {item.total_chapters ?? 0} 章
+                      </span>
+                      <span>{percent}%</span>
+                    </div>
+                    <div className="h-1.5 w-full rounded-full bg-gray-100">
+                      <div
+                        className="h-1.5 rounded-full bg-indigo-500 transition-all"
+                        style={{ width: `${percent}%` }}
+                      />
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
 
       {/* 启动表单 */}
       <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
@@ -211,12 +375,12 @@ export default function Run() {
                 <div className="space-y-1">
                   <div className="flex justify-between text-xs text-gray-500">
                     <span>进度：{task.current_chapter} / {task.total_chapters} 章</span>
-                    <span>{Math.round((task.current_chapter / task.total_chapters) * 100)}%</span>
+                    <span>{getTaskProgressPercent(task)}%</span>
                   </div>
                   <div className="w-full bg-gray-100 rounded-full h-1.5">
                     <div
                       className="bg-indigo-500 h-1.5 rounded-full transition-all"
-                      style={{ width: `${(task.current_chapter / task.total_chapters) * 100}%` }}
+                      style={{ width: `${getTaskProgressPercent(task)}%` }}
                     />
                   </div>
                 </div>

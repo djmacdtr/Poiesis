@@ -46,7 +46,7 @@ def _validate_llm_key_prerequisites(loop: Any) -> None:
 def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int) -> None:
     """后台线程函数：初始化 RunLoop 并逐章生成，将进度写入任务日志。
 
-    此函数在独立线程中运行。若服务热重载/重启，运行中的任务会被标记为失败，
+    此函数在独立线程中运行。若服务热重载/重启，运行中的任务会被标记为中断，
     并提示用户重新发起生成。
     """
     # 延迟导入，避免启动时加载 LLM 依赖
@@ -102,3 +102,16 @@ def get_task(task_id: str) -> dict[str, Any] | None:
     """查询任务状态，不存在时返回 None。"""
     task = registry.get(task_id)
     return task.to_dict() if task else None
+
+
+def list_tasks() -> list[dict[str, Any]]:
+    """返回全部任务（按最近更新时间倒序）。"""
+    tasks = [task.to_dict() for task in registry.all_tasks()]
+    return sorted(tasks, key=lambda item: item.get("updated_at") or "", reverse=True)
+
+
+def prune_task_history(keep_recent: int) -> dict[str, int]:
+    """清理历史任务，返回删除数量与剩余任务数量。"""
+    removed = registry.prune_history(keep_recent=keep_recent)
+    remaining = len(registry.all_tasks())
+    return {"removed": removed, "remaining": remaining}

@@ -7,7 +7,7 @@ import time
 from collections.abc import Generator
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from poiesis.api.deps import require_admin
@@ -42,6 +42,22 @@ def start_run(
     )
 
 
+@router.get("", response_model=list[TaskDetail])
+def list_tasks() -> list[TaskDetail]:
+    """查询任务列表（按最近更新时间倒序，无需认证）。"""
+    task_dicts = run_service.list_tasks()
+    return [TaskDetail(**item) for item in task_dicts]
+
+
+@router.delete("/history")
+def prune_task_history(
+    keep: int = Query(default=20, ge=0, le=500),
+    _: Any = Depends(require_admin),
+) -> dict[str, int]:
+    """清理历史任务（保留运行中任务 + 最近 N 条已结束任务）。"""
+    return run_service.prune_task_history(keep_recent=keep)
+
+
 @router.get("/{task_id}", response_model=TaskDetail)
 def get_task(task_id: str) -> TaskDetail:
     """查询任务状态与最近日志（供前端轮询，无需认证）。"""
@@ -65,7 +81,7 @@ def task_events(task_id: str) -> StreamingResponse:
             for line in logs[sent:]:
                 yield f"data: {line}\n\n"
                 sent += 1
-            if task.status in ("completed", "failed"):
+            if task.status in ("completed", "failed", "interrupted"):
                 yield f"data: [任务结束：{task.status}]\n\n"
                 break
             time.sleep(1)
