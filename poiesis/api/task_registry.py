@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from collections import deque
 from datetime import UTC, datetime
@@ -16,6 +17,11 @@ from typing import Any, Callable
 
 # 日志环形缓冲区最大行数
 _MAX_LOG_LINES = 200
+_MAX_PREVIEW_CHARS = 12000
+_INVALID_COMPLETED_MSG = (
+    "任务状态异常：记录显示已完成，但未记录任何章节进度。"
+    "可能是服务重载或测试数据残留导致，请重新发起生成。"
+)
 
 
 class TaskInfo:
@@ -32,6 +38,8 @@ class TaskInfo:
         self.total_chapters: int = total_chapters
         self._current_chapter: int = 0
         self._error: str | None = None
+        self._preview_text: str = ""
+        self._preview_last_touch: float = 0.0
         self.created_at: str = datetime.now(UTC).isoformat()
         self.updated_at: str = self.created_at
         # 最近 N 行日志（环形缓冲）
@@ -63,6 +71,32 @@ class TaskInfo:
     @error.setter
     def error(self, value: str | None) -> None:
         self._error = value
+        self._touch()
+
+    @property
+    def preview_text(self) -> str:
+        return self._preview_text
+
+    def reset_preview(self) -> None:
+        self._preview_text = ""
+        self._touch()
+
+    def append_preview(self, chunk: str) -> None:
+        """Append preview text with a bounded buffer and throttled disk persistence."""
+        if not chunk:
+            return
+
+        self._preview_text += chunk
+        if len(self._preview_text) > _MAX_PREVIEW_CHARS:
+            self._preview_text = self._preview_text[-_MAX_PREVIEW_CHARS:]
+
+        now = time.monotonic()
+        if now - self._preview_last_touch >= 0.8:
+            self._preview_last_touch = now
+            self._touch()
+
+    def flush_preview(self) -> None:
+        """Force-persist preview updates before task state transitions."""
         self._touch()
 
     def _touch(self) -> None:
@@ -97,6 +131,7 @@ class TaskInfo:
             "total_chapters": self.total_chapters,
             "logs": self.logs,
             "error": self.error,
+            "preview_text": self.preview_text if self.preview_text else None,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -115,6 +150,7 @@ class TaskInfo:
         task._status = str(payload.get("status", "pending"))
         task._current_chapter = int(payload.get("current_chapter") or 0)
         task._error = payload.get("error")
+        task._preview_text = str(payload.get("preview_text") or "")
         task.created_at = payload.get("created_at") or datetime.now(UTC).isoformat()
         task.updated_at = payload.get("updated_at") or task.created_at
         logs = payload.get("logs") or []
@@ -172,6 +208,17 @@ class TaskRegistry:
                 task.status = "interrupted"
                 task.error = "服务发生热重载或重启，原任务已中断，请重新发起生成。"
                 task.add_log(task.error)
+            # 防御性修复：历史数据中出现“已完成但 0 进度”时，标记为异常终态，避免误导前端。
+            elif (
+                task.status == "completed"
+                and task.total_chapters > 0
+                and task.current_chapter <= 0
+            ):
+                recovered = True
+                task.status = "failed"
+                task.error = _INVALID_COMPLETED_MSG
+                if not task.logs:
+                    task.add_log(_INVALID_COMPLETED_MSG)
             self._tasks[task.task_id] = task
 
         if recovered:

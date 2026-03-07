@@ -5,7 +5,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Play, Square } from 'lucide-react'
 import { toast } from 'sonner'
-import { startRun, fetchTaskStatus, fetchTaskList, pruneTaskHistory } from '@/services/run'
+import { createTaskEventSource, startRun, fetchTaskStatus, fetchTaskList, pruneTaskHistory } from '@/services/run'
 import { getSystemConfig } from '@/services/systemConfig'
 import { LoadingSpinner, ErrorMessage } from '@/components/Feedback'
 import type { TaskDetail } from '@/types'
@@ -33,6 +33,10 @@ const ACTIVE_TASK_ID_KEY = 'poiesis.activeTaskId'
 const taskFilters = ['all', 'pending', 'running', 'completed', 'failed', 'interrupted'] as const
 type TaskFilter = (typeof taskFilters)[number]
 
+function isInvalidCompletedTask(task: TaskDetail): boolean {
+  return task.status === 'completed' && (task.current_chapter ?? 0) <= 0 && (task.total_chapters ?? 0) > 0
+}
+
 function getTaskProgressPercent(task: TaskDetail): number {
   if (typeof task.progress === 'number') {
     return Math.max(0, Math.min(100, Math.round(task.progress * 100)))
@@ -46,6 +50,7 @@ function getTaskProgressPercent(task: TaskDetail): number {
 function getCurrentStepText(task: TaskDetail): string {
   const latestLog = task.logs?.[task.logs.length - 1]
   if (latestLog) return latestLog
+  if (isInvalidCompletedTask(task)) return '任务记录异常：显示已完成但无章节产出，请重新发起生成'
   if (task.status === 'completed') return '全部章节已完成'
   if (task.status === 'interrupted') return '任务因服务重启中断，等待重试'
   if (task.status === 'failed') return task.error ?? '任务执行失败'
@@ -63,6 +68,10 @@ export default function Run() {
   const [isPruning, setIsPruning] = useState(false)
   const [taskFilter, setTaskFilter] = useState<TaskFilter>('all')
   const [keepRecentCount, setKeepRecentCount] = useState(20)
+  const [previewText, setPreviewText] = useState('')
+  const [isPreviewStreaming, setIsPreviewStreaming] = useState(false)
+  const eventSourceRef = useRef<EventSource | null>(null)
+  const eventSourceTaskIdRef = useRef<string | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
 
   const { data: systemConfig, error: configError } = useQuery({
@@ -103,7 +112,9 @@ export default function Run() {
 
   // 任务状态变化通知
   useEffect(() => {
-    if (task?.status === 'completed') {
+    if (task && isInvalidCompletedTask(task)) {
+      toast.warning('任务状态异常：显示已完成但未记录章节进度，请重试')
+    } else if (task?.status === 'completed') {
       toast.success('写作任务已完成！')
     } else if (task?.status === 'interrupted') {
       toast.warning(`任务中断：${task.error ?? '服务热重载或重启导致中断，请重试'}`)
@@ -117,6 +128,20 @@ export default function Run() {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [task?.logs])
 
+  // 任务详情轮询可作为 SSE 预览的兜底来源（例如页面刷新后）。
+  useEffect(() => {
+    if (!taskId) {
+      setPreviewText('')
+      return
+    }
+    if (typeof task?.preview_text === 'string') {
+      setPreviewText((prev) => {
+        if (task.preview_text!.length >= prev.length) return task.preview_text!
+        return prev
+      })
+    }
+  }, [taskId, task?.preview_text])
+
   useEffect(() => {
     if (typeof window === 'undefined') return
     if (taskId) {
@@ -126,10 +151,80 @@ export default function Run() {
     window.localStorage.removeItem(ACTIVE_TASK_ID_KEY)
   }, [taskId])
 
+  // 订阅 SSE：实时接收日志与正文预览增量。
+  useEffect(() => {
+    if (!taskId) {
+      eventSourceRef.current?.close()
+      eventSourceRef.current = null
+      eventSourceTaskIdRef.current = null
+      setIsPreviewStreaming(false)
+      return
+    }
+
+    const isTerminal = task?.status === 'completed' || task?.status === 'failed' || task?.status === 'interrupted'
+    if (isTerminal) {
+      eventSourceRef.current?.close()
+      eventSourceRef.current = null
+      eventSourceTaskIdRef.current = null
+      setIsPreviewStreaming(false)
+      return
+    }
+
+    if (eventSourceRef.current && eventSourceTaskIdRef.current === taskId) {
+      return
+    }
+
+    eventSourceRef.current?.close()
+    const es = createTaskEventSource(taskId)
+    eventSourceRef.current = es
+    eventSourceTaskIdRef.current = taskId
+    setIsPreviewStreaming(true)
+
+    es.addEventListener('preview', (event) => {
+      const evt = event as MessageEvent
+      try {
+        const payload = JSON.parse(evt.data) as { delta?: string }
+        if (payload.delta) {
+          setPreviewText((prev) => `${prev}${payload.delta}`)
+        }
+      } catch {
+        // Ignore malformed preview payloads.
+      }
+    })
+
+    es.addEventListener('status', () => {
+      setIsPreviewStreaming(false)
+      es.close()
+      if (eventSourceRef.current === es) {
+        eventSourceRef.current = null
+        eventSourceTaskIdRef.current = null
+      }
+    })
+
+    es.onerror = () => {
+      setIsPreviewStreaming(false)
+      es.close()
+      if (eventSourceRef.current === es) {
+        eventSourceRef.current = null
+        eventSourceTaskIdRef.current = null
+      }
+    }
+
+    return () => {
+      es.close()
+      if (eventSourceRef.current === es) {
+        eventSourceRef.current = null
+        eventSourceTaskIdRef.current = null
+      }
+      setIsPreviewStreaming(false)
+    }
+  }, [taskId, task?.status])
+
   const handleStart = async () => {
     setIsStarting(true)
     try {
       const res = await startRun(chapterCount)
+      setPreviewText('')
       setTaskId(res.task_id)
       toast.success(`任务已启动，ID：${res.task_id}`)
     } catch (err) {
@@ -140,6 +235,7 @@ export default function Run() {
   }
 
   const handleReset = () => {
+    setPreviewText('')
     setTaskId(null)
   }
 
@@ -400,6 +496,19 @@ export default function Run() {
                   <p>建议：确认配置后重新点击“开始运行”。</p>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* 正文流式预览 */}
+          {task && (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-xs text-gray-500">
+                <span>写作预览（流式）</span>
+                {isPreviewStreaming && <span className="text-indigo-600">接收中…</span>}
+              </div>
+              <div className="min-h-24 max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 text-xs leading-5 text-gray-700">
+                {previewText || '等待模型返回正文片段…'}
+              </div>
             </div>
           )}
 

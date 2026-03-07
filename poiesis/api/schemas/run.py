@@ -34,5 +34,6 @@ class TaskDetail(BaseModel):
     total_chapters: int | None = None
     logs: list[str] = []
     error: str | None = None
+    preview_text: str | None = None
     created_at: str | None = None
     updated_at: str | None = None

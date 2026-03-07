@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections.abc import Generator
@@ -76,13 +77,30 @@ def task_events(task_id: str) -> StreamingResponse:
 
     def _event_generator() -> Generator[str, None, None]:
         sent = 0
+        sent_preview_chars = 0
+
+        if task.preview_text:
+            payload = {"delta": task.preview_text}
+            yield f"event: preview\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            sent_preview_chars = len(task.preview_text)
+
         while True:
             logs = task.logs
             for line in logs[sent:]:
-                yield f"data: {line}\n\n"
+                payload = {"message": line}
+                yield f"event: log\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 sent += 1
+
+            preview_text = task.preview_text
+            if len(preview_text) > sent_preview_chars:
+                delta = preview_text[sent_preview_chars:]
+                payload = {"delta": delta}
+                yield f"event: preview\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                sent_preview_chars = len(preview_text)
+
             if task.status in ("completed", "failed", "interrupted"):
-                yield f"data: [任务结束：{task.status}]\n\n"
+                payload = {"status": task.status}
+                yield f"event: status\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 break
             time.sleep(1)
 

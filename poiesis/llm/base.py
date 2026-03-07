@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from typing import Any
 
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -70,6 +71,15 @@ class LLMClient(ABC):
         """
         return self._complete_json(prompt, system=system, **kwargs)
 
+    def stream_complete(
+        self,
+        prompt: str,
+        system: str | None = None,
+        **kwargs: Any,
+    ) -> Iterator[str]:
+        """Stream text completion chunks as they are generated."""
+        return self._stream_complete(prompt, system=system, **kwargs)
+
     @abstractmethod
     def _complete(
         self,
@@ -88,6 +98,16 @@ class LLMClient(ABC):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Provider-specific JSON completion implementation."""
+        ...
+
+    @abstractmethod
+    def _stream_complete(
+        self,
+        prompt: str,
+        system: str | None = None,
+        **kwargs: Any,
+    ) -> Iterator[str]:
+        """Provider-specific streaming completion implementation."""
         ...
 
     @staticmethod

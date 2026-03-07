@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
 from typing import Any
 
 from openai import OpenAI
@@ -19,6 +21,7 @@ class OpenAIClient(LLMClient):
         max_tokens: int = 4000,
         api_key: str | None = None,
         base_url: str | None = None,
+        request_timeout: float | None = None,
     ) -> None:
         """Initialise the OpenAI client.
 
@@ -31,11 +34,20 @@ class OpenAIClient(LLMClient):
             base_url: Optional API base URL for OpenAI-compatible providers.
         """
         super().__init__(model=model, temperature=temperature, max_tokens=max_tokens)
-        client_kwargs: dict[str, str] = {}
+        timeout = request_timeout
+        if timeout is None:
+            try:
+                timeout = float(os.environ.get("POIESIS_LLM_TIMEOUT_SEC", "180"))
+            except ValueError:
+                timeout = 180.0
+
+        client_kwargs: dict[str, Any] = {}
         if api_key:
             client_kwargs["api_key"] = api_key
         if base_url:
             client_kwargs["base_url"] = base_url
+        if timeout and timeout > 0:
+            client_kwargs["timeout"] = timeout
         self._client = OpenAI(**client_kwargs)
 
     def _complete(
@@ -71,7 +83,7 @@ class OpenAIClient(LLMClient):
 
         response = self._client.chat.completions.create(  # type: ignore[call-overload]
             model=self.model,
-            messages=messages,
+            messages=messages,  # type: ignore[arg-type]
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             response_format={"type": "json_object"},
@@ -79,3 +91,30 @@ class OpenAIClient(LLMClient):
         )
         raw = response.choices[0].message.content or "{}"
         return self._extract_json(raw)
+
+    def _stream_complete(
+        self,
+        prompt: str,
+        system: str | None = None,
+        **kwargs: Any,
+    ) -> Iterator[str]:
+        messages: list[dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        stream = self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,  # type: ignore[arg-type]
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            stream=True,
+            **kwargs,
+        )
+
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta

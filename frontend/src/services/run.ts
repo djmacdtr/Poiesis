@@ -4,6 +4,8 @@
 import { get, post, request } from './http'
 import type { RunResponse, TaskDetail } from '@/types'
 
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
+
 export interface PruneTaskHistoryResponse {
   removed: number
   remaining: number
@@ -29,4 +31,11 @@ export function pruneTaskHistory(keep: number): Promise<PruneTaskHistoryResponse
   return request<PruneTaskHistoryResponse>(`/api/run/history?keep=${keep}`, {
     method: 'DELETE',
   })
+}
+
+/** 订阅任务 SSE 事件流（日志 + 预览文本） */
+export function createTaskEventSource(taskId: string): EventSource {
+  const path = `/api/run/${taskId}/events`
+  const url = BASE_URL ? `${BASE_URL}${path}` : path
+  return new EventSource(url, { withCredentials: true })
 }

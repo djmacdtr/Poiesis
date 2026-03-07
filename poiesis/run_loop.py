@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from rich.console import Console
 from rich.panel import Panel
@@ -248,7 +248,11 @@ class RunLoop:
 
         console.print(Panel("[bold green]Generation complete![/bold green]"))
 
-    def _generate_chapter(self, chapter_number: int) -> None:
+    def _generate_chapter(
+        self,
+        chapter_number: int,
+        on_writer_delta: Callable[[str], None] | None = None,
+    ) -> None:
         """Run the full pipeline for a single chapter."""
         rewrite_retries = self._config.generation.rewrite_retries
 
@@ -271,7 +275,13 @@ class RunLoop:
 
             # 第二步：写作章节
             task = progress.add_task("Writing chapter...", total=None)
-            content = self._writer.write(chapter_number, plan, self._world, self._writer_llm)
+            content = self._writer.write(
+                chapter_number,
+                plan,
+                self._world,
+                self._writer_llm,
+                on_delta=on_writer_delta,
+            )
             progress.remove_task(task)
             word_count = len(content.split())
             console.print(f"  [cyan]Written:[/cyan] {word_count} words")

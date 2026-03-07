@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from poiesis.api.services import run_service
 from poiesis.api.services.run_service import _validate_llm_key_prerequisites
+from poiesis.api.task_registry import TaskInfo
 
 
 class _Cfg:
@@ -71,3 +73,32 @@ def test_preflight_raises_clear_error_when_key_missing() -> None:
         assert "模型配置校验失败" in message
         assert "规划模型（openai / gpt-4o）缺少 OPENAI_API_KEY" in message
         assert "系统设置" in message
+
+
+def test_run_in_background_streams_preview_and_marks_completed(monkeypatch) -> None:
+    class _FakeDB:
+        def list_chapters(self):
+            return []
+
+    class _FakeRunLoop:
+        def __init__(self, config_path: str) -> None:
+            self._db = _FakeDB()
+
+        def load_world_seed(self) -> None:
+            return None
+
+        def _generate_chapter(self, chapter_number: int, on_writer_delta=None) -> None:
+            if on_writer_delta is not None:
+                on_writer_delta("第一段")
+                on_writer_delta("第二段")
+
+    monkeypatch.setattr("poiesis.run_loop.RunLoop", _FakeRunLoop)
+    monkeypatch.setattr(run_service, "_validate_llm_key_prerequisites", lambda loop: None)
+
+    task = TaskInfo(task_id="t-stream", total_chapters=1)
+    run_service._run_in_background(task, config_path="config.yaml", chapter_count=1)
+
+    assert task.status == "completed"
+    assert task.current_chapter == 1
+    assert task.preview_text == "第一段第二段"
+    assert any("第 1 章完成" in line for line in task.logs)

@@ -154,6 +154,7 @@ export interface TaskDetail {
   total_chapters?: number
   logs?: string[]
   error?: string
+  preview_text?: string
   created_at?: string
   updated_at?: string
 }

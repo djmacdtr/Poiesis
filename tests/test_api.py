@@ -255,3 +255,24 @@ class TestRunTask:
 
         task_ids = {item["task_id"] for item in tasks}
         assert t2 in task_ids or t1 in task_ids
+
+    def test_task_events_stream_includes_preview_log_and_status(self, tmp_db: Database) -> None:
+        """GET /api/run/{task_id}/events 应输出结构化 SSE 事件。"""
+        client = _make_client(tmp_db)
+
+        task = registry.create(total_chapters=1)
+        task.append_preview("预览片段")
+        task.add_log("日志一")
+        task.status = "completed"
+
+        resp = client.get(f"/api/run/{task.task_id}/events")
+        assert resp.status_code == 200
+        assert resp.headers.get("content-type", "").startswith("text/event-stream")
+
+        body = resp.text
+        assert "event: preview" in body
+        assert '"delta": "预览片段"' in body
+        assert "event: log" in body
+        assert '"message": "日志一"' in body
+        assert "event: status" in body
+        assert '"status": "completed"' in body

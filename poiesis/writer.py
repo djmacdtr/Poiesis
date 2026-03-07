@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from poiesis.llm.base import LLMClient
 from poiesis.vector_store.store import VectorStore
@@ -38,6 +38,7 @@ class ChapterWriter:
         plan: dict[str, Any],
         world: WorldModel,
         llm: LLMClient,
+        on_delta: Callable[[str], None] | None = None,
     ) -> str:
         """Generate chapter content.
 
@@ -75,7 +76,16 @@ class ChapterWriter:
             "You are a literary author writing a chapter of an ongoing novel. "
             "Write vivid, engaging prose that honours the plan and world rules exactly."
         )
-        return llm.complete(prompt, system=system)
+        if on_delta is None:
+            return llm.complete(prompt, system=system)
+
+        chunks: list[str] = []
+        for delta in llm.stream_complete(prompt, system=system):
+            if not delta:
+                continue
+            chunks.append(delta)
+            on_delta(delta)
+        return "".join(chunks)
 
     def _load_template(self) -> str:
         """Load the writer prompt template from disk."""
