@@ -1,4 +1,4 @@
-# Poiesis
+# Poiesis / 长篇叙事生成引擎
 ### Narrative Generation Engine for Long-Form Fiction
 
 <p align="left">
@@ -12,18 +12,43 @@
 > 🚀 自托管长篇叙事生成引擎（Web Console + API + Optional Embedding Service）
 > 🎯 聚焦“持续一致性”而不是“一次性生成”。
 
----
+Poiesis 是一个面向长篇小说与系列化叙事的开源生成系统，提供从世界观建模、章节生成、事实提取、冲突验证到内容修订的完整工作流。项目通过可审计的世界模型（`canon/staging/archive`）和多阶段 RunLoop pipeline，将“可读文本生成”升级为“可持续演进的叙事工程”。
 
-## ✨ Why Poiesis
-
-- 🧠 **Consistency First**: 通过 world model 维护角色、规则、时间线、伏笔一致性
-- 🛠️ **Operational Ready**: 内置控制台、任务编排、审批流、统计页
-- 🔌 **Deployment Flexible**: 默认轻量模式，按需切换 remote embedding
-- 🧩 **Composable Pipeline**: Planner -> Writer -> Extractor -> Verifier -> Editor -> Merger -> Summarizer
+与通用聊天式写作不同，Poiesis 重点解决长文本场景中的结构性问题：角色设定漂移、时间线冲突、设定遗忘、伏笔回收失败和多章节语义断裂。系统支持 API 与 Web Console 协同，便于团队化运营、人工审核与质量追踪。
 
 ---
 
-## 🏗️ Architecture
+## ✨ Why Poiesis / 为什么选择 Poiesis
+
+### 项目定位 / Positioning
+
+Poiesis 面向“需要长期稳定产出叙事内容”的个人作者与内容团队，强调生成质量的可控性、过程可追溯性与部署自主权。
+
+### 解决的问题 / Problems Solved
+
+- 🧠 **跨章节一致性难题**: 通过 `WorldModel` 维护角色关系、规则约束与时间线，降低设定漂移。
+- 🧪 **生成质量不可控**: `Verifier + Editor` 形成闭环，自动识别违规设定并触发修订。
+- 🗂️ **新事实引入风险高**: 使用 `staging -> review -> canon` 审批机制，避免错误事实直接污染主设定。
+- 📉 **长流程缺乏观测**: 提供任务状态、统计与配置界面，支持运营化管理。
+
+### 关键技术 / Key Technologies
+
+- ⚙️ **Backend**: FastAPI + Pydantic + SQLite，提供任务编排、鉴权与配置管理。
+- 🌐 **Frontend**: React + TypeScript + Vite，构建可视化控制台与运行观测能力。
+- 🔄 **Pipeline**: Planner -> Writer -> Extractor -> Verifier -> Editor -> Merger -> Summarizer。
+- 🧩 **Embedding Strategy**: 支持 `local`（轻量）与 `remote`（语义检索增强）两种模式。
+- 🐳 **Deployment**: Docker Compose 一键部署，支持从轻量启动到完整语义能力扩展。
+
+### 项目特点 / What Makes It Different
+
+- 🔍 **以世界模型为中心，而非单次 Prompt**。
+- 🧾 **变更可审计，便于团队协作与内容治理**。
+- 🛡️ **支持人机协同审批，适合生产环境迭代**。
+- 🔓 **完全自托管开源，便于二次开发与私有化部署**。
+
+---
+
+## 🏗️ Architecture / 系统架构
 
 ### 🧭 System Topology
 
@@ -84,7 +109,7 @@ flowchart TD
 
 ---
 
-## 🖥️ System Requirements
+## 🖥️ System Requirements / 系统要求
 
 ### ⚡ 轻量模式（local embedding）最低配置
 
@@ -104,7 +129,7 @@ flowchart TD
 
 ---
 
-## 🚀 Quick Start (Docker)
+## 🚀 Quick Start (Docker) / 快速开始（Docker）
 
 ### 1. 📦 Prepare
 
@@ -143,7 +168,7 @@ curl -I http://127.0.0.1:18080/openapi.json
 
 ---
 
-## 🎛️ Deployment Modes
+## 🎛️ Deployment Modes / 部署模式
 
 | Mode | Command | Use Case |
 |---|---|---|
@@ -159,7 +184,7 @@ POIESIS_EMBEDDING_URL=http://embed:9000
 
 ---
 
-## 🛠️ Local Development (Minimal)
+## 🛠️ Local Development (Minimal) / 本地开发（最小流程）
 
 ```bash
 # Backend
@@ -174,7 +199,7 @@ npm run dev
 
 ---
 
-## 📚 Documentation
+## 📚 Documentation / 文档索引
 
 - Developer Guide: `docs/developer_guide.md`
 - Frontend Guide: `frontend/README.md`
@@ -183,7 +208,7 @@ npm run dev
 
 ---
 
-## 🧯 Common Issues
+## 🧯 Common Issues / 常见问题
 
 - `/api` 返回 502: 确认 `api` 容器健康且 `web` 可解析服务名 `api`
 - 运行任务报缺少 Key: 在系统设置或 `.env` 补齐 LLM Key
@@ -191,7 +216,7 @@ npm run dev
 
 ---
 
-## 🤝 Contributing
+## 🤝 Contributing / 参与贡献
 
 参与贡献
 
@@ -215,7 +240,7 @@ npm run dev
 
 ---
 
-## 📄 License
+## 📄 License / 开源协议
 
 本项目采用 GNU AGPLv3 协议：允许使用、修改与分发；若将修改版本用于对外网络服务，也需向用户提供对应源码。
 
