@@ -19,6 +19,14 @@ export interface SystemConfigStatus {
     checked_at: string
   } | null
   default_chapter_count: number | null
+  llm_provider: 'openai' | 'anthropic' | 'siliconflow' | null
+  llm_model: string | null
+  planner_llm_provider: 'openai' | 'anthropic' | 'siliconflow' | null
+  planner_llm_model: string | null
+  llm_provider_effective: 'openai' | 'anthropic' | 'siliconflow'
+  llm_model_effective: string
+  planner_llm_provider_effective: 'openai' | 'anthropic' | 'siliconflow'
+  planner_llm_model_effective: string
 }
 
 /** 保存系统配置请求体 */
@@ -28,6 +36,10 @@ export interface SystemConfigRequest {
   siliconflow_api_key?: string
   embedding_provider?: 'local' | 'remote'
   default_chapter_count?: number
+  llm_provider?: 'openai' | 'anthropic' | 'siliconflow' | ''
+  llm_model?: string
+  planner_llm_provider?: 'openai' | 'anthropic' | 'siliconflow' | ''
+  planner_llm_model?: string
 }
 
 /** 获取当前系统配置状态 */

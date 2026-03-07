@@ -7,6 +7,7 @@ import { Check, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { fetchStaging, approveStaging, rejectStaging } from '@/services/world'
 import { LoadingSpinner, ErrorMessage, EmptyState } from '@/components/Feedback'
+import { PromptModal } from '@/components/PromptModal'
 import { formatDate, stagingStatusLabel } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import type { StagingFilter } from '@/types'
@@ -156,36 +157,22 @@ export default function Staging() {
         </div>
       )}
 
-      {/* 拒绝对话框（简单 inline modal） */}
-      {rejectId !== null && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md space-y-4">
-            <h3 className="text-base font-semibold text-gray-800">拒绝原因</h3>
-            <textarea
-              value={rejectReason}
-              onChange={(e) => setRejectReason(e.target.value)}
-              placeholder="请输入拒绝原因（必填）"
-              rows={3}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setRejectId(null)}
-                className="px-4 py-2 text-sm text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-              >
-                取消
-              </button>
-              <button
-                onClick={handleRejectSubmit}
-                disabled={rejectMutation.isPending}
-                className="px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
-              >
-                {rejectMutation.isPending ? '提交中…' : '确认拒绝'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <PromptModal
+        open={rejectId !== null}
+        title="拒绝候选变更"
+        description="请输入拒绝原因，便于后续追溯该变更为何未通过。"
+        value={rejectReason}
+        placeholder="请输入拒绝原因（必填）"
+        confirmText="确认拒绝"
+        cancelText="取消"
+        loading={rejectMutation.isPending}
+        onChange={setRejectReason}
+        onConfirm={handleRejectSubmit}
+        onCancel={() => {
+          setRejectId(null)
+          setRejectReason('')
+        }}
+      />
     </div>
   )
 }

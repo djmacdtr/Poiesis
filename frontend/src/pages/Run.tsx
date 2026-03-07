@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Play, Square } from 'lucide-react'
 import { toast } from 'sonner'
 import { startRun, fetchTaskStatus } from '@/services/run'
+import { getSystemConfig } from '@/services/systemConfig'
 import { LoadingSpinner, ErrorMessage } from '@/components/Feedback'
 import type { TaskDetail } from '@/types'
 
@@ -30,6 +31,12 @@ export default function Run() {
   const [taskId, setTaskId] = useState<string | null>(null)
   const [isStarting, setIsStarting] = useState(false)
   const logsEndRef = useRef<HTMLDivElement>(null)
+
+  const { data: systemConfig, error: configError } = useQuery({
+    queryKey: ['systemConfigForRun'],
+    queryFn: getSystemConfig,
+    staleTime: 15_000,
+  })
 
   // 轮询任务状态
   const {
@@ -86,6 +93,28 @@ export default function Run() {
       {/* 启动表单 */}
       <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
         <h3 className="text-sm font-semibold text-gray-700">启动写作任务</h3>
+
+        <div className="rounded-lg border border-gray-100 bg-gray-50 p-3 space-y-1">
+          <p className="text-xs font-medium text-gray-700">当前生效模型配置</p>
+          {configError && <p className="text-xs text-red-600">读取模型配置失败</p>}
+          {!configError && !systemConfig && <p className="text-xs text-gray-500">加载中…</p>}
+          {systemConfig && (
+            <>
+              <p className="text-xs text-gray-600">
+                写作模型：
+                <span className="font-mono text-[11px] text-gray-700 ml-1">
+                  {systemConfig.llm_provider_effective} / {systemConfig.llm_model_effective}
+                </span>
+              </p>
+              <p className="text-xs text-gray-600">
+                规划模型：
+                <span className="font-mono text-[11px] text-gray-700 ml-1">
+                  {systemConfig.planner_llm_provider_effective} / {systemConfig.planner_llm_model_effective}
+                </span>
+              </p>
+            </>
+          )}
+        </div>
 
         <div className="flex items-center gap-3">
           <label className="text-sm text-gray-600 shrink-0" htmlFor="chapter-count">

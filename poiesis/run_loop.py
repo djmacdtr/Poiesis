@@ -31,6 +31,8 @@ from poiesis.writer import ChapterWriter
 
 console = Console()
 
+_ALLOWED_LLM_PROVIDERS = {"openai", "anthropic", "siliconflow"}
+
 
 def _build_llm(
     cfg: Any,
@@ -77,6 +79,7 @@ class RunLoop:
         self._config: Config = load_config(config_path)
         self._db = Database(self._config.database.path)
         self._db.initialize_schema()
+        self._apply_model_config_overrides_from_db()
 
         self._vs = VectorStore(
             store_path=self._config.vector_store.path,
@@ -117,6 +120,39 @@ class RunLoop:
 
         self._world = WorldModel()
         self._world.load_from_db(self._db)
+
+    def _apply_model_config_overrides_from_db(self) -> None:
+        """Apply llm/planner_llm provider/model overrides from system_config."""
+
+        def _get_provider(config_key: str) -> str | None:
+            raw = self._db.get_system_config(config_key)
+            if not raw:
+                return None
+            value = raw.strip().lower()
+            if value in _ALLOWED_LLM_PROVIDERS:
+                return value
+            return None
+
+        def _get_model(config_key: str) -> str | None:
+            raw = self._db.get_system_config(config_key)
+            if not raw:
+                return None
+            value = raw.strip()
+            return value or None
+
+        llm_provider = _get_provider("llm_provider")
+        llm_model = _get_model("llm_model")
+        planner_provider = _get_provider("planner_llm_provider")
+        planner_model = _get_model("planner_llm_model")
+
+        if llm_provider:
+            self._config.llm.provider = llm_provider
+        if llm_model:
+            self._config.llm.model = llm_model
+        if planner_provider:
+            self._config.planner_llm.provider = planner_provider
+        if planner_model:
+            self._config.planner_llm.model = planner_model
 
     def _load_key_from_db(self, config_key: str) -> str | None:
         """从数据库读取并解密 API Key（不在日志中打印）。"""

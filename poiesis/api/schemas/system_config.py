@@ -25,6 +25,18 @@ class SystemConfigRequest(BaseModel):
     default_chapter_count: int | None = None
     """默认章节生成数。"""
 
+    llm_provider: str | None = None
+    """写作模型 provider（openai/anthropic/siliconflow）。"""
+
+    llm_model: str | None = None
+    """写作模型名称。"""
+
+    planner_llm_provider: str | None = None
+    """规划模型 provider（openai/anthropic/siliconflow）。"""
+
+    planner_llm_model: str | None = None
+    """规划模型名称。"""
+
 
 class SystemConfigStatus(BaseModel):
     """系统配置状态响应（不返回明文 Key）。"""
@@ -49,3 +61,27 @@ class SystemConfigStatus(BaseModel):
 
     default_chapter_count: int | None = None
     """当前默认章节生成数。"""
+
+    llm_provider: str | None = None
+    """已保存的写作模型 provider（来自系统配置）。"""
+
+    llm_model: str | None = None
+    """已保存的写作模型名称（来自系统配置）。"""
+
+    planner_llm_provider: str | None = None
+    """已保存的规划模型 provider（来自系统配置）。"""
+
+    planner_llm_model: str | None = None
+    """已保存的规划模型名称（来自系统配置）。"""
+
+    llm_provider_effective: str
+    """写作模型实际 provider（DB 覆盖后，回退 config.yaml）。"""
+
+    llm_model_effective: str
+    """写作模型实际 model（DB 覆盖后，回退 config.yaml）。"""
+
+    planner_llm_provider_effective: str
+    """规划模型实际 provider（DB 覆盖后，回退 config.yaml）。"""
+
+    planner_llm_model_effective: str
+    """规划模型实际 model（DB 覆盖后，回退 config.yaml）。"""

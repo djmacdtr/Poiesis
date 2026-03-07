@@ -36,6 +36,8 @@ def save_system_config(
         return system_config_service.save_config(db, body)
     except system_config_service.EmbeddingConfigError as exc:
         raise HTTPException(status_code=422, detail=exc.to_detail()) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class InitRequest(BaseModel):

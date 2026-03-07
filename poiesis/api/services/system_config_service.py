@@ -9,6 +9,7 @@ from typing import Literal
 import httpx
 
 from poiesis.api.schemas.system_config import SystemConfigRequest, SystemConfigStatus
+from poiesis.config import load_config
 from poiesis.crypto import decrypt, encrypt
 from poiesis.db.database import Database
 
@@ -18,9 +19,14 @@ KEY_ANTHROPIC = "ANTHROPIC_API_KEY"
 KEY_SILICONFLOW = "SILICONFLOW_API_KEY"
 KEY_EMBEDDING_PROVIDER = "embedding_provider"
 KEY_DEFAULT_CHAPTER_COUNT = "default_chapter_count"
+KEY_LLM_PROVIDER = "llm_provider"
+KEY_LLM_MODEL = "llm_model"
+KEY_PLANNER_LLM_PROVIDER = "planner_llm_provider"
+KEY_PLANNER_LLM_MODEL = "planner_llm_model"
 
 # 需要加密存储的键
 _ENCRYPTED_KEYS = {KEY_OPENAI, KEY_ANTHROPIC, KEY_SILICONFLOW}
+_ALLOWED_LLM_PROVIDERS = {"openai", "anthropic", "siliconflow"}
 
 
 class EmbeddingConfigError(Exception):
@@ -65,6 +71,15 @@ def _normalize_embedding_provider(provider: str) -> str:
             provider=value,
             suggestion="请选择 local（轻量）或 remote（完整模式）",
         )
+    return value
+
+
+def _normalize_llm_provider(provider: str) -> str:
+    """规范化并校验 LLM provider。"""
+    value = provider.strip().lower()
+    if value not in _ALLOWED_LLM_PROVIDERS:
+        allowed = ", ".join(sorted(_ALLOWED_LLM_PROVIDERS))
+        raise ValueError(f"llm provider 仅支持：{allowed}")
     return value
 
 
@@ -173,6 +188,33 @@ def save_config(db: Database, req: SystemConfigRequest) -> SystemConfigStatus:
     if req.default_chapter_count is not None:
         db.set_system_config(KEY_DEFAULT_CHAPTER_COUNT, str(req.default_chapter_count))
 
+    # 保存写作模型 provider
+    if req.llm_provider is not None:
+        value = req.llm_provider.strip()
+        if value:
+            db.set_system_config(KEY_LLM_PROVIDER, _normalize_llm_provider(value))
+        else:
+            db.set_system_config(KEY_LLM_PROVIDER, "")
+
+    # 保存写作模型 model
+    if req.llm_model is not None:
+        db.set_system_config(KEY_LLM_MODEL, req.llm_model.strip())
+
+    # 保存规划模型 provider
+    if req.planner_llm_provider is not None:
+        value = req.planner_llm_provider.strip()
+        if value:
+            db.set_system_config(
+                KEY_PLANNER_LLM_PROVIDER,
+                _normalize_llm_provider(value),
+            )
+        else:
+            db.set_system_config(KEY_PLANNER_LLM_PROVIDER, "")
+
+    # 保存规划模型 model
+    if req.planner_llm_model is not None:
+        db.set_system_config(KEY_PLANNER_LLM_MODEL, req.planner_llm_model.strip())
+
     return get_config_status(db)
 
 
@@ -190,11 +232,33 @@ def get_config_status(db: Database) -> SystemConfigStatus:
     siliconflow_val = db.get_system_config(KEY_SILICONFLOW)
     embedding_provider = db.get_system_config(KEY_EMBEDDING_PROVIDER)
     chapter_count_str = db.get_system_config(KEY_DEFAULT_CHAPTER_COUNT)
+    llm_provider = db.get_system_config(KEY_LLM_PROVIDER)
+    llm_model = db.get_system_config(KEY_LLM_MODEL)
+    planner_llm_provider = db.get_system_config(KEY_PLANNER_LLM_PROVIDER)
+    planner_llm_model = db.get_system_config(KEY_PLANNER_LLM_MODEL)
 
     if embedding_provider:
         embedding_provider = embedding_provider.strip().lower()
         if embedding_provider not in {"local", "remote"}:
             embedding_provider = None
+
+    if llm_provider:
+        llm_provider = llm_provider.strip().lower()
+        if llm_provider not in _ALLOWED_LLM_PROVIDERS:
+            llm_provider = None
+    else:
+        llm_provider = None
+
+    llm_model = llm_model.strip() if llm_model else None
+
+    if planner_llm_provider:
+        planner_llm_provider = planner_llm_provider.strip().lower()
+        if planner_llm_provider not in _ALLOWED_LLM_PROVIDERS:
+            planner_llm_provider = None
+    else:
+        planner_llm_provider = None
+
+    planner_llm_model = planner_llm_model.strip() if planner_llm_model else None
 
     effective_provider = _get_effective_embedding_provider()
     embedding_service_health: dict[str, str | bool | None] | None = None
@@ -208,6 +272,14 @@ def get_config_status(db: Database) -> SystemConfigStatus:
         except ValueError:
             pass
 
+    config_path = os.environ.get("POIESIS_CONFIG", "config.yaml")
+    cfg = load_config(config_path)
+
+    llm_provider_effective = llm_provider or cfg.llm.provider
+    llm_model_effective = llm_model or cfg.llm.model
+    planner_llm_provider_effective = planner_llm_provider or cfg.planner_llm.provider
+    planner_llm_model_effective = planner_llm_model or cfg.planner_llm.model
+
     return SystemConfigStatus(
         has_openai_api_key=bool(openai_val),
         has_anthropic_api_key=bool(anthropic_val),
@@ -216,6 +288,14 @@ def get_config_status(db: Database) -> SystemConfigStatus:
         embedding_provider_effective=effective_provider,
         embedding_service_health=embedding_service_health,
         default_chapter_count=default_chapter_count,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        planner_llm_provider=planner_llm_provider,
+        planner_llm_model=planner_llm_model,
+        llm_provider_effective=llm_provider_effective,
+        llm_model_effective=llm_model_effective,
+        planner_llm_provider_effective=planner_llm_provider_effective,
+        planner_llm_model_effective=planner_llm_model_effective,
     )
 
 

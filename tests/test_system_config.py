@@ -44,6 +44,14 @@ class TestGetSystemConfig:
         assert body["embedding_provider_effective"] in ("local", "remote")
         assert body["embedding_service_health"] is None
         assert body["default_chapter_count"] is None
+        assert body["llm_provider"] is None
+        assert body["llm_model"] is None
+        assert body["planner_llm_provider"] is None
+        assert body["planner_llm_model"] is None
+        assert isinstance(body["llm_provider_effective"], str)
+        assert isinstance(body["llm_model_effective"], str)
+        assert isinstance(body["planner_llm_provider_effective"], str)
+        assert isinstance(body["planner_llm_model_effective"], str)
 
 
 class TestPostSystemConfig:
@@ -232,6 +240,74 @@ class TestPostSystemConfig:
         assert raw is not None
         assert raw != plaintext
         assert get_decrypted_key(tmp_db, KEY_SILICONFLOW) == plaintext
+
+    def test_save_llm_and_planner_model_config(self, tmp_db: Database) -> None:
+        """保存 llm/planner_llm 的 provider+model 应正确回显并给出 effective 值。"""
+        client = _make_client(tmp_db)
+        resp = client.post(
+            "/api/system/config",
+            json={
+                "llm_provider": "anthropic",
+                "llm_model": "claude-3-7-sonnet-latest",
+                "planner_llm_provider": "openai",
+                "planner_llm_model": "gpt-4o-mini",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["llm_provider"] == "anthropic"
+        assert body["llm_model"] == "claude-3-7-sonnet-latest"
+        assert body["planner_llm_provider"] == "openai"
+        assert body["planner_llm_model"] == "gpt-4o-mini"
+        assert body["llm_provider_effective"] == "anthropic"
+        assert body["llm_model_effective"] == "claude-3-7-sonnet-latest"
+        assert body["planner_llm_provider_effective"] == "openai"
+        assert body["planner_llm_model_effective"] == "gpt-4o-mini"
+
+    def test_invalid_llm_provider_returns_422(self, tmp_db: Database) -> None:
+        """非法 llm_provider 应返回 422。"""
+        client = _make_client(tmp_db)
+        resp = client.post(
+            "/api/system/config",
+            json={"llm_provider": "unknown-provider"},
+        )
+        assert resp.status_code == 422
+
+    def test_clear_model_config_falls_back_to_yaml(self, tmp_db: Database) -> None:
+        """清空模型配置后，effective 值应回退到 config.yaml 默认值。"""
+        client = _make_client(tmp_db)
+
+        save_resp = client.post(
+            "/api/system/config",
+            json={
+                "llm_provider": "anthropic",
+                "llm_model": "claude-3-7-sonnet-latest",
+                "planner_llm_provider": "siliconflow",
+                "planner_llm_model": "Qwen/Qwen2.5-72B-Instruct",
+            },
+        )
+        assert save_resp.status_code == 200
+
+        clear_resp = client.post(
+            "/api/system/config",
+            json={
+                "llm_provider": "",
+                "llm_model": "",
+                "planner_llm_provider": "",
+                "planner_llm_model": "",
+            },
+        )
+        assert clear_resp.status_code == 200
+        body = clear_resp.json()
+
+        assert body["llm_provider"] is None
+        assert body["llm_model"] is None
+        assert body["planner_llm_provider"] is None
+        assert body["planner_llm_model"] is None
+        assert body["llm_provider_effective"] == "openai"
+        assert body["llm_model_effective"] == "gpt-4o"
+        assert body["planner_llm_provider_effective"] == "openai"
+        assert body["planner_llm_model_effective"] == "gpt-4o"
 
 
 class TestCrypto:

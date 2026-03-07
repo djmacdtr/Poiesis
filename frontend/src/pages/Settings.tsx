@@ -8,6 +8,23 @@ import { toast } from 'sonner'
 import { getSystemConfig, saveSystemConfig, initWorld } from '@/services/systemConfig'
 import type { SystemConfigRequest } from '@/services/systemConfig'
 import { LoadingSpinner, ErrorMessage } from '@/components/Feedback'
+import { ConfirmModal } from '@/components/ConfirmModal'
+
+type LLMProvider = 'openai' | 'anthropic' | 'siliconflow'
+
+const MODEL_OPTIONS: Record<LLMProvider, string[]> = {
+  openai: ['gpt-4o', 'gpt-4.1', 'gpt-4o-mini'],
+  anthropic: ['claude-3-7-sonnet-latest', 'claude-3-5-sonnet-20241022'],
+  siliconflow: ['Qwen/Qwen2.5-72B-Instruct', 'deepseek-ai/DeepSeek-V3'],
+}
+
+function isProvider(value: string): value is LLMProvider {
+  return value === 'openai' || value === 'anthropic' || value === 'siliconflow'
+}
+
+function getFirstModel(provider: LLMProvider): string {
+  return MODEL_OPTIONS[provider][0]
+}
 
 export default function SettingsPage() {
   const queryClient = useQueryClient()
@@ -18,6 +35,11 @@ export default function SettingsPage() {
   const [siliconflowKey, setSiliconflowKey] = useState('')
   const [embeddingProvider, setEmbeddingProvider] = useState<'local' | 'remote' | ''>('')
   const [defaultChapterCount, setDefaultChapterCount] = useState<number | ''>('')
+  const [llmProvider, setLlmProvider] = useState<LLMProvider | ''>('')
+  const [llmModel, setLlmModel] = useState('')
+  const [plannerLlmProvider, setPlannerLlmProvider] = useState<LLMProvider | ''>('')
+  const [plannerLlmModel, setPlannerLlmModel] = useState('')
+  const [confirmClearModelOpen, setConfirmClearModelOpen] = useState(false)
   const [isInitializing, setIsInitializing] = useState(false)
 
   // 读取当前配置状态
@@ -46,14 +68,33 @@ export default function SettingsPage() {
     },
   })
 
-  const handleSave = () => {
+  const handleSave = (overridePayload?: SystemConfigRequest) => {
+    if (overridePayload) {
+      saveMutation.mutate(overridePayload)
+      return
+    }
+
     const payload: SystemConfigRequest = {}
     if (openaiKey !== '') payload.openai_api_key = openaiKey
     if (anthropicKey !== '') payload.anthropic_api_key = anthropicKey
     if (siliconflowKey !== '') payload.siliconflow_api_key = siliconflowKey
     if (embeddingProvider !== '') payload.embedding_provider = embeddingProvider
     if (defaultChapterCount !== '') payload.default_chapter_count = Number(defaultChapterCount)
+    if (llmProvider !== '') payload.llm_provider = llmProvider
+    if (llmModel !== '') payload.llm_model = llmModel.trim()
+    if (plannerLlmProvider !== '') payload.planner_llm_provider = plannerLlmProvider
+    if (plannerLlmModel !== '') payload.planner_llm_model = plannerLlmModel.trim()
     saveMutation.mutate(payload)
+  }
+
+  const handleClearModelConfig = () => {
+    handleSave({
+      llm_provider: '',
+      llm_model: '',
+      planner_llm_provider: '',
+      planner_llm_model: '',
+    })
+    setConfirmClearModelOpen(false)
   }
 
   const handleInit = async () => {
@@ -213,21 +254,166 @@ export default function SettingsPage() {
               className="w-32 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
             />
           </div>
+
+          <hr className="border-gray-100" />
+
+          <div className="space-y-1">
+            <p className="text-sm font-semibold text-gray-700">写作模型（llm）</p>
+            <p className="text-xs text-gray-500">
+              当前生效：{configStatus?.llm_provider_effective} / {configStatus?.llm_model_effective}
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="llm-provider">
+              写作 Provider
+            </label>
+            <select
+              id="llm-provider"
+              value={llmProvider}
+              onChange={(e) => {
+                const value = e.target.value
+                if (value === '') {
+                  setLlmProvider('')
+                  return
+                }
+                if (isProvider(value)) {
+                  setLlmProvider(value)
+                  if (llmModel.trim() === '') {
+                    setLlmModel(getFirstModel(value))
+                  }
+                }
+              }}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+            >
+              <option value="">
+                — 不修改（已保存：{configStatus?.llm_provider ?? '未设置'}）
+              </option>
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="siliconflow">SiliconFlow</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="llm-model">
+              写作 Model
+            </label>
+            <input
+              id="llm-model"
+              type="text"
+              list="llm-model-options"
+              placeholder={configStatus?.llm_model ?? configStatus?.llm_model_effective ?? '输入或选择模型名'}
+              value={llmModel}
+              onChange={(e) => setLlmModel(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+            <datalist id="llm-model-options">
+              {(llmProvider !== '' ? MODEL_OPTIONS[llmProvider] : MODEL_OPTIONS[configStatus?.llm_provider_effective ?? 'openai']).map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+            <p className="mt-1 text-xs text-gray-500">支持手动输入任意模型标识。</p>
+          </div>
+
+          <div className="space-y-1">
+            <p className="text-sm font-semibold text-gray-700">规划模型（planner_llm）</p>
+            <p className="text-xs text-gray-500">
+              当前生效：{configStatus?.planner_llm_provider_effective} / {configStatus?.planner_llm_model_effective}
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="planner-provider">
+              规划 Provider
+            </label>
+            <select
+              id="planner-provider"
+              value={plannerLlmProvider}
+              onChange={(e) => {
+                const value = e.target.value
+                if (value === '') {
+                  setPlannerLlmProvider('')
+                  return
+                }
+                if (isProvider(value)) {
+                  setPlannerLlmProvider(value)
+                  if (plannerLlmModel.trim() === '') {
+                    setPlannerLlmModel(getFirstModel(value))
+                  }
+                }
+              }}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+            >
+              <option value="">
+                — 不修改（已保存：{configStatus?.planner_llm_provider ?? '未设置'}）
+              </option>
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="siliconflow">SiliconFlow</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="planner-model">
+              规划 Model
+            </label>
+            <input
+              id="planner-model"
+              type="text"
+              list="planner-model-options"
+              placeholder={configStatus?.planner_llm_model ?? configStatus?.planner_llm_model_effective ?? '输入或选择模型名'}
+              value={plannerLlmModel}
+              onChange={(e) => setPlannerLlmModel(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+            <datalist id="planner-model-options">
+              {(plannerLlmProvider !== ''
+                ? MODEL_OPTIONS[plannerLlmProvider]
+                : MODEL_OPTIONS[configStatus?.planner_llm_provider_effective ?? 'openai']
+              ).map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+            <p className="mt-1 text-xs text-gray-500">支持手动输入任意模型标识。</p>
+          </div>
         </div>
 
-        <button
-          onClick={handleSave}
-          disabled={saveMutation.isPending}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-        >
-          {saveMutation.isPending ? (
-            <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-          ) : (
-            <Settings className="w-4 h-4" />
-          )}
-          {saveMutation.isPending ? '保存中…' : '保存配置'}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => handleSave()}
+            disabled={saveMutation.isPending}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+          >
+            {saveMutation.isPending ? (
+              <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+            ) : (
+              <Settings className="w-4 h-4" />
+            )}
+            {saveMutation.isPending ? '保存中…' : '保存配置'}
+          </button>
+
+          <button
+            onClick={() => setConfirmClearModelOpen(true)}
+            disabled={saveMutation.isPending}
+            className="px-4 py-2 bg-amber-50 text-amber-700 border border-amber-200 text-sm rounded-lg hover:bg-amber-100 disabled:opacity-50 transition-colors"
+          >
+            清空模型配置并回退 YAML
+          </button>
+        </div>
       </div>
+
+      <ConfirmModal
+        open={confirmClearModelOpen}
+        title="确认清空模型配置"
+        description="将清空 llm 与 planner_llm 的数据库配置，后续新任务会回退到 config.yaml 默认模型。"
+        confirmText="确认清空"
+        cancelText="取消"
+        danger
+        loading={saveMutation.isPending}
+        onConfirm={handleClearModelConfig}
+        onCancel={() => setConfirmClearModelOpen(false)}
+      />
 
       {/* 初始化世界卡片 */}
       <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-3">

@@ -162,7 +162,7 @@ curl -I http://127.0.0.1:18080/openapi.json
 
 首次进入建议流程：
 1. 登录（默认账号 `admin`，密码见 `.env` 的 `POIESIS_ADMIN_PASS`）
-2. 在系统设置配置 OpenAI/Anthropic/SiliconFlow Key
+2. 在系统设置配置 OpenAI/Anthropic/SiliconFlow Key，并分别设置 `llm` / `planner_llm` 的 provider 与 model
 3. 初始化世界（UI 或 CLI）
 4. 在 Run 页面设置章节数并启动任务
 
