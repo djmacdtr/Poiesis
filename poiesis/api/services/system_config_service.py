@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
+from typing import Literal
 
 import httpx
 
@@ -66,10 +67,12 @@ def _normalize_embedding_provider(provider: str) -> str:
     return value
 
 
-def _get_effective_embedding_provider() -> str:
+def _get_effective_embedding_provider() -> Literal["local", "remote"]:
     """读取运行时实际 provider（来自环境变量）。"""
     provider = os.environ.get("POIESIS_EMBEDDING_PROVIDER", "local").strip().lower()
-    return provider if provider in {"local", "remote"} else "local"
+    if provider == "remote":
+        return "remote"
+    return "local"
 
 
 def _check_embedding_service_health() -> dict[str, str | bool | None]:
