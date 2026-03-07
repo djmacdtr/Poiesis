@@ -16,6 +16,7 @@ class ModelConfig(BaseModel):
     model: str = "gpt-4o"
     temperature: float = Field(default=0.8, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4000, gt=0)
+    base_url: str | None = None
 
 
 class SimilarityConfig(BaseModel):

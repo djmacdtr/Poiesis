@@ -15,6 +15,7 @@ export default function SettingsPage() {
   // 表单状态
   const [openaiKey, setOpenaiKey] = useState('')
   const [anthropicKey, setAnthropicKey] = useState('')
+  const [siliconflowKey, setSiliconflowKey] = useState('')
   const [embeddingProvider, setEmbeddingProvider] = useState<'local' | 'remote' | ''>('')
   const [defaultChapterCount, setDefaultChapterCount] = useState<number | ''>('')
   const [isInitializing, setIsInitializing] = useState(false)
@@ -38,6 +39,7 @@ export default function SettingsPage() {
       // 清空密钥输入框（不在界面上留存）
       setOpenaiKey('')
       setAnthropicKey('')
+      setSiliconflowKey('')
     },
     onError: (err: Error) => {
       toast.error(`保存失败：${err.message}`)
@@ -48,6 +50,7 @@ export default function SettingsPage() {
     const payload: SystemConfigRequest = {}
     if (openaiKey !== '') payload.openai_api_key = openaiKey
     if (anthropicKey !== '') payload.anthropic_api_key = anthropicKey
+    if (siliconflowKey !== '') payload.siliconflow_api_key = siliconflowKey
     if (embeddingProvider !== '') payload.embedding_provider = embeddingProvider
     if (defaultChapterCount !== '') payload.default_chapter_count = Number(defaultChapterCount)
     saveMutation.mutate(payload)
@@ -80,7 +83,7 @@ export default function SettingsPage() {
         <h3 className="text-sm font-semibold text-gray-700">API Key 配置</h3>
 
         {/* 当前状态 */}
-        <div className="grid grid-cols-2 gap-3 text-sm">
+        <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
           <div className="flex items-center gap-2">
             {configStatus?.has_openai_api_key ? (
               <CheckCircle className="w-4 h-4 text-green-500" />
@@ -101,6 +104,17 @@ export default function SettingsPage() {
             <span className="text-gray-600">Anthropic Key</span>
             <span className={`text-xs px-1.5 py-0.5 rounded ${configStatus?.has_anthropic_api_key ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-400'}`}>
               {configStatus?.has_anthropic_api_key ? '已配置' : '未配置'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            {configStatus?.has_siliconflow_api_key ? (
+              <CheckCircle className="w-4 h-4 text-green-500" />
+            ) : (
+              <XCircle className="w-4 h-4 text-gray-400" />
+            )}
+            <span className="text-gray-600">SiliconFlow Key</span>
+            <span className={`text-xs px-1.5 py-0.5 rounded ${configStatus?.has_siliconflow_api_key ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-400'}`}>
+              {configStatus?.has_siliconflow_api_key ? '已配置' : '未配置'}
             </span>
           </div>
         </div>
@@ -136,6 +150,22 @@ export default function SettingsPage() {
               placeholder={configStatus?.has_anthropic_api_key ? '已配置，输入新值可覆盖' : '请输入 sk-ant-...'}
               value={anthropicKey}
               onChange={(e) => setAnthropicKey(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              autoComplete="off"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="siliconflow-key">
+              SiliconFlow API Key
+              <span className="ml-1 font-normal text-gray-400">（留空则保持不变）</span>
+            </label>
+            <input
+              id="siliconflow-key"
+              type="password"
+              placeholder={configStatus?.has_siliconflow_api_key ? '已配置，输入新值可覆盖' : '请输入 sk-...'}
+              value={siliconflowKey}
+              onChange={(e) => setSiliconflowKey(e.target.value)}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
               autoComplete="off"
             />

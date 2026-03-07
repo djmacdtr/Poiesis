@@ -18,6 +18,7 @@ class OpenAIClient(LLMClient):
         temperature: float = 0.8,
         max_tokens: int = 4000,
         api_key: str | None = None,
+        base_url: str | None = None,
     ) -> None:
         """Initialise the OpenAI client.
 
@@ -27,9 +28,15 @@ class OpenAIClient(LLMClient):
             max_tokens: Maximum tokens in the completion.
             api_key: Optional API key; falls back to the ``OPENAI_API_KEY``
                 environment variable when *None*.
+            base_url: Optional API base URL for OpenAI-compatible providers.
         """
         super().__init__(model=model, temperature=temperature, max_tokens=max_tokens)
-        self._client = OpenAI(api_key=api_key) if api_key else OpenAI()
+        client_kwargs: dict[str, str] = {}
+        if api_key:
+            client_kwargs["api_key"] = api_key
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        self._client = OpenAI(**client_kwargs)
 
     def _complete(
         self,

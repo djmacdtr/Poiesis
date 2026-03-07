@@ -16,6 +16,10 @@ from poiesis.extractor import FactExtractor
 from poiesis.llm.anthropic_client import AnthropicClient
 from poiesis.llm.base import LLMClient
 from poiesis.llm.openai_client import OpenAIClient
+from poiesis.llm.siliconflow_client import (
+    DEFAULT_SILICONFLOW_BASE_URL,
+    SiliconFlowClient,
+)
 from poiesis.merger import WorldMerger
 from poiesis.originality import OriginalityChecker
 from poiesis.planner import ChapterPlanner
@@ -29,9 +33,14 @@ console = Console()
 
 
 def _build_llm(
-    cfg: Any, openai_key: str | None = None, anthropic_key: str | None = None
+    cfg: Any,
+    openai_key: str | None = None,
+    anthropic_key: str | None = None,
+    siliconflow_key: str | None = None,
 ) -> LLMClient:
     """Instantiate an LLM client from a ModelConfig."""
+    base_url = getattr(cfg, "base_url", None)
+
     if cfg.provider == "anthropic":
         return AnthropicClient(
             model=cfg.model,
@@ -39,11 +48,20 @@ def _build_llm(
             max_tokens=cfg.max_tokens,
             api_key=anthropic_key,
         )
+    if cfg.provider == "siliconflow":
+        return SiliconFlowClient(
+            model=cfg.model,
+            temperature=cfg.temperature,
+            max_tokens=cfg.max_tokens,
+            api_key=siliconflow_key,
+            base_url=base_url or DEFAULT_SILICONFLOW_BASE_URL,
+        )
     return OpenAIClient(
         model=cfg.model,
         temperature=cfg.temperature,
         max_tokens=cfg.max_tokens,
         api_key=openai_key,
+        base_url=base_url,
     )
 
 
@@ -68,12 +86,19 @@ class RunLoop:
         # 优先从数据库读取 API Key；若无则回退环境变量（LLM 客户端自身处理）
         openai_key = self._load_key_from_db("OPENAI_API_KEY")
         anthropic_key = self._load_key_from_db("ANTHROPIC_API_KEY")
+        siliconflow_key = self._load_key_from_db("SILICONFLOW_API_KEY")
 
         self._writer_llm = _build_llm(
-            self._config.llm, openai_key=openai_key, anthropic_key=anthropic_key
+            self._config.llm,
+            openai_key=openai_key,
+            anthropic_key=anthropic_key,
+            siliconflow_key=siliconflow_key,
         )
         self._planner_llm = _build_llm(
-            self._config.planner_llm, openai_key=openai_key, anthropic_key=anthropic_key
+            self._config.planner_llm,
+            openai_key=openai_key,
+            anthropic_key=anthropic_key,
+            siliconflow_key=siliconflow_key,
         )
 
         gen = self._config.generation

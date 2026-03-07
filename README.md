@@ -162,9 +162,25 @@ curl -I http://127.0.0.1:18080/openapi.json
 
 首次进入建议流程：
 1. 登录（默认账号 `admin`，密码见 `.env` 的 `POIESIS_ADMIN_PASS`）
-2. 在系统设置配置 OpenAI/Anthropic Key
+2. 在系统设置配置 OpenAI/Anthropic/SiliconFlow Key
 3. 初始化世界（UI 或 CLI）
 4. 在 Run 页面设置章节数并启动任务
+
+SiliconFlow 最小配置示例（`config.yaml`）：
+
+```yaml
+llm:
+  provider: "siliconflow"
+  model: "Qwen/Qwen2.5-72B-Instruct"
+  base_url: "https://api.siliconflow.cn/v1"
+
+planner_llm:
+  provider: "siliconflow"
+  model: "Qwen/Qwen2.5-72B-Instruct"
+  base_url: "https://api.siliconflow.cn/v1"
+```
+
+并在 `.env` 或系统设置中配置：`SILICONFLOW_API_KEY`。
 
 ---
 
@@ -211,7 +227,7 @@ npm run dev
 ## 🧯 Common Issues / 常见问题
 
 - `/api` 返回 502: 确认 `api` 容器健康且 `web` 可解析服务名 `api`
-- 运行任务报缺少 Key: 在系统设置或 `.env` 补齐 LLM Key
+- 运行任务报缺少 Key: 在系统设置或 `.env` 补齐 LLM Key（OpenAI/Anthropic/SiliconFlow）
 - 选择 `remote` provider 失败: 使用 `--profile full` 启动并检查 `embed` 健康状态
 
 ---

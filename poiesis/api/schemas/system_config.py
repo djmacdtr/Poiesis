@@ -16,6 +16,9 @@ class SystemConfigRequest(BaseModel):
     anthropic_api_key: str | None = None
     """Anthropic API Key（明文，将在服务端加密存储）。"""
 
+    siliconflow_api_key: str | None = None
+    """SiliconFlow API Key（明文，将在服务端加密存储）。"""
+
     embedding_provider: str | None = None
     """Embedding 提供者：local 或 remote。"""
 
@@ -31,6 +34,9 @@ class SystemConfigStatus(BaseModel):
 
     has_anthropic_api_key: bool = False
     """是否已配置 Anthropic API Key。"""
+
+    has_siliconflow_api_key: bool = False
+    """是否已配置 SiliconFlow API Key。"""
 
     embedding_provider: str | None = None
     """已保存的 Embedding 提供者（来自系统配置）。"""

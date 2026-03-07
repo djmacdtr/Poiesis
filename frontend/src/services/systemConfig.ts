@@ -7,6 +7,7 @@ import { get, post } from '@/services/http'
 export interface SystemConfigStatus {
   has_openai_api_key: boolean
   has_anthropic_api_key: boolean
+  has_siliconflow_api_key: boolean
   embedding_provider: 'local' | 'remote' | null
   embedding_provider_effective: 'local' | 'remote'
   embedding_service_health: {
@@ -24,6 +25,7 @@ export interface SystemConfigStatus {
 export interface SystemConfigRequest {
   openai_api_key?: string
   anthropic_api_key?: string
+  siliconflow_api_key?: string
   embedding_provider?: 'local' | 'remote'
   default_chapter_count?: number
 }

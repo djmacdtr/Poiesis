@@ -15,11 +15,12 @@ from poiesis.db.database import Database
 # 配置键名常量
 KEY_OPENAI = "OPENAI_API_KEY"
 KEY_ANTHROPIC = "ANTHROPIC_API_KEY"
+KEY_SILICONFLOW = "SILICONFLOW_API_KEY"
 KEY_EMBEDDING_PROVIDER = "embedding_provider"
 KEY_DEFAULT_CHAPTER_COUNT = "default_chapter_count"
 
 # 需要加密存储的键
-_ENCRYPTED_KEYS = {KEY_OPENAI, KEY_ANTHROPIC}
+_ENCRYPTED_KEYS = {KEY_OPENAI, KEY_ANTHROPIC, KEY_SILICONFLOW}
 
 
 class EmbeddingConfigError(Exception):
@@ -145,6 +146,13 @@ def save_config(db: Database, req: SystemConfigRequest) -> SystemConfigStatus:
         else:
             db.set_system_config(KEY_ANTHROPIC, "")
 
+    # 保存 SiliconFlow Key（加密）
+    if req.siliconflow_api_key is not None:
+        if req.siliconflow_api_key:
+            db.set_system_config(KEY_SILICONFLOW, encrypt(req.siliconflow_api_key))
+        else:
+            db.set_system_config(KEY_SILICONFLOW, "")
+
     # 保存 Embedding 提供者（仅支持 local / remote）
     if req.embedding_provider is not None:
         provider = _normalize_embedding_provider(req.embedding_provider)
@@ -179,6 +187,7 @@ def get_config_status(db: Database) -> SystemConfigStatus:
     """
     openai_val = db.get_system_config(KEY_OPENAI)
     anthropic_val = db.get_system_config(KEY_ANTHROPIC)
+    siliconflow_val = db.get_system_config(KEY_SILICONFLOW)
     embedding_provider = db.get_system_config(KEY_EMBEDDING_PROVIDER)
     chapter_count_str = db.get_system_config(KEY_DEFAULT_CHAPTER_COUNT)
 
@@ -202,6 +211,7 @@ def get_config_status(db: Database) -> SystemConfigStatus:
     return SystemConfigStatus(
         has_openai_api_key=bool(openai_val),
         has_anthropic_api_key=bool(anthropic_val),
+        has_siliconflow_api_key=bool(siliconflow_val),
         embedding_provider=embedding_provider,
         embedding_provider_effective=effective_provider,
         embedding_service_health=embedding_service_health,
