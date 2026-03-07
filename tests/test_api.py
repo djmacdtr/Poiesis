@@ -202,7 +202,7 @@ class TestRunTask:
         assert status_resp.status_code == 200
         task = status_resp.json()
         assert task["task_id"] == task_id
-        assert task["status"] in ("pending", "running", "completed", "failed")
+        assert task["status"] in ("pending", "running", "completed", "failed", "interrupted")
         assert task["total_chapters"] == 2
         assert isinstance(task["logs"], list)
 

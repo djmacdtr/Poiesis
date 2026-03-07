@@ -40,6 +40,9 @@ class TestGetSystemConfig:
         assert body["has_openai_api_key"] is False
         assert body["has_anthropic_api_key"] is False
         assert body["has_siliconflow_api_key"] is False
+        assert body["openai_api_key_preview"] is None
+        assert body["anthropic_api_key_preview"] is None
+        assert body["siliconflow_api_key_preview"] is None
         assert body["embedding_provider"] is None
         assert body["embedding_provider_effective"] in ("local", "remote")
         assert body["embedding_service_health"] is None
@@ -68,6 +71,7 @@ class TestPostSystemConfig:
         body = resp.json()
         assert body["has_openai_api_key"] is True
         assert body["has_anthropic_api_key"] is False
+        assert body["openai_api_key_preview"] == "sk-t...-key"
 
     def test_save_anthropic_key_shows_configured(self, tmp_db: Database) -> None:
         """保存 Anthropic Key 后，has_anthropic_api_key 应为 True。"""
@@ -79,6 +83,7 @@ class TestPostSystemConfig:
         assert resp.status_code == 200
         body = resp.json()
         assert body["has_anthropic_api_key"] is True
+        assert body["anthropic_api_key_preview"] == "sk-a...-key"
 
     def test_response_does_not_contain_plaintext_key(self, tmp_db: Database) -> None:
         """响应体不应包含明文 API Key。"""
@@ -101,6 +106,7 @@ class TestPostSystemConfig:
         assert resp.status_code == 200
         body = resp.json()
         assert body["has_siliconflow_api_key"] is True
+        assert body["siliconflow_api_key_preview"] == "sk-s...-key"
 
     def test_save_embedding_provider_and_chapter_count(self, tmp_db: Database) -> None:
         """保存 embedding_provider 与 default_chapter_count 应正确返回。"""
@@ -214,6 +220,7 @@ class TestPostSystemConfig:
         assert resp.status_code == 200
         body = resp.json()
         assert body["has_openai_api_key"] is False
+        assert body["openai_api_key_preview"] is None
 
     def test_clear_siliconflow_key_by_empty_string(self, tmp_db: Database) -> None:
         """传入空字符串应清除已保存的 SiliconFlow Key。"""
@@ -224,6 +231,7 @@ class TestPostSystemConfig:
         assert resp.status_code == 200
         body = resp.json()
         assert body["has_siliconflow_api_key"] is False
+        assert body["siliconflow_api_key_preview"] is None
 
     def test_siliconflow_key_stored_encrypted_and_decryptable(self, tmp_db: Database) -> None:
         """SiliconFlow Key 应加密存储且可通过服务层解密读取。"""

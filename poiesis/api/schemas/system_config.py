@@ -44,11 +44,20 @@ class SystemConfigStatus(BaseModel):
     has_openai_api_key: bool = False
     """是否已配置 OpenAI API Key。"""
 
+    openai_api_key_preview: str | None = None
+    """OpenAI API Key 脱敏预览（前4后4）。"""
+
     has_anthropic_api_key: bool = False
     """是否已配置 Anthropic API Key。"""
 
+    anthropic_api_key_preview: str | None = None
+    """Anthropic API Key 脱敏预览（前4后4）。"""
+
     has_siliconflow_api_key: bool = False
     """是否已配置 SiliconFlow API Key。"""
+
+    siliconflow_api_key_preview: str | None = None
+    """SiliconFlow API Key 脱敏预览（前4后4）。"""
 
     embedding_provider: str | None = None
     """已保存的 Embedding 提供者（来自系统配置）。"""

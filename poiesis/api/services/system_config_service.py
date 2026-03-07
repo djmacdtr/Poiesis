@@ -29,6 +29,17 @@ _ENCRYPTED_KEYS = {KEY_OPENAI, KEY_ANTHROPIC, KEY_SILICONFLOW}
 _ALLOWED_LLM_PROVIDERS = {"openai", "anthropic", "siliconflow"}
 
 
+def _mask_key_preview(key_value: str | None) -> str | None:
+    """Return masked API key preview as first 4 + last 4 chars."""
+    if not key_value:
+        return None
+
+    value = key_value.strip()
+    if len(value) <= 8:
+        return f"{value[:4]}...{value[-4:]}"
+    return f"{value[:4]}...{value[-4:]}"
+
+
 class EmbeddingConfigError(Exception):
     """Embedding 配置校验失败异常。"""
 
@@ -280,10 +291,17 @@ def get_config_status(db: Database) -> SystemConfigStatus:
     planner_llm_provider_effective = planner_llm_provider or cfg.planner_llm.provider
     planner_llm_model_effective = planner_llm_model or cfg.planner_llm.model
 
+    openai_preview = _mask_key_preview(get_decrypted_key(db, KEY_OPENAI))
+    anthropic_preview = _mask_key_preview(get_decrypted_key(db, KEY_ANTHROPIC))
+    siliconflow_preview = _mask_key_preview(get_decrypted_key(db, KEY_SILICONFLOW))
+
     return SystemConfigStatus(
         has_openai_api_key=bool(openai_val),
+        openai_api_key_preview=openai_preview,
         has_anthropic_api_key=bool(anthropic_val),
+        anthropic_api_key_preview=anthropic_preview,
         has_siliconflow_api_key=bool(siliconflow_val),
+        siliconflow_api_key_preview=siliconflow_preview,
         embedding_provider=embedding_provider,
         embedding_provider_effective=effective_provider,
         embedding_service_health=embedding_service_health,

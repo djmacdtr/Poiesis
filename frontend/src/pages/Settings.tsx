@@ -125,38 +125,53 @@ export default function SettingsPage() {
 
         {/* 当前状态 */}
         <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-          <div className="flex items-center gap-2">
-            {configStatus?.has_openai_api_key ? (
-              <CheckCircle className="w-4 h-4 text-green-500" />
-            ) : (
-              <XCircle className="w-4 h-4 text-gray-400" />
-            )}
-            <span className="text-gray-600">OpenAI Key</span>
-            <span className={`text-xs px-1.5 py-0.5 rounded ${configStatus?.has_openai_api_key ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-400'}`}>
-              {configStatus?.has_openai_api_key ? '已配置' : '未配置'}
-            </span>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              {configStatus?.has_openai_api_key ? (
+                <CheckCircle className="w-4 h-4 text-green-500" />
+              ) : (
+                <XCircle className="w-4 h-4 text-gray-400" />
+              )}
+              <span className="text-gray-600">OpenAI Key</span>
+              <span className={`text-xs px-1.5 py-0.5 rounded ${configStatus?.has_openai_api_key ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-400'}`}>
+                {configStatus?.has_openai_api_key ? '已配置' : '未配置'}
+              </span>
+            </div>
+            <p className="font-mono text-[11px] text-gray-500">
+              {configStatus?.openai_api_key_preview ? `预览：${configStatus.openai_api_key_preview}` : '预览：--'}
+            </p>
           </div>
-          <div className="flex items-center gap-2">
-            {configStatus?.has_anthropic_api_key ? (
-              <CheckCircle className="w-4 h-4 text-green-500" />
-            ) : (
-              <XCircle className="w-4 h-4 text-gray-400" />
-            )}
-            <span className="text-gray-600">Anthropic Key</span>
-            <span className={`text-xs px-1.5 py-0.5 rounded ${configStatus?.has_anthropic_api_key ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-400'}`}>
-              {configStatus?.has_anthropic_api_key ? '已配置' : '未配置'}
-            </span>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              {configStatus?.has_anthropic_api_key ? (
+                <CheckCircle className="w-4 h-4 text-green-500" />
+              ) : (
+                <XCircle className="w-4 h-4 text-gray-400" />
+              )}
+              <span className="text-gray-600">Anthropic Key</span>
+              <span className={`text-xs px-1.5 py-0.5 rounded ${configStatus?.has_anthropic_api_key ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-400'}`}>
+                {configStatus?.has_anthropic_api_key ? '已配置' : '未配置'}
+              </span>
+            </div>
+            <p className="font-mono text-[11px] text-gray-500">
+              {configStatus?.anthropic_api_key_preview ? `预览：${configStatus.anthropic_api_key_preview}` : '预览：--'}
+            </p>
           </div>
-          <div className="flex items-center gap-2">
-            {configStatus?.has_siliconflow_api_key ? (
-              <CheckCircle className="w-4 h-4 text-green-500" />
-            ) : (
-              <XCircle className="w-4 h-4 text-gray-400" />
-            )}
-            <span className="text-gray-600">SiliconFlow Key</span>
-            <span className={`text-xs px-1.5 py-0.5 rounded ${configStatus?.has_siliconflow_api_key ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-400'}`}>
-              {configStatus?.has_siliconflow_api_key ? '已配置' : '未配置'}
-            </span>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              {configStatus?.has_siliconflow_api_key ? (
+                <CheckCircle className="w-4 h-4 text-green-500" />
+              ) : (
+                <XCircle className="w-4 h-4 text-gray-400" />
+              )}
+              <span className="text-gray-600">SiliconFlow Key</span>
+              <span className={`text-xs px-1.5 py-0.5 rounded ${configStatus?.has_siliconflow_api_key ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-400'}`}>
+                {configStatus?.has_siliconflow_api_key ? '已配置' : '未配置'}
+              </span>
+            </div>
+            <p className="font-mono text-[11px] text-gray-500">
+              {configStatus?.siliconflow_api_key_preview ? `预览：${configStatus.siliconflow_api_key_preview}` : '预览：--'}
+            </p>
           </div>
         </div>
 

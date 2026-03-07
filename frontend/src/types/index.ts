@@ -136,7 +136,7 @@ export type StagingFilter = StagingStatus | 'all'
 // ──────────────────────────────────────────────
 
 /** 运行任务状态 */
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed'
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'interrupted'
 
 /** 启动运行响应 */
 export interface RunResponse {

@@ -6,8 +6,11 @@ import { get, post } from '@/services/http'
 /** 系统配置状态（不含明文 Key） */
 export interface SystemConfigStatus {
   has_openai_api_key: boolean
+  openai_api_key_preview: string | null
   has_anthropic_api_key: boolean
+  anthropic_api_key_preview: string | null
   has_siliconflow_api_key: boolean
+  siliconflow_api_key_preview: string | null
   embedding_provider: 'local' | 'remote' | null
   embedding_provider_effective: 'local' | 'remote'
   embedding_service_health: {

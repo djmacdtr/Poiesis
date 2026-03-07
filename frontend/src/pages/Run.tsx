@@ -16,6 +16,7 @@ const statusLabel: Record<string, string> = {
   running: '运行中',
   completed: '已完成',
   failed: '失败',
+  interrupted: '已中断（待重试）',
 }
 
 /** 任务状态颜色 */
@@ -24,7 +25,10 @@ const statusColor: Record<string, string> = {
   running: 'text-blue-600 bg-blue-50',
   completed: 'text-green-600 bg-green-50',
   failed: 'text-red-600 bg-red-50',
+  interrupted: 'text-amber-700 bg-amber-100',
 }
+
+const restartFailureKeywords = ['热重载', '重启', '中断']
 
 export default function Run() {
   const [chapterCount, setChapterCount] = useState(1)
@@ -48,7 +52,7 @@ export default function Run() {
     enabled: !!taskId,
     refetchInterval: (query) => {
       const status = query.state.data?.status
-      if (status === 'completed' || status === 'failed') return false
+      if (status === 'completed' || status === 'failed' || status === 'interrupted') return false
       return 2000
     },
   })
@@ -57,6 +61,8 @@ export default function Run() {
   useEffect(() => {
     if (task?.status === 'completed') {
       toast.success('写作任务已完成！')
+    } else if (task?.status === 'interrupted') {
+      toast.warning(`任务中断：${task.error ?? '服务热重载或重启导致中断，请重试'}`)
     } else if (task?.status === 'failed') {
       toast.error(`任务失败：${task.error ?? '未知错误'}`)
     }
@@ -85,6 +91,16 @@ export default function Run() {
   }
 
   const isRunning = task?.status === 'running' || task?.status === 'pending'
+  const taskErrorMessage = taskError ? (taskError as Error).message : null
+  const isMissingTaskError =
+    !!taskErrorMessage &&
+    (taskErrorMessage.includes('不存在') || taskErrorMessage.toLowerCase().includes('404'))
+  const isRestartInterruptedFailure =
+    (task?.status === 'failed' || task?.status === 'interrupted') &&
+    !!task.error &&
+    restartFailureKeywords.some((keyword) => task.error!.includes(keyword))
+  const taskStatusLabel = task?.status ? (statusLabel[task.status] ?? task.status) : ''
+  const taskStatusColor = task?.status ? (statusColor[task.status] ?? '') : ''
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -164,13 +180,29 @@ export default function Run() {
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-700">任务状态</h3>
             {task?.status && (
-              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${statusColor[task.status] ?? ''}`}>
-                {statusLabel[task.status] ?? task.status}
+              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${taskStatusColor}`}>
+                {taskStatusLabel}
               </span>
             )}
           </div>
 
-          {taskError && <ErrorMessage message={(taskError as Error).message} />}
+          {taskError && !isMissingTaskError && <ErrorMessage message={taskErrorMessage ?? '获取任务状态失败'} />}
+
+          {taskError && isMissingTaskError && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              <p className="font-semibold">任务状态已失效</p>
+              <p className="mt-1 break-words">{taskErrorMessage}</p>
+              <p className="mt-2 text-xs text-amber-700">
+                这通常是开发模式热重载后，旧任务 ID 不再可追踪。请重置后重新发起任务。
+              </p>
+              <button
+                onClick={handleReset}
+                className="mt-3 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 transition-colors"
+              >
+                重置当前任务
+              </button>
+            </div>
+          )}
 
           {task && (
             <div className="space-y-2 text-sm text-gray-600">
@@ -192,9 +224,29 @@ export default function Run() {
             </div>
           )}
 
+          {(task?.status === 'failed' || task?.status === 'interrupted') && task.error && (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              <p className="font-semibold">
+                {task.status === 'interrupted' ? '任务中断原因' : '任务失败原因'}
+              </p>
+              <p className="mt-1 break-words">{task.error}</p>
+              {isRestartInterruptedFailure && (
+                <div className="mt-2 space-y-1 text-xs text-red-600">
+                  <p>检测到服务热重载或重启导致任务中断。</p>
+                  <p>建议：确认配置后重新点击“开始运行”。</p>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* 日志输出 */}
           {task?.logs && task.logs.length > 0 && (
             <div className="bg-gray-900 rounded-lg p-3 max-h-48 overflow-y-auto font-mono text-xs text-green-400 space-y-0.5">
+              {isRestartInterruptedFailure && (
+                <div className="mb-2 rounded border border-amber-400/60 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
+                  任务因服务热重载/重启中断。请重置后重新发起。
+                </div>
+              )}
               {task.logs.map((log, i) => (
                 <div key={i}>{log}</div>
               ))}
