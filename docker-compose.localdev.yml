@@ -1,0 +1,72 @@
+# docker-compose.localdev.yml
+# 本地开发热更新模式（全程 Docker 运行）
+#
+# 使用方式：
+#   docker compose -f docker-compose.yml -f docker-compose.localdev.yml up -d
+#
+# 特点：
+# - api 使用 uvicorn --reload，并挂载本地源码，后端改动自动重载
+# - web 使用 Vite dev server，并挂载 frontend 源码，前端改动 HMR 热更新
+# - 无需每次改代码都重建镜像（依赖变更时再 --build）
+
+services:
+  api:
+    # 仍使用现有 API 镜像作为运行时基础；源码通过 volume 覆盖
+    image: ghcr.io/djmacdtr/poiesis-api:${POIESIS_IMAGE_TAG:-latest}
+    working_dir: /app
+    command:
+      - python
+      - -m
+      - uvicorn
+      - poiesis.api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/poiesis
+      - --reload-dir
+      - /app/prompts
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - SILICONFLOW_API_KEY=${SILICONFLOW_API_KEY:-}
+      - POIESIS_EMBEDDING_PROVIDER=${POIESIS_EMBEDDING_PROVIDER:-local}
+      - POIESIS_EMBEDDING_URL=${POIESIS_EMBEDDING_URL:-http://embed:9000}
+      - POIESIS_CONFIG=/app/config.yaml
+      - POIESIS_SECRET_KEY=${POIESIS_SECRET_KEY:-}
+      - POIESIS_ADMIN_USER=${POIESIS_ADMIN_USER:-admin}
+      - POIESIS_ADMIN_PASS=${POIESIS_ADMIN_PASS:-admin}
+    volumes:
+      - ./:/app
+      - ./data:/app/data
+      - ./docker/config.yaml:/app/config.yaml:ro
+      - ./examples:/app/examples:ro
+    ports:
+      - "127.0.0.1:18000:8000"
+
+  web:
+    image: node:20-alpine
+    working_dir: /app/frontend
+    command:
+      - sh
+      - -c
+      - >-
+        if [ ! -x node_modules/.bin/vite ]; then npm ci; fi &&
+        npm run dev -- --host 0.0.0.0 --port 5173
+    environment:
+      - VITE_API_BASE_URL=http://127.0.0.1:18000
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+    volumes:
+      - ./frontend:/app/frontend
+      - frontend_node_modules:/app/frontend/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  frontend_node_modules:

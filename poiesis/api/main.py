@@ -52,7 +52,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",  # Vite 默认开发端口
+        "http://127.0.0.1:5173",  # Vite 默认开发端口（IP 访问）
         "http://localhost:3000",  # 备用端口
+        "http://127.0.0.1:3000",  # 备用端口（IP 访问）
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
