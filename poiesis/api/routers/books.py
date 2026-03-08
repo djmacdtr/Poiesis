@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -36,6 +37,10 @@ def create_book(
             naming_policy=body.naming_policy.strip(),
             is_default=body.is_default,
         )
+    except sqlite3.IntegrityError as exc:
+        if "books.name" in str(exc):
+            raise HTTPException(status_code=409, detail="书名已存在，请更换后重试") from exc
+        raise HTTPException(status_code=422, detail=f"创建书籍失败：{exc}") from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"创建书籍失败：{exc}") from exc
 
@@ -66,6 +71,10 @@ def update_book(
             naming_policy=body.naming_policy.strip(),
             is_default=body.is_default,
         )
+    except sqlite3.IntegrityError as exc:
+        if "books.name" in str(exc):
+            raise HTTPException(status_code=409, detail="书名已存在，请更换后重试") from exc
+        raise HTTPException(status_code=422, detail=f"更新书籍失败：{exc}") from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"更新书籍失败：{exc}") from exc
 

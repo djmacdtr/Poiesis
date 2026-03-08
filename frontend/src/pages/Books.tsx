@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { createBook, fetchBooks, updateBook } from '@/services/books'
 import type { BookItem, BookUpsertRequest } from '@/types'
 import { LoadingSpinner, ErrorMessage } from '@/components/Feedback'
+import { BookCreateModal } from '@/components/BookCreateModal'
 
 const STYLE_PRESETS: Array<{ value: string; label: string; prompt: string }> = [
   {
@@ -37,6 +38,7 @@ export default function BooksPage() {
   const [bookStylePrompt, setBookStylePrompt] = useState('')
   const [bookNamingPolicy, setBookNamingPolicy] = useState('localized_zh')
   const [bookIsDefault, setBookIsDefault] = useState(false)
+  const [createModalOpen, setCreateModalOpen] = useState(false)
 
   const { data: books = [], isLoading, error } = useQuery<BookItem[]>({
     queryKey: ['books'],
@@ -49,6 +51,7 @@ export default function BooksPage() {
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['books'] })
       setActiveBookId(created.id)
+      setCreateModalOpen(false)
       toast.success('书籍创建成功')
     },
     onError: (err: Error) => toast.error(`创建失败：${err.message}`),
@@ -76,7 +79,7 @@ export default function BooksPage() {
     setBookIsDefault(current.is_default)
   }, [activeBookId, books])
 
-  const buildPayload = (): BookUpsertRequest => ({
+  const buildUpdatePayload = (): BookUpsertRequest => ({
     name: bookName.trim() || '未命名小说',
     language: bookLanguage,
     style_preset: bookStylePreset,
@@ -209,7 +212,7 @@ export default function BooksPage() {
 
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => updateMutation.mutate({ id: activeBookId, payload: buildPayload() })}
+            onClick={() => updateMutation.mutate({ id: activeBookId, payload: buildUpdatePayload() })}
             disabled={updateMutation.isPending || books.length === 0}
             className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
           >
@@ -217,15 +220,29 @@ export default function BooksPage() {
           </button>
 
           <button
-            onClick={() => createMutation.mutate(buildPayload())}
+            onClick={() => setCreateModalOpen(true)}
             disabled={createMutation.isPending}
             className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
           >
             <Plus className="w-4 h-4" />
-            {createMutation.isPending ? '创建中…' : '新建书籍'}
+            新建书籍
           </button>
         </div>
       </div>
+
+      <BookCreateModal
+        open={createModalOpen}
+        loading={createMutation.isPending}
+        initialValues={{
+          language: bookLanguage,
+          style_preset: bookStylePreset,
+          style_prompt: bookStylePrompt,
+          naming_policy: bookNamingPolicy,
+          is_default: false,
+        }}
+        onCancel={() => setCreateModalOpen(false)}
+        onConfirm={(payload) => createMutation.mutate(payload)}
+      />
     </div>
   )
 }

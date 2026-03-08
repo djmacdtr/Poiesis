@@ -346,6 +346,24 @@ class TestBooksApi:
         assert data["name"] == payload["name"]
         assert data["language"] == payload["language"]
 
+    def test_create_book_duplicate_name_returns_409(self, tmp_db: Database) -> None:
+        client = _make_client(tmp_db)
+        payload = {
+            "name": "同名测试书",
+            "language": "zh-CN",
+            "style_preset": "literary_cn",
+            "style_prompt": "",
+            "naming_policy": "localized_zh",
+            "is_default": False,
+        }
+
+        first = client.post("/api/books", json=payload)
+        assert first.status_code == 200
+
+        second = client.post("/api/books", json=payload)
+        assert second.status_code == 409
+        assert "书名已存在" in second.json()["detail"]
+
     def test_update_book_success(self, tmp_db: Database) -> None:
         client = _make_client(tmp_db)
 
@@ -379,6 +397,49 @@ class TestBooksApi:
         assert body["name"] == "新书名"
         assert body["style_preset"] == "webnovel_cn"
         assert body["is_default"] is True
+
+    def test_update_book_to_duplicate_name_returns_409(self, tmp_db: Database) -> None:
+        client = _make_client(tmp_db)
+
+        first = client.post(
+            "/api/books",
+            json={
+                "name": "第一本",
+                "language": "zh-CN",
+                "style_preset": "neutral_cn",
+                "style_prompt": "",
+                "naming_policy": "localized_zh",
+                "is_default": False,
+            },
+        )
+        assert first.status_code == 200
+
+        second = client.post(
+            "/api/books",
+            json={
+                "name": "第二本",
+                "language": "zh-CN",
+                "style_preset": "neutral_cn",
+                "style_prompt": "",
+                "naming_policy": "localized_zh",
+                "is_default": False,
+            },
+        )
+        assert second.status_code == 200
+
+        update_resp = client.put(
+            f"/api/books/{second.json()['id']}",
+            json={
+                "name": "第一本",
+                "language": "zh-CN",
+                "style_preset": "neutral_cn",
+                "style_prompt": "",
+                "naming_policy": "localized_zh",
+                "is_default": False,
+            },
+        )
+        assert update_resp.status_code == 409
+        assert "书名已存在" in update_resp.json()["detail"]
 
 
 class TestWorldBookScopedQueries:
