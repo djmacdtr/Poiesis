@@ -19,7 +19,7 @@ def test_siliconflow_client_uses_env_key_when_api_key_missing(monkeypatch):
     monkeypatch.setenv("SILICONFLOW_API_KEY", "sf-env-key")
     monkeypatch.setattr("poiesis.llm.siliconflow_client.OpenAIClient.__init__", fake_openai_init)
 
-    SiliconFlowClient(model="Qwen/Qwen2.5-72B-Instruct")
+    SiliconFlowClient(model="Qwen/Qwen3-8B")
 
     assert captured["api_key"] == "sf-env-key"
 
@@ -34,6 +34,6 @@ def test_siliconflow_client_prefers_explicit_api_key(monkeypatch):
     monkeypatch.setenv("SILICONFLOW_API_KEY", "sf-env-key")
     monkeypatch.setattr("poiesis.llm.siliconflow_client.OpenAIClient.__init__", fake_openai_init)
 
-    SiliconFlowClient(model="Qwen/Qwen2.5-72B-Instruct", api_key="sf-explicit-key")
+    SiliconFlowClient(model="Qwen/Qwen3-8B", api_key="sf-explicit-key")
 
     assert captured["api_key"] == "sf-explicit-key"

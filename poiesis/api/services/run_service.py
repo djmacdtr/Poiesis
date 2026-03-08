@@ -57,6 +57,13 @@ def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int) -> 
 
     try:
         loop = RunLoop(config_path=config_path)
+        task.add_log(f"配置来源：{config_path}")
+        task.add_log(f"数据库路径：{loop._config.database.path}")
+        task.add_log(
+            "生效模型："
+            f"写作={loop._config.llm.provider}/{loop._config.llm.model}；"
+            f"规划={loop._config.planner_llm.provider}/{loop._config.planner_llm.model}"
+        )
         task.add_log("检查模型配置…")
         _validate_llm_key_prerequisites(loop)
         task.add_log("模型配置检查通过。")

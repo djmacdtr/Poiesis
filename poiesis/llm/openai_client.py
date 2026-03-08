@@ -68,7 +68,11 @@ class OpenAIClient(LLMClient):
             max_tokens=self.max_tokens,
             **kwargs,
         )
-        return response.choices[0].message.content or ""
+        message = response.choices[0].message
+        content = message.content or ""
+        if content:
+            return content
+        return getattr(message, "reasoning_content", None) or ""
 
     def _complete_json(
         self,
@@ -115,6 +119,7 @@ class OpenAIClient(LLMClient):
         for chunk in stream:
             if not chunk.choices:
                 continue
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+            delta = chunk.choices[0].delta
+            text = delta.content or getattr(delta, "reasoning_content", None)
+            if text:
+                yield text
