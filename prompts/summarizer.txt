@@ -1,9 +1,9 @@
-Summarize chapter {chapter_number} for the world archive.
+请为世界档案总结第 {chapter_number} 章。
 
-Chapter Content:
+章节正文：
 {content}
 
-Return a JSON object with exactly these keys:
+返回一个 JSON 对象，必须包含以下键：
 
 {{
   "summary": "2-3 paragraph narrative summary capturing the emotional arc and plot
@@ -20,7 +20,7 @@ Return a JSON object with exactly these keys:
 }}
 
 Rules:
-- The summary must be written in present tense and read as a self-contained synopsis.
-- key_events should each be one sentence maximum.
-- new_facts_introduced should be facts that future chapters must treat as canon.
-- Return ONLY valid JSON. No markdown fences, no commentary.
+- summary 使用可独立阅读的概述口吻，信息完整但不冗长。
+- key_events 每条最多一句话。
+- new_facts_introduced 必须是后续章节应视为既定事实的内容。
+- 只返回合法 JSON，不要返回 markdown，不要附加说明。

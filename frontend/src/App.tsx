@@ -11,6 +11,7 @@ import Canon from '@/pages/Canon'
 import Staging from '@/pages/Staging'
 import Stats from '@/pages/Stats'
 import Settings from '@/pages/Settings'
+import Books from '@/pages/Books'
 import LoginPage from '@/pages/Login'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 
@@ -56,6 +57,7 @@ function AppRoutes() {
         <Route path="canon" element={<Canon />} />
         <Route path="staging" element={<Staging />} />
         <Route path="stats" element={<Stats />} />
+        <Route path="books" element={<Books />} />
         <Route path="settings" element={<Settings />} />
       </Route>
     </Routes>

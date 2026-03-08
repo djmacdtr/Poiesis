@@ -2,13 +2,14 @@
  * 运行控制页：启动写作任务并实时轮询进度
  */
 import { useState, useEffect, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Play, Square } from 'lucide-react'
 import { toast } from 'sonner'
 import { createTaskEventSource, startRun, fetchTaskStatus, fetchTaskList, pruneTaskHistory } from '@/services/run'
 import { getSystemConfig } from '@/services/systemConfig'
+import { fetchBooks } from '@/services/books'
 import { LoadingSpinner, ErrorMessage } from '@/components/Feedback'
-import type { TaskDetail } from '@/types'
+import type { BookItem, TaskDetail } from '@/types'
 
 /** 任务状态中文映射 */
 const statusLabel: Record<string, string> = {
@@ -30,6 +31,7 @@ const statusColor: Record<string, string> = {
 
 const restartFailureKeywords = ['热重载', '重启', '中断']
 const ACTIVE_TASK_ID_KEY = 'poiesis.activeTaskId'
+const ACTIVE_BOOK_ID_KEY = 'poiesis.activeBookId'
 const taskFilters = ['all', 'pending', 'running', 'completed', 'failed', 'interrupted'] as const
 type TaskFilter = (typeof taskFilters)[number]
 
@@ -71,7 +73,13 @@ function getPreviewPlaceholder(task: TaskDetail | undefined, isPreviewStreaming:
 }
 
 export default function Run() {
+  const queryClient = useQueryClient()
   const [chapterCount, setChapterCount] = useState(1)
+  const [activeBookId, setActiveBookId] = useState<number>(() => {
+    if (typeof window === 'undefined') return 1
+    const raw = window.localStorage.getItem(ACTIVE_BOOK_ID_KEY)
+    return raw ? Number(raw) || 1 : 1
+  })
   const [taskId, setTaskId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null
     return window.localStorage.getItem(ACTIVE_TASK_ID_KEY)
@@ -90,6 +98,12 @@ export default function Run() {
     queryKey: ['systemConfigForRun'],
     queryFn: getSystemConfig,
     staleTime: 15_000,
+  })
+
+  const { data: books = [] } = useQuery<BookItem[]>({
+    queryKey: ['books'],
+    queryFn: fetchBooks,
+    staleTime: 30_000,
   })
 
   // 轮询任务状态
@@ -128,12 +142,14 @@ export default function Run() {
       toast.warning('任务状态异常：显示已完成但未记录章节进度，请重试')
     } else if (task?.status === 'completed') {
       toast.success('写作任务已完成！')
+      // 任务完成后主动刷新章节缓存，避免章节列表停留在旧的空结果。
+      void queryClient.invalidateQueries({ queryKey: ['chapters', activeBookId] })
     } else if (task?.status === 'interrupted') {
       toast.warning(`任务中断：${task.error ?? '服务热重载或重启导致中断，请重试'}`)
     } else if (task?.status === 'failed') {
       toast.error(`任务失败：${task.error ?? '未知错误'}`)
     }
-  }, [task?.status])
+  }, [activeBookId, queryClient, task, task?.status])
 
   // 自动滚动日志到底部
   useEffect(() => {
@@ -162,6 +178,19 @@ export default function Run() {
     }
     window.localStorage.removeItem(ACTIVE_TASK_ID_KEY)
   }, [taskId])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(ACTIVE_BOOK_ID_KEY, String(activeBookId))
+  }, [activeBookId])
+
+  useEffect(() => {
+    if (books.length === 0) return
+    const exists = books.some((item) => item.id === activeBookId)
+    if (exists) return
+    const next = books.find((item) => item.is_default)?.id ?? books[0].id
+    setActiveBookId(next)
+  }, [activeBookId, books])
 
   // 订阅 SSE：实时接收日志与正文预览增量。
   useEffect(() => {
@@ -235,7 +264,7 @@ export default function Run() {
   const handleStart = async () => {
     setIsStarting(true)
     try {
-      const res = await startRun(chapterCount)
+      const res = await startRun(chapterCount, activeBookId)
       setPreviewText('')
       setTaskId(res.task_id)
       toast.success(`任务已启动，ID：${res.task_id}`)
@@ -402,6 +431,25 @@ export default function Run() {
               </p>
             </>
           )}
+        </div>
+
+        <div className="flex items-center gap-3">
+          <label className="text-sm text-gray-600 shrink-0" htmlFor="book-id">
+            目标书籍
+          </label>
+          <select
+            id="book-id"
+            value={activeBookId}
+            onChange={(e) => setActiveBookId(Number(e.target.value))}
+            disabled={isStarting || isRunning || books.length === 0}
+            className="min-w-56 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50 bg-white"
+          >
+            {books.map((book) => (
+              <option key={book.id} value={book.id}>
+                {book.name}（{book.language} / {book.style_preset}）
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="flex items-center gap-3">

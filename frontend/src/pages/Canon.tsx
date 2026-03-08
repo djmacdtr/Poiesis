@@ -1,12 +1,15 @@
 /**
  * 世界设定 Canon 页：展示角色、世界规则、时间线、伏笔
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import { fetchCanon } from '@/services/world'
+import { fetchBooks } from '@/services/books'
 import { LoadingSpinner, ErrorMessage, EmptyState } from '@/components/Feedback'
 import { formatDate, foreshadowingStatusLabel } from '@/lib/utils'
 import { cn } from '@/lib/utils'
+import type { BookItem, CanonData } from '@/types'
 
 /** 标签页配置 */
 const tabs = [
@@ -24,21 +27,63 @@ const foreshadowingColor: Record<string, string> = {
   resolved: 'bg-green-100 text-green-700',
   dropped: 'bg-gray-100 text-gray-500',
 }
+const ACTIVE_BOOK_ID_KEY = 'poiesis.activeBookId'
 
 export default function Canon() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [activeTab, setActiveTab] = useState<TabKey>('characters')
-
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['canon'],
-    queryFn: fetchCanon,
+  const [activeBookId, setActiveBookId] = useState<number>(() => {
+    const fromQuery = Number(searchParams.get('book') || '')
+    if (Number.isFinite(fromQuery) && fromQuery > 0) return fromQuery
+    if (typeof window === 'undefined') return 1
+    const raw = window.localStorage.getItem(ACTIVE_BOOK_ID_KEY)
+    return raw ? Number(raw) || 1 : 1
   })
+
+  const { data: books = [] } = useQuery<BookItem[]>({
+    queryKey: ['books'],
+    queryFn: fetchBooks,
+    staleTime: 30_000,
+  })
+
+  const { data, isLoading, error } = useQuery<CanonData>({
+    queryKey: ['canon', activeBookId],
+    queryFn: () => fetchCanon(activeBookId),
+  })
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(ACTIVE_BOOK_ID_KEY, String(activeBookId))
+    setSearchParams({ book: String(activeBookId) }, { replace: true })
+  }, [activeBookId, setSearchParams])
+
+  useEffect(() => {
+    if (books.length === 0) return
+    const exists = books.some((item) => item.id === activeBookId)
+    if (exists) return
+    const next = books.find((item) => item.is_default)?.id ?? books[0].id
+    setActiveBookId(next)
+  }, [activeBookId, books])
 
   if (isLoading) return <LoadingSpinner text="加载世界设定…" />
   if (error) return <ErrorMessage message={(error as Error).message} />
 
   return (
     <div className="space-y-5">
-      <h2 className="text-lg font-semibold text-gray-800">世界设定（Canon）</h2>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold text-gray-800">世界设定（Canon）</h2>
+        <select
+          value={activeBookId}
+          onChange={(e) => setActiveBookId(Number(e.target.value))}
+          className="min-w-56 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+        >
+          {books.map((book) => (
+            <option key={book.id} value={book.id}>
+              {book.name}（{book.language} / {book.style_preset}）
+            </option>
+          ))}
+        </select>
+      </div>
 
       {/* 标签页导航 */}
       <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">

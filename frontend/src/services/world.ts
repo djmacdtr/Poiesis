@@ -5,14 +5,18 @@ import { get, post } from './http'
 import type { CanonData, StagingChange, StagingFilter } from '@/types'
 
 /** 获取 Canon 数据 */
-export function fetchCanon(): Promise<CanonData> {
-  return get<CanonData>('/api/world/canon')
+export function fetchCanon(bookId?: number): Promise<CanonData> {
+  const query = bookId ? `?book_id=${bookId}` : ''
+  return get<CanonData>(`/api/world/canon${query}`)
 }
 
 /** 获取 Staging 列表 */
-export function fetchStaging(filter: StagingFilter = 'all'): Promise<StagingChange[]> {
-  const query = filter === 'all' ? '' : `?status=${filter}`
-  return get<StagingChange[]>(`/api/world/staging${query}`)
+export function fetchStaging(filter: StagingFilter = 'all', bookId?: number): Promise<StagingChange[]> {
+  const params = new URLSearchParams()
+  if (filter !== 'all') params.set('status', filter)
+  if (bookId) params.set('book_id', String(bookId))
+  const query = params.toString()
+  return get<StagingChange[]>(`/api/world/staging${query ? `?${query}` : ''}`)
 }
 
 /** 审批通过 Staging 变更 */

@@ -84,6 +84,41 @@ class TestListChapters:
         resp = client.get("/api/chapters")
         assert resp.json()[0]["status"] == "draft"
 
+    def test_chapters_list_can_filter_by_book_id(self, tmp_db: Database) -> None:
+        """不同书籍章节应通过 book_id 查询参数隔离。"""
+        second_book_id = tmp_db.create_book(name="第二本", language="zh-CN")
+
+        tmp_db.upsert_chapter(
+            chapter_number=1,
+            content="默认书章节",
+            title="默认书-第一章",
+            status="final",
+            book_id=1,
+        )
+        tmp_db.upsert_chapter(
+            chapter_number=1,
+            content="第二本章节",
+            title="第二本-第一章",
+            status="final",
+            book_id=second_book_id,
+        )
+
+        client = _make_client(tmp_db)
+
+        resp_default = client.get("/api/chapters?book_id=1")
+        assert resp_default.status_code == 200
+        data_default = resp_default.json()
+        assert len(data_default) == 1
+        assert data_default[0]["book_id"] == 1
+        assert data_default[0]["title"] == "默认书-第一章"
+
+        resp_second = client.get(f"/api/chapters?book_id={second_book_id}")
+        assert resp_second.status_code == 200
+        data_second = resp_second.json()
+        assert len(data_second) == 1
+        assert data_second[0]["book_id"] == second_book_id
+        assert data_second[0]["title"] == "第二本-第一章"
+
 
 # ──────────────────────────────────────────────
 # 测试 2：POST /api/world/staging/{id}/reject 缺少 reason 返回 422
@@ -219,6 +254,12 @@ class TestRunTask:
         resp = client.post("/api/run", json={"chapter_count": 0})
         assert resp.status_code == 422
 
+    def test_start_run_invalid_book_id(self, tmp_db: Database) -> None:
+        """book_id <= 0 应返回 422。"""
+        client = _make_client(tmp_db)
+        resp = client.post("/api/run", json={"chapter_count": 1, "book_id": 0})
+        assert resp.status_code == 422
+
     def test_list_tasks_returns_created_task(self, tmp_db: Database) -> None:
         """GET /api/run 应返回已创建任务列表。"""
         client = _make_client(tmp_db)
@@ -276,3 +317,154 @@ class TestRunTask:
         assert '"message": "日志一"' in body
         assert "event: status" in body
         assert '"status": "completed"' in body
+
+
+class TestBooksApi:
+    """书籍路由测试。"""
+
+    def test_list_books_returns_default_book(self, tmp_db: Database) -> None:
+        client = _make_client(tmp_db)
+        resp = client.get("/api/books")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert any(item.get("id") == 1 for item in data)
+
+    def test_create_book_success(self, tmp_db: Database) -> None:
+        client = _make_client(tmp_db)
+        payload = {
+            "name": "玄都夜雨",
+            "language": "zh-CN",
+            "style_preset": "literary_cn",
+            "style_prompt": "文风：克制、细腻、留白。",
+            "naming_policy": "localized_zh",
+            "is_default": False,
+        }
+        resp = client.post("/api/books", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == payload["name"]
+        assert data["language"] == payload["language"]
+
+    def test_update_book_success(self, tmp_db: Database) -> None:
+        client = _make_client(tmp_db)
+
+        create_resp = client.post(
+            "/api/books",
+            json={
+                "name": "旧书名",
+                "language": "zh-CN",
+                "style_preset": "neutral_cn",
+                "style_prompt": "",
+                "naming_policy": "localized_zh",
+                "is_default": False,
+            },
+        )
+        assert create_resp.status_code == 200
+        book_id = create_resp.json()["id"]
+
+        update_resp = client.put(
+            f"/api/books/{book_id}",
+            json={
+                "name": "新书名",
+                "language": "zh-CN",
+                "style_preset": "webnovel_cn",
+                "style_prompt": "节奏快，冲突密。",
+                "naming_policy": "hybrid",
+                "is_default": True,
+            },
+        )
+        assert update_resp.status_code == 200
+        body = update_resp.json()
+        assert body["name"] == "新书名"
+        assert body["style_preset"] == "webnovel_cn"
+        assert body["is_default"] is True
+
+
+class TestWorldBookScopedQueries:
+    """世界设定接口按书过滤测试。"""
+
+    def test_world_canon_timeline_can_filter_by_book_id(self, tmp_db: Database) -> None:
+        second_book_id = tmp_db.create_book(name="第二卷", language="zh-CN")
+
+        tmp_db.upsert_character(name="主角", description="默认书角色", book_id=1)
+        tmp_db.upsert_character(name="主角", description="第二卷角色", book_id=second_book_id)
+        tmp_db.upsert_world_rule("rule_core", "默认书规则", book_id=1)
+        tmp_db.upsert_world_rule("rule_core", "第二卷规则", book_id=second_book_id)
+        tmp_db.upsert_foreshadowing("hint_core", "默认书伏笔", book_id=1)
+        tmp_db.upsert_foreshadowing("hint_core", "第二卷伏笔", book_id=second_book_id)
+
+        tmp_db.upsert_timeline_event(
+            event_key="ev-book-1",
+            description="默认书时间线事件",
+            chapter_number=1,
+            book_id=1,
+        )
+        tmp_db.upsert_timeline_event(
+            event_key="ev-book-2",
+            description="第二卷时间线事件",
+            chapter_number=1,
+            book_id=second_book_id,
+        )
+
+        client = _make_client(tmp_db)
+
+        resp_default = client.get("/api/world/canon?book_id=1")
+        assert resp_default.status_code == 200
+        default_body = resp_default.json()
+        default_timeline = default_body["timeline"]
+        assert len(default_timeline) == 1
+        assert default_timeline[0]["event_key"] == "ev-book-1"
+        assert len(default_body["characters"]) == 1
+        assert default_body["characters"][0]["description"] == "默认书角色"
+        assert len(default_body["world_rules"]) == 1
+        assert default_body["world_rules"][0]["description"] == "默认书规则"
+        assert len(default_body["foreshadowing"]) == 1
+        assert default_body["foreshadowing"][0]["description"] == "默认书伏笔"
+
+        resp_second = client.get(f"/api/world/canon?book_id={second_book_id}")
+        assert resp_second.status_code == 200
+        second_body = resp_second.json()
+        second_timeline = second_body["timeline"]
+        assert len(second_timeline) == 1
+        assert second_timeline[0]["event_key"] == "ev-book-2"
+        assert len(second_body["characters"]) == 1
+        assert second_body["characters"][0]["description"] == "第二卷角色"
+        assert len(second_body["world_rules"]) == 1
+        assert second_body["world_rules"][0]["description"] == "第二卷规则"
+        assert len(second_body["foreshadowing"]) == 1
+        assert second_body["foreshadowing"][0]["description"] == "第二卷伏笔"
+
+    def test_world_staging_can_filter_by_book_id(self, tmp_db: Database) -> None:
+        second_book_id = tmp_db.create_book(name="第三卷", language="zh-CN")
+
+        tmp_db.add_staging_change(
+            change_type="upsert",
+            entity_type="character",
+            entity_key="hero-default",
+            proposed_data={"name": "hero-default"},
+            book_id=1,
+        )
+        tmp_db.add_staging_change(
+            change_type="upsert",
+            entity_type="character",
+            entity_key="hero-third",
+            proposed_data={"name": "hero-third"},
+            book_id=second_book_id,
+        )
+
+        client = _make_client(tmp_db)
+
+        resp_default = client.get("/api/world/staging?status=pending&book_id=1")
+        assert resp_default.status_code == 200
+        data_default = resp_default.json()
+        assert len(data_default) == 1
+        assert data_default[0]["entity_key"] == "hero-default"
+
+        resp_second = client.get(
+            f"/api/world/staging?status=pending&book_id={second_book_id}"
+        )
+        assert resp_second.status_code == 200
+        data_second = resp_second.json()
+        assert len(data_second) == 1
+        assert data_second[0]["entity_key"] == "hero-third"

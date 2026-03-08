@@ -43,7 +43,7 @@ def _validate_llm_key_prerequisites(loop: Any) -> None:
         )
 
 
-def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int) -> None:
+def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int, book_id: int) -> None:
     """后台线程函数：初始化 RunLoop 并逐章生成，将进度写入任务日志。
 
     此函数在独立线程中运行。若服务热重载/重启，运行中的任务会被标记为中断，
@@ -56,9 +56,10 @@ def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int) -> 
     task.add_log("任务开始：初始化生成器…")
 
     try:
-        loop = RunLoop(config_path=config_path)
+        loop = RunLoop(config_path=config_path, book_id=book_id)
         task.add_log(f"配置来源：{config_path}")
         task.add_log(f"数据库路径：{loop._config.database.path}")
+        task.add_log(f"目标书籍：book_id={book_id}")
         task.add_log(
             "生效模型："
             f"写作={loop._config.llm.provider}/{loop._config.llm.model}；"
@@ -71,7 +72,7 @@ def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int) -> 
         task.add_log("加载世界种子…")
         loop.load_world_seed()
 
-        existing = loop._db.list_chapters()
+        existing = loop._db.list_chapters(book_id=book_id)
         start_chapter = len(existing) + 1
         end_chapter = start_chapter + chapter_count - 1
 
@@ -84,9 +85,22 @@ def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int) -> 
                 on_writer_delta=task.append_preview,
                 on_stage=task.add_log,
             )
+
+            # 仅在章节成功落库后推进任务进度，避免出现“已完成但章节列表为空”。
+            persisted = loop._db.get_chapter(chapter_number, book_id=book_id)
+            if not persisted:
+                raise RuntimeError(
+                    f"第 {chapter_number} 章未成功写入数据库，任务终止。"
+                )
+
             task.flush_preview()
             task.current_chapter = i
             task.add_log(f"第 {chapter_number} 章完成 ({i}/{chapter_count})")
+
+        if task.current_chapter != chapter_count:
+            raise RuntimeError(
+                "任务状态异常：章节写入数量与目标不一致，已阻止标记为完成。"
+            )
 
         task.status = "completed"
         task.add_log(f"全部 {chapter_count} 章生成完毕。")
@@ -97,12 +111,12 @@ def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int) -> 
         task.add_log(f"生成失败：{exc}")
 
 
-def start_run(config_path: str, chapter_count: int) -> dict[str, Any]:
+def start_run(config_path: str, chapter_count: int, book_id: int = 1) -> dict[str, Any]:
     """创建后台生成任务，立即返回任务信息。"""
     task = registry.create(total_chapters=chapter_count)
     thread = threading.Thread(
         target=_run_in_background,
-        args=(task, config_path, chapter_count),
+        args=(task, config_path, chapter_count, book_id),
         daemon=True,
         name=f"poiesis-run-{task.task_id[:8]}",
     )

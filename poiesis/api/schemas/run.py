@@ -14,6 +14,7 @@ class RunRequest(BaseModel):
     """启动写作任务请求体。"""
 
     chapter_count: int = 1
+    book_id: int = 1
 
 
 class RunResponse(BaseModel):

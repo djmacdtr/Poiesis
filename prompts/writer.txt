@@ -1,24 +1,24 @@
-You are a literary author writing chapter {chapter_number} of an ongoing novel.
+你正在创作一部长篇小说的第 {chapter_number} 章。
 
-Chapter Plan:
+章节计划：
 {plan}
 
-World Rules and Facts:
+世界规则与既有事实：
 {world_context}
 
-Relevant Previous Context:
+相关历史上下文：
 {relevant_context}
 
-Instructions:
-- Write the complete chapter following the plan exactly.
-- Target {target_word_count} words. Do not pad; do not truncate prematurely.
-- Maintain consistent, distinctive character voices throughout.
-- Honor ALL world rules without exception, especially immutable ones.
-- Plant foreshadowing elements specified in the plan naturally within the prose.
-- Do not introduce new major world facts beyond the plan's new_facts_budget.
-- Begin with the opening_hook suggested in the plan, or an equally compelling line.
-- End the chapter with a narrative hook that compels the reader forward.
-- Use vivid sensory detail. Show, don't tell.
-- Avoid purple prose and unnecessary repetition.
+写作要求：
+- 严格遵循章节计划，输出完整章节正文。
+- 目标字数约为 {target_word_count}，不要为了凑字而注水，也不要过早收束。
+- 保持角色说话方式和行为气质稳定且可区分。
+- 严格遵守所有世界规则，尤其是不可变规则。
+- 将计划中的伏笔自然埋入叙事，不要生硬说明。
+- 不要超出计划的事实预算新增重大设定。
+- 章节开头应使用计划中的 opening_hook，或同等吸引力的开场。
+- 章节结尾需保留推进后续剧情的钩子。
+- 优先使用具象描写与行动呈现，减少空泛概述。
+- 避免辞藻堆砌与重复表达。
 
-Write only the chapter content. No title heading, no meta-commentary, no author notes.
+只输出章节正文，不要输出标题、注释、解释或作者说明。

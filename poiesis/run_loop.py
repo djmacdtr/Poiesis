@@ -70,15 +70,22 @@ def _build_llm(
 class RunLoop:
     """Orchestrates the full Poiesis generation pipeline."""
 
-    def __init__(self, config_path: str = "config.yaml") -> None:
+    def __init__(self, config_path: str = "config.yaml", book_id: int = 1) -> None:
         """Initialise the run loop from a config file.
 
         Args:
             config_path: Path to the YAML configuration file.
         """
         self._config: Config = load_config(config_path)
+        self._book_id = book_id
         self._db = Database(self._config.database.path)
         self._db.initialize_schema()
+        self._book = self._db.get_book(self._book_id)
+        if self._book is None:
+            raise ValueError(f"book_id={self._book_id} 不存在")
+        self._language = str(self._book.get("language") or "zh-CN")
+        self._style_prompt = str(self._book.get("style_prompt") or "")
+        self._naming_policy = str(self._book.get("naming_policy") or "localized_zh")
         self._apply_model_config_overrides_from_db()
 
         self._vs = VectorStore(
@@ -106,20 +113,38 @@ class RunLoop:
 
         gen = self._config.generation
         self._planner = ChapterPlanner(
-            vector_store=self._vs, new_rule_budget=gen.new_rule_budget
+            vector_store=self._vs,
+            new_rule_budget=gen.new_rule_budget,
+            language=self._language,
+            style_prompt=self._style_prompt,
+            naming_policy=self._naming_policy,
         )
         self._writer = ChapterWriter(
-            vector_store=self._vs, target_word_count=gen.target_word_count
+            vector_store=self._vs,
+            target_word_count=gen.target_word_count,
+            language=self._language,
+            style_prompt=self._style_prompt,
+            naming_policy=self._naming_policy,
         )
-        self._extractor = FactExtractor()
-        self._verifier = ConsistencyVerifier(new_rule_budget=gen.new_rule_budget)
-        self._editor = ChapterEditor()
+        self._extractor = FactExtractor(language=self._language)
+        self._verifier = ConsistencyVerifier(
+            new_rule_budget=gen.new_rule_budget,
+            language=self._language,
+        )
+        self._editor = ChapterEditor(
+            language=self._language,
+            style_prompt=self._style_prompt,
+            naming_policy=self._naming_policy,
+        )
         self._merger = WorldMerger()
-        self._summarizer = ChapterSummarizer()
+        self._summarizer = ChapterSummarizer(
+            language=self._language,
+            style_prompt=self._style_prompt,
+        )
         self._originality = OriginalityChecker()
 
         self._world = WorldModel()
-        self._world.load_from_db(self._db)
+        self._world.load_from_db(self._db, book_id=self._book_id)
 
     def _apply_model_config_overrides_from_db(self) -> None:
         """Apply llm/planner_llm provider/model overrides from system_config."""
@@ -191,12 +216,14 @@ class RunLoop:
             self._db.upsert_world_rule(
                 rule_key=rule["key"],
                 description=rule["description"],
+                book_id=self._book_id,
                 is_immutable=rule.get("is_immutable", True),
             )
 
         for char in seed.get("characters", []):
             self._db.upsert_character(
                 name=char["name"],
+                book_id=self._book_id,
                 description=char.get("description"),
                 core_motivation=char.get("core_motivation"),
                 attributes=char.get("attributes", {}),
@@ -204,6 +231,7 @@ class RunLoop:
 
         for event in seed.get("timeline_events", []):
             self._db.upsert_timeline_event(
+                book_id=self._book_id,
                 event_key=event["event_key"],
                 description=event["description"],
                 timestamp_in_world=event.get("timestamp_in_world"),
@@ -213,11 +241,12 @@ class RunLoop:
             self._db.upsert_foreshadowing(
                 hint_key=hint["hint_key"],
                 description=hint["description"],
+                book_id=self._book_id,
                 status=hint.get("status", "pending"),
             )
 
         # 刷新内存中的世界模型
-        self._world.load_from_db(self._db)
+        self._world.load_from_db(self._db, book_id=self._book_id)
         console.print(f"[green]World seed loaded from {path}[/green]")
 
     # ------------------------------------------------------------------
@@ -232,7 +261,7 @@ class RunLoop:
                 ``None`` uses the config value.
         """
         limit = max_chapters or self._config.generation.max_chapters
-        existing = self._db.list_chapters()
+        existing = self._db.list_chapters(book_id=self._book_id)
         start_chapter = len(existing) + 1
 
         console.print(
@@ -363,6 +392,7 @@ class RunLoop:
             # 第六步：持久化章节到数据库
             _report_stage(f"第 {chapter_number} 章：写入章节数据库…")
             self._db.upsert_chapter(
+                book_id=self._book_id,
                 chapter_number=chapter_number,
                 content=content,
                 title=plan.get("title"),
@@ -377,6 +407,7 @@ class RunLoop:
             approved: list[dict[str, Any]] = []
             for change in proposed_changes:
                 change_id = self._db.add_staging_change(
+                    book_id=self._book_id,
                     change_type=change["change_type"],
                     entity_type=change["entity_type"],
                     entity_key=change["entity_key"],
@@ -398,6 +429,7 @@ class RunLoop:
                 chapter_number, content, plan, self._world, self._planner_llm
             )
             self._db.upsert_chapter_summary(
+                book_id=self._book_id,
                 chapter_number=chapter_number,
                 summary=summary["summary"],
                 key_events=summary.get("key_events", []),
@@ -417,5 +449,5 @@ class RunLoop:
 
     def _get_previous_summaries(self) -> list[str]:
         """Return narrative summaries for all completed chapters."""
-        rows = self._db.list_chapter_summaries()
+        rows = self._db.list_chapter_summaries(book_id=self._book_id)
         return [r["summary"] for r in rows if r.get("summary")]

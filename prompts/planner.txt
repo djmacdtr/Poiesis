@@ -1,26 +1,26 @@
-You are a master story architect planning chapter {chapter_number} of an ongoing narrative.
+你是一名小说结构师，正在规划第 {chapter_number} 章。
 
-World Context:
+世界上下文：
 {world_context}
 
-Previous Chapter Summaries:
+前文摘要：
 {previous_summaries}
 
-Your task: Create a detailed chapter plan as JSON with:
-- title: chapter title (string)
-- summary: 2-3 sentence chapter summary (string)
-- key_events: list of 3-5 key plot events (array of strings)
-- character_arcs: dict mapping character names to their arc in this chapter (object)
-- new_facts_budget: number of new world facts to introduce, max {new_rule_budget} (integer)
-- foreshadowing_hints: list of foreshadowing elements to plant or resolve (array of strings)
-- tone: narrative tone for this chapter, e.g. "tense", "melancholic", "hopeful" (string)
-- opening_hook: suggested first line or image for the chapter (string)
+请输出一个详细的 JSON 章节计划，字段必须包含：
+- title: 章节标题（string）
+- summary: 2-3 句章节概述（string）
+- key_events: 3-5 个关键剧情事件（array[string]）
+- character_arcs: 角色名到本章弧线的映射（object）
+- new_facts_budget: 本章允许新增设定数量，最大 {new_rule_budget}（integer）
+- foreshadowing_hints: 本章需要埋设或回收的伏笔（array[string]）
+- tone: 叙事基调，如“紧张”“沉郁”“希望感”（string）
+- opening_hook: 建议开场句或开场意象（string）
 
-Rules:
-- Honour all IMMUTABLE world rules without exception.
-- Do not reveal foreshadowing elements prematurely.
-- Keep character motivations consistent with canon.
-- Introduce at most {new_rule_budget} new world facts.
-- Each key event must be a concrete scene, not a vague statement.
+规则：
+- 不可违反任何不可变世界规则。
+- 不得过早揭示仍应保密的伏笔信息。
+- 角色行为必须与既有核心动机一致。
+- 新增设定数量不得超过 {new_rule_budget}。
+- 每个 key_event 必须是可落地的具体场景，不可空泛。
 
-Return ONLY valid JSON. No markdown fences, no commentary.
+只返回合法 JSON，不要返回 markdown，不要附加说明。

@@ -20,6 +20,9 @@ class ChapterWriter:
         vector_store: VectorStore,
         target_word_count: int = 3000,
         prompt_path: str | None = None,
+        language: str = "zh-CN",
+        style_prompt: str = "",
+        naming_policy: str = "localized_zh",
     ) -> None:
         """Initialise the writer.
 
@@ -31,6 +34,9 @@ class ChapterWriter:
         self._vs = vector_store
         self._target_word_count = target_word_count
         self._prompt_path = Path(prompt_path) if prompt_path else _PROMPT_PATH
+        self._language = language
+        self._style_prompt = style_prompt.strip()
+        self._naming_policy = naming_policy
 
     def write(
         self,
@@ -51,10 +57,10 @@ class ChapterWriter:
         Returns:
             Full chapter text as a string.
         """
-        world_context = world.world_context_summary()
+        world_context = world.world_context_summary(language=self._language)
 
         # 利用章节摘要作为查询，从向量存储中拉取相关背景信息
-        query = plan.get("summary", f"chapter {chapter_number}")
+        query = plan.get("summary", f"第 {chapter_number} 章")
         relevant = self._vs.search(query, k=8)
         relevant_context = (
             "\n".join(f"- {r['text']}" for r in relevant) if relevant else "None."
@@ -72,10 +78,7 @@ class ChapterWriter:
             target_word_count=self._target_word_count,
         )
 
-        system = (
-            "You are a literary author writing a chapter of an ongoing novel. "
-            "Write vivid, engaging prose that honours the plan and world rules exactly."
-        )
+        system = self._build_system_prompt()
         if on_delta is None:
             return llm.complete(prompt, system=system)
 
@@ -86,6 +89,24 @@ class ChapterWriter:
             chunks.append(delta)
             on_delta(delta)
         return "".join(chunks)
+
+    def _build_system_prompt(self) -> str:
+        language_hint = (
+            "请使用简体中文创作。"
+            if self._language.lower().startswith("zh")
+            else "Use fluent English prose."
+        )
+        naming_hint = (
+            "专有名词默认采用中文化表达（可音译或意译），避免大段英文名词堆叠。"
+            if self._naming_policy == "localized_zh"
+            else "Proper nouns may keep their original form when context requires."
+        )
+        style_hint = self._style_prompt or "文风要求：叙事连贯，情绪与节奏稳定。"
+        return (
+            "你是一位长篇小说作者，需要严格遵循章节计划和世界规则完成正文。"
+            f"{language_hint}{naming_hint}{style_hint}"
+            "只输出章节正文，不要输出解释或标注。"
+        )
 
     def _load_template(self) -> str:
         """Load the writer prompt template from disk."""

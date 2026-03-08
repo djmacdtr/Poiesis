@@ -12,8 +12,8 @@ export interface PruneTaskHistoryResponse {
 }
 
 /** 启动写作任务 */
-export function startRun(chapterCount: number): Promise<RunResponse> {
-  return post<RunResponse>('/api/run', { chapter_count: chapterCount })
+export function startRun(chapterCount: number, bookId: number = 1): Promise<RunResponse> {
+  return post<RunResponse>('/api/run', { chapter_count: chapterCount, book_id: bookId })
 }
 
 /** 查询任务状态（轮询用） */

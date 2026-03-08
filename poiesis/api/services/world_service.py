@@ -7,12 +7,12 @@ from typing import Any
 from poiesis.db.database import Database
 
 
-def get_canon(db: Database) -> dict[str, Any]:
+def get_canon(db: Database, book_id: int | None = None) -> dict[str, Any]:
     """读取完整的 Canon 快照（世界规则、角色、时间线、伏笔）。"""
-    world_rules = db.list_world_rules()
-    characters = db.list_characters()
-    timeline = db.list_timeline_events()
-    foreshadowing = db.list_foreshadowing()
+    world_rules = db.list_world_rules(book_id=book_id)
+    characters = db.list_characters(book_id=book_id)
+    timeline = db.list_timeline_events(book_id=book_id)
+    foreshadowing = db.list_foreshadowing(book_id=book_id)
 
     # 标准化 is_immutable：SQLite 存储为 0/1，转换为 bool
     for rule in world_rules:
@@ -42,9 +42,13 @@ def get_canon(db: Database) -> dict[str, Any]:
     }
 
 
-def list_staging(db: Database, status: str | None = None) -> list[dict[str, Any]]:
+def list_staging(
+    db: Database,
+    status: str | None = None,
+    book_id: int | None = None,
+) -> list[dict[str, Any]]:
     """返回 staging 变更列表。status 为 None 时返回全部。"""
-    rows = db.list_staging_changes(status=status)
+    rows = db.list_staging_changes(status=status, book_id=book_id)
     for row in rows:
         row.setdefault("rejection_reason", None)
         row.setdefault("source_chapter", None)

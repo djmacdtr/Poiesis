@@ -61,10 +61,12 @@ class WorldMerger:
         """Write the change to the appropriate database table."""
         entity_type: str = change["entity_type"]
         data: dict[str, Any] = change["proposed_data"]
+        book_id = int(change.get("book_id") or 1)
 
         if entity_type == "character":
             db.upsert_character(
                 name=data.get("name", change["entity_key"]),
+                book_id=book_id,
                 description=data.get("description"),
                 core_motivation=data.get("core_motivation"),
                 attributes=data.get("attributes", {}),
@@ -74,6 +76,7 @@ class WorldMerger:
             db.upsert_world_rule(
                 rule_key=data.get("rule_key", change["entity_key"]),
                 description=data.get("description", ""),
+                book_id=book_id,
                 is_immutable=bool(data.get("is_immutable", False)),
                 category=data.get("category"),
             )
@@ -81,6 +84,7 @@ class WorldMerger:
             db.upsert_timeline_event(
                 event_key=data.get("event_key", change["entity_key"]),
                 description=data.get("description", ""),
+                book_id=book_id,
                 chapter_number=data.get("chapter_number"),
                 characters_involved=data.get("characters_involved", []),
                 timestamp_in_world=data.get("timestamp_in_world"),
@@ -89,6 +93,7 @@ class WorldMerger:
             db.upsert_foreshadowing(
                 hint_key=data.get("hint_key", change["entity_key"]),
                 description=data.get("description", ""),
+                book_id=book_id,
                 introduced_in_chapter=data.get("introduced_in_chapter"),
                 resolved_in_chapter=data.get("resolved_in_chapter"),
                 status=data.get("status", "pending"),

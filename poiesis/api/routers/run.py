@@ -32,9 +32,12 @@ def start_run(
     """启动后台写作任务，立即返回 task_id（非阻塞，仅 admin 可操作）。"""
     if body.chapter_count < 1:
         raise HTTPException(status_code=422, detail="chapter_count 必须大于 0")
+    if body.book_id < 1:
+        raise HTTPException(status_code=422, detail="book_id 必须大于 0")
     task_dict = run_service.start_run(
         config_path=_config_path(),
         chapter_count=body.chapter_count,
+        book_id=body.book_id,
     )
     return RunResponse(
         task_id=task_dict["task_id"],
