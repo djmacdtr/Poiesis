@@ -77,6 +77,8 @@ class Database:
 
     def _run_post_schema_migrations(self, conn: sqlite3.Connection) -> None:
         """Apply additive migrations for legacy databases."""
+        # PRAGMA foreign_keys cannot be toggled inside an active transaction.
+        conn.commit()
         self._ensure_default_book(conn)
         self._ensure_column(conn, "characters", "book_id", "INTEGER NOT NULL DEFAULT 1")
         self._ensure_column(conn, "world_rules", "book_id", "INTEGER NOT NULL DEFAULT 1")
@@ -89,24 +91,31 @@ class Database:
             "INTEGER NOT NULL DEFAULT 1",
         )
 
-        if not self._has_composite_unique(conn, "chapters", ["book_id", "chapter_number"]):
-            self._migrate_chapters_table(conn)
+        # Rebuild migrations replace tables in-place; temporarily disable FK checks
+        # to avoid transient parent/child dependency failures during swap.
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            if not self._has_composite_unique(conn, "chapters", ["book_id", "chapter_number"]):
+                self._migrate_chapters_table(conn)
 
-        if not self._has_composite_unique(
-            conn,
-            "chapter_summaries",
-            ["book_id", "chapter_number"],
-        ):
-            self._migrate_chapter_summaries_table(conn)
+            if not self._has_composite_unique(
+                conn,
+                "chapter_summaries",
+                ["book_id", "chapter_number"],
+            ):
+                self._migrate_chapter_summaries_table(conn)
 
-        if not self._has_composite_unique(conn, "characters", ["book_id", "name"]):
-            self._migrate_characters_table(conn)
+            if not self._has_composite_unique(conn, "characters", ["book_id", "name"]):
+                self._migrate_characters_table(conn)
 
-        if not self._has_composite_unique(conn, "world_rules", ["book_id", "rule_key"]):
-            self._migrate_world_rules_table(conn)
+            if not self._has_composite_unique(conn, "world_rules", ["book_id", "rule_key"]):
+                self._migrate_world_rules_table(conn)
 
-        if not self._has_composite_unique(conn, "foreshadowing", ["book_id", "hint_key"]):
-            self._migrate_foreshadowing_table(conn)
+            if not self._has_composite_unique(conn, "foreshadowing", ["book_id", "hint_key"]):
+                self._migrate_foreshadowing_table(conn)
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
 
         conn.execute("UPDATE characters SET book_id = 1 WHERE book_id IS NULL")
         conn.execute("UPDATE world_rules SET book_id = 1 WHERE book_id IS NULL")
@@ -166,6 +175,8 @@ class Database:
         self._ensure_column(conn, "chapters", "book_id", "INTEGER NOT NULL DEFAULT 1")
         conn.executescript(
             """
+            DROP TABLE IF EXISTS chapters_v2;
+
             CREATE TABLE IF NOT EXISTS chapters_v2 (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 book_id INTEGER NOT NULL DEFAULT 1,
@@ -186,7 +197,10 @@ class Database:
             )
             SELECT
                 id,
-                COALESCE(book_id, 1),
+                CASE
+                    WHEN book_id IS NULL OR book_id NOT IN (SELECT id FROM books) THEN 1
+                    ELSE book_id
+                END,
                 chapter_number,
                 title,
                 content,
@@ -212,6 +226,8 @@ class Database:
         )
         conn.executescript(
             """
+            DROP TABLE IF EXISTS chapter_summaries_v2;
+
             CREATE TABLE IF NOT EXISTS chapter_summaries_v2 (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 book_id INTEGER NOT NULL DEFAULT 1,
@@ -237,7 +253,10 @@ class Database:
             )
             SELECT
                 id,
-                COALESCE(book_id, 1),
+                CASE
+                    WHEN book_id IS NULL OR book_id NOT IN (SELECT id FROM books) THEN 1
+                    ELSE book_id
+                END,
                 chapter_number,
                 summary,
                 key_events,
@@ -258,6 +277,8 @@ class Database:
         self._ensure_column(conn, "characters", "book_id", "INTEGER NOT NULL DEFAULT 1")
         conn.executescript(
             """
+            DROP TABLE IF EXISTS characters_v2;
+
             CREATE TABLE IF NOT EXISTS characters_v2 (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 book_id INTEGER NOT NULL DEFAULT 1,
@@ -277,7 +298,10 @@ class Database:
             )
             SELECT
                 id,
-                COALESCE(book_id, 1),
+                CASE
+                    WHEN book_id IS NULL OR book_id NOT IN (SELECT id FROM books) THEN 1
+                    ELSE book_id
+                END,
                 name,
                 description,
                 core_motivation,
@@ -297,6 +321,8 @@ class Database:
         self._ensure_column(conn, "world_rules", "book_id", "INTEGER NOT NULL DEFAULT 1")
         conn.executescript(
             """
+            DROP TABLE IF EXISTS world_rules_v2;
+
             CREATE TABLE IF NOT EXISTS world_rules_v2 (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 book_id INTEGER NOT NULL DEFAULT 1,
@@ -314,7 +340,10 @@ class Database:
             )
             SELECT
                 id,
-                COALESCE(book_id, 1),
+                CASE
+                    WHEN book_id IS NULL OR book_id NOT IN (SELECT id FROM books) THEN 1
+                    ELSE book_id
+                END,
                 rule_key,
                 description,
                 is_immutable,
@@ -332,6 +361,8 @@ class Database:
         self._ensure_column(conn, "foreshadowing", "book_id", "INTEGER NOT NULL DEFAULT 1")
         conn.executescript(
             """
+            DROP TABLE IF EXISTS foreshadowing_v2;
+
             CREATE TABLE IF NOT EXISTS foreshadowing_v2 (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 book_id INTEGER NOT NULL DEFAULT 1,
@@ -357,7 +388,10 @@ class Database:
             )
             SELECT
                 id,
-                COALESCE(book_id, 1),
+                CASE
+                    WHEN book_id IS NULL OR book_id NOT IN (SELECT id FROM books) THEN 1
+                    ELSE book_id
+                END,
                 hint_key,
                 description,
                 introduced_in_chapter,

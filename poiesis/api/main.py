@@ -53,6 +53,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",  # Vite 默认开发端口
         "http://127.0.0.1:5173",  # Vite 默认开发端口（IP 访问）
+        "http://localhost:18080",  # 本地 docker web 访问端口
+        "http://127.0.0.1:18080",  # 本地 docker web 访问端口（IP）
         "http://localhost:3000",  # 备用端口
         "http://127.0.0.1:3000",  # 备用端口（IP 访问）
     ],
