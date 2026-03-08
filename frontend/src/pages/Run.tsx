@@ -58,6 +58,18 @@ function getCurrentStepText(task: TaskDetail): string {
   return '等待任务启动'
 }
 
+function getPreviewPlaceholder(task: TaskDetail | undefined, isPreviewStreaming: boolean): string {
+  if (!task) return '等待任务启动…'
+  if (task.status === 'running' || task.status === 'pending') {
+    if (isPreviewStreaming) return '正在接收模型正文片段…'
+    return '正文流已暂停，任务仍在后处理（提取/校验/入库）…'
+  }
+  if (task.status === 'completed') return '任务已完成，可在章节列表查看正文。'
+  if (task.status === 'failed') return task.error ?? '任务失败，未收到可用正文片段。'
+  if (task.status === 'interrupted') return '任务已中断，请重试。'
+  return '等待模型返回正文片段…'
+}
+
 export default function Run() {
   const [chapterCount, setChapterCount] = useState(1)
   const [taskId, setTaskId] = useState<string | null>(() => {
@@ -507,7 +519,7 @@ export default function Run() {
                 {isPreviewStreaming && <span className="text-indigo-600">接收中…</span>}
               </div>
               <div className="min-h-24 max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 text-xs leading-5 text-gray-700">
-                {previewText || '等待模型返回正文片段…'}
+                {previewText || getPreviewPlaceholder(task, isPreviewStreaming)}
               </div>
             </div>
           )}

@@ -40,7 +40,6 @@ services:
       - POIESIS_ADMIN_PASS=${POIESIS_ADMIN_PASS:-admin}
     volumes:
       - ./:/app
-      - ./data:/app/data
       - ./docker/config.yaml:/app/config.yaml:ro
       - ./examples:/app/examples:ro
     ports:

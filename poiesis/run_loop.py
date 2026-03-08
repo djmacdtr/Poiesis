@@ -252,8 +252,13 @@ class RunLoop:
         self,
         chapter_number: int,
         on_writer_delta: Callable[[str], None] | None = None,
+        on_stage: Callable[[str], None] | None = None,
     ) -> None:
         """Run the full pipeline for a single chapter."""
+        def _report_stage(message: str) -> None:
+            if on_stage:
+                on_stage(message)
+
         rewrite_retries = self._config.generation.rewrite_retries
 
         console.rule(f"[bold]Chapter {chapter_number}[/bold]")
@@ -265,6 +270,7 @@ class RunLoop:
             transient=True,
         ) as progress:
             # 第一步：规划章节
+            _report_stage(f"第 {chapter_number} 章：规划中…")
             task = progress.add_task("Planning chapter...", total=None)
             summaries = self._get_previous_summaries()
             plan = self._planner.plan(
@@ -274,6 +280,7 @@ class RunLoop:
             console.print(f"  [cyan]Plan:[/cyan] {plan.get('title', '')}")
 
             # 第二步：写作章节
+            _report_stage(f"第 {chapter_number} 章：写作中…")
             task = progress.add_task("Writing chapter...", total=None)
             content = self._writer.write(
                 chapter_number,
@@ -287,6 +294,7 @@ class RunLoop:
             console.print(f"  [cyan]Written:[/cyan] {word_count} words")
 
             # 第三步：检查原创性
+            _report_stage(f"第 {chapter_number} 章：原创性检查中…")
             task = progress.add_task("Checking originality...", total=None)
             orig_result = self._originality.check(content, self._vs)
             progress.remove_task(task)
@@ -297,6 +305,7 @@ class RunLoop:
                 )
 
             # 第四步：提取事实
+            _report_stage(f"第 {chapter_number} 章：事实提取中…")
             task = progress.add_task("Extracting facts...", total=None)
             proposed_changes = self._extractor.extract(
                 chapter_number, content, self._world, self._planner_llm
@@ -307,6 +316,9 @@ class RunLoop:
             # 第五步：一致性验证 + 编辑循环
             passed = False
             for attempt in range(rewrite_retries + 1):
+                _report_stage(
+                    f"第 {chapter_number} 章：一致性校验中（第 {attempt + 1} 次）…"
+                )
                 task = progress.add_task(
                     f"Verifying (attempt {attempt + 1})...", total=None
                 )
@@ -331,6 +343,7 @@ class RunLoop:
                 )
 
                 if attempt < rewrite_retries:
+                    _report_stage(f"第 {chapter_number} 章：自动修订中…")
                     task = progress.add_task("Editing chapter...", total=None)
                     content = self._editor.edit(
                         chapter_number,
@@ -348,6 +361,7 @@ class RunLoop:
                 )
 
             # 第六步：持久化章节到数据库
+            _report_stage(f"第 {chapter_number} 章：写入章节数据库…")
             self._db.upsert_chapter(
                 chapter_number=chapter_number,
                 content=content,
@@ -358,6 +372,7 @@ class RunLoop:
             )
 
             # 第七步：持久化暂存变更并批量批准
+            _report_stage(f"第 {chapter_number} 章：合并世界状态…")
             task = progress.add_task("Merging world changes...", total=None)
             approved: list[dict[str, Any]] = []
             for change in proposed_changes:
@@ -377,6 +392,7 @@ class RunLoop:
             console.print(f"  [cyan]Merged:[/cyan] {merged} world changes")
 
             # 第八步：生成章节摘要
+            _report_stage(f"第 {chapter_number} 章：生成摘要与索引…")
             task = progress.add_task("Summarizing...", total=None)
             summary = self._summarizer.summarize(
                 chapter_number, content, plan, self._world, self._planner_llm
@@ -395,6 +411,7 @@ class RunLoop:
                 metadata={"chapter_number": chapter_number},
             )
             progress.remove_task(task)
+            _report_stage(f"第 {chapter_number} 章：流水线完成")
 
         console.print(f"  [bold green]Chapter {chapter_number} complete.[/bold green]\n")
 

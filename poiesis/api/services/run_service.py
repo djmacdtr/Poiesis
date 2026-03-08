@@ -78,9 +78,12 @@ def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int) -> 
         task.add_log(f"准备生成第 {start_chapter} 至第 {end_chapter} 章…")
 
         for i, chapter_number in enumerate(range(start_chapter, end_chapter + 1), start=1):
-            task.add_log(f"开始规划第 {chapter_number} 章…")
             task.reset_preview()
-            loop._generate_chapter(chapter_number, on_writer_delta=task.append_preview)
+            loop._generate_chapter(
+                chapter_number,
+                on_writer_delta=task.append_preview,
+                on_stage=task.add_log,
+            )
             task.flush_preview()
             task.current_chapter = i
             task.add_log(f"第 {chapter_number} 章完成 ({i}/{chapter_count})")
