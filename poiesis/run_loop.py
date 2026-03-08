@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from poiesis.config import Config, load_config
+from poiesis.config import Config, load_config, resolve_world_seed_path
 from poiesis.db.database import Database
 from poiesis.editor import ChapterEditor
 from poiesis.extractor import FactExtractor
@@ -195,6 +195,17 @@ class RunLoop:
     # Seed loading
     # ------------------------------------------------------------------
 
+    def _has_canon_seed_data(self) -> bool:
+        """Return True when current book already has canon seed data."""
+        return any(
+            (
+                len(self._db.list_world_rules(book_id=self._book_id)) > 0,
+                len(self._db.list_characters(book_id=self._book_id)) > 0,
+                len(self._db.list_timeline_events(book_id=self._book_id)) > 0,
+                len(self._db.list_foreshadowing(book_id=self._book_id)) > 0,
+            )
+        )
+
     def load_world_seed(self, seed_path: str | None = None) -> None:
         """Populate the database and world model from a world seed YAML.
 
@@ -204,7 +215,17 @@ class RunLoop:
         """
         import yaml
 
-        path = Path(seed_path or self._config.world_seed)
+        if seed_path is None:
+            if self._has_canon_seed_data():
+                console.print(
+                    "[cyan]Skip world seed auto-load: current book already has canon data.[/cyan]"
+                )
+                return
+            selected_seed = resolve_world_seed_path(self._language, self._config.world_seed)
+        else:
+            selected_seed = seed_path
+
+        path = Path(selected_seed)
         if not path.exists():
             console.print(f"[yellow]World seed not found at {path}, skipping.[/yellow]")
             return
