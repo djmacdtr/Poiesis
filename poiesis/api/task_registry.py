@@ -179,16 +179,20 @@ class TaskRegistry:
 
         storage_file = self._storage_file()
         storage_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = storage_file.with_suffix(storage_file.suffix + ".tmp")
         payload = json.dumps(snapshot, ensure_ascii=False, indent=2)
 
         # Windows 下并发写入同一路径时可能出现瞬时文件锁，做一次轻量重试。
         for attempt in range(2):
+            # 避免多线程共享同一个 .tmp 文件导致 replace 时丢失源文件。
+            tmp_path = storage_file.with_name(
+                f"{storage_file.name}.{uuid.uuid4().hex}.tmp"
+            )
             try:
                 tmp_path.write_text(payload, encoding="utf-8")
                 tmp_path.replace(storage_file)
                 return
             except PermissionError:
+                tmp_path.unlink(missing_ok=True)
                 if attempt == 1:
                     raise
                 time.sleep(0.02)
