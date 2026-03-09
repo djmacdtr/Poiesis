@@ -41,12 +41,13 @@ CREATE TABLE IF NOT EXISTS world_rules (
 CREATE TABLE IF NOT EXISTS timeline (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     book_id INTEGER NOT NULL DEFAULT 1,
-    event_key TEXT NOT NULL UNIQUE,
+    event_key TEXT NOT NULL,
     chapter_number INTEGER,
     description TEXT NOT NULL,
     characters_involved JSON DEFAULT '[]',
     timestamp_in_world TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(book_id, event_key),
     FOREIGN KEY (book_id) REFERENCES books(id)
 );
 

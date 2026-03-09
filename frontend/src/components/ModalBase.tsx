@@ -7,9 +7,11 @@ interface ModalBaseProps {
   open: boolean
   children: ReactNode
   maxWidthClass?: string
+  ariaLabelledBy?: string
+  ariaDescribedBy?: string
 }
 
-export function ModalBase({ open, children, maxWidthClass = 'max-w-md' }: ModalBaseProps) {
+export function ModalBase({ open, children, maxWidthClass = 'max-w-md', ariaLabelledBy, ariaDescribedBy }: ModalBaseProps) {
   if (!open) return null
 
   return (
@@ -17,6 +19,8 @@ export function ModalBase({ open, children, maxWidthClass = 'max-w-md' }: ModalB
       <div
         role="dialog"
         aria-modal="true"
+        aria-labelledby={ariaLabelledBy}
+        aria-describedby={ariaDescribedBy}
         className={`relative w-full rounded-2xl border border-gray-100 bg-white shadow-xl ${maxWidthClass}`}
       >
         {children}

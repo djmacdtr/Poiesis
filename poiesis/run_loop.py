@@ -59,12 +59,17 @@ def _build_llm(
             api_key=siliconflow_key,
             base_url=base_url or DEFAULT_SILICONFLOW_BASE_URL,
         )
-    return OpenAIClient(
-        model=cfg.model,
-        temperature=cfg.temperature,
-        max_tokens=cfg.max_tokens,
-        api_key=openai_key,
-        base_url=base_url,
+    if cfg.provider == "openai":
+        return OpenAIClient(
+            model=cfg.model,
+            temperature=cfg.temperature,
+            max_tokens=cfg.max_tokens,
+            api_key=openai_key,
+            base_url=base_url,
+        )
+    raise ValueError(
+        f"未知的 LLM provider：{cfg.provider!r}。"
+        f"支持的 provider：{', '.join(sorted(_ALLOWED_LLM_PROVIDERS))}。"
     )
 
 

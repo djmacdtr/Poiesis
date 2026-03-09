@@ -9,7 +9,7 @@ from typing import Literal
 import httpx
 
 from poiesis.api.schemas.system_config import SystemConfigRequest, SystemConfigStatus
-from poiesis.config import load_config
+from poiesis.config import Config, load_config
 from poiesis.crypto import decrypt, encrypt
 from poiesis.db.database import Database
 
@@ -229,11 +229,12 @@ def save_config(db: Database, req: SystemConfigRequest) -> SystemConfigStatus:
     return get_config_status(db)
 
 
-def get_config_status(db: Database) -> SystemConfigStatus:
+def get_config_status(db: Database, cfg: Config | None = None) -> SystemConfigStatus:
     """读取配置状态（不返回明文 Key）。
 
     Args:
         db: 数据库实例。
+        cfg: 预加载的 Config 实例；若为 None，则从环境变量指定的路径读取。
 
     Returns:
         配置状态对象。
@@ -284,7 +285,8 @@ def get_config_status(db: Database) -> SystemConfigStatus:
             pass
 
     config_path = os.environ.get("POIESIS_CONFIG", "config.yaml")
-    cfg = load_config(config_path)
+    if cfg is None:
+        cfg = load_config(config_path)
 
     llm_provider_effective = llm_provider or cfg.llm.provider
     llm_model_effective = llm_model or cfg.llm.model

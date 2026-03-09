@@ -25,7 +25,8 @@ def _validate_llm_key_prerequisites(loop: Any) -> None:
     ]
 
     for role, provider, model in checks:
-        key_name = _PROVIDER_TO_KEY.get(provider)
+        normalized_provider = provider.strip().lower() if provider else ""
+        key_name = _PROVIDER_TO_KEY.get(normalized_provider)
         if not key_name:
             continue
 

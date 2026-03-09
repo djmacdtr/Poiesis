@@ -174,24 +174,24 @@ class TaskRegistry:
         return Path(self._storage_path)
 
     def _persist(self) -> None:
-        with self._lock:
-            snapshot = [task.to_dict() for task in self._tasks.values()]
-
         storage_file = self._storage_file()
         storage_file.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = storage_file.with_suffix(storage_file.suffix + ".tmp")
-        payload = json.dumps(snapshot, ensure_ascii=False, indent=2)
 
-        # Windows 下并发写入同一路径时可能出现瞬时文件锁，做一次轻量重试。
-        for attempt in range(2):
-            try:
-                tmp_path.write_text(payload, encoding="utf-8")
-                tmp_path.replace(storage_file)
-                return
-            except PermissionError:
-                if attempt == 1:
-                    raise
-                time.sleep(0.02)
+        with self._lock:
+            snapshot = [task.to_dict() for task in self._tasks.values()]
+            payload = json.dumps(snapshot, ensure_ascii=False, indent=2)
+
+            # Windows 下并发写入同一路径时可能出现瞬时文件锁，做一次轻量重试。
+            for attempt in range(2):
+                try:
+                    tmp_path.write_text(payload, encoding="utf-8")
+                    tmp_path.replace(storage_file)
+                    return
+                except PermissionError:
+                    if attempt == 1:
+                        raise
+                    time.sleep(0.02)
 
     def _load_from_storage(self) -> None:
         storage_file = self._storage_file()
@@ -210,22 +210,31 @@ class TaskRegistry:
         for item in raw:
             if not isinstance(item, dict):
                 continue
-            task = TaskInfo.from_dict(item, on_change=self._persist)
+            # Load without on_change to prevent premature persist calls before tasks
+            # are registered in self._tasks (which would produce an incomplete snapshot).
+            task = TaskInfo.from_dict(item)
             if task.status in ("pending", "running"):
                 recovered = True
-                task.status = "interrupted"
-                task.error = "服务发生热重载或重启，原任务已中断，请重新发起生成。"
-                task.add_log(task.error)
-            # 防御性修复：历史数据中出现“已完成但 0 进度”时，标记为异常终态，避免误导前端。
+                error_msg = "服务发生热重载或重启，原任务已中断，请重新发起生成。"
+                task._status = "interrupted"
+                task._error = error_msg
+                task._logs.append(error_msg)
+                task.updated_at = datetime.now(UTC).isoformat()
+            # 防御性修复：历史数据中出现"已完成但 0 进度"时，标记为异常终态，避免误导前端。
             elif (
                 task.status == "completed" and task.total_chapters > 0 and task.current_chapter <= 0
             ):
                 recovered = True
-                task.status = "failed"
-                task.error = _INVALID_COMPLETED_MSG
-                if not task.logs:
-                    task.add_log(_INVALID_COMPLETED_MSG)
+                task._status = "failed"
+                task._error = _INVALID_COMPLETED_MSG
+                if not task._logs:
+                    task._logs.append(_INVALID_COMPLETED_MSG)
+                task.updated_at = datetime.now(UTC).isoformat()
             self._tasks[task.task_id] = task
+
+        # Attach on_change after all tasks are registered so future updates persist correctly.
+        for task in self._tasks.values():
+            task._on_change = self._persist
 
         if recovered:
             self._persist()

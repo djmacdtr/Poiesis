@@ -47,8 +47,8 @@ def start_run(
 
 
 @router.get("", response_model=list[TaskDetail])
-def list_tasks() -> list[TaskDetail]:
-    """查询任务列表（按最近更新时间倒序，无需认证）。"""
+def list_tasks(_: Any = Depends(require_admin)) -> list[TaskDetail]:
+    """查询任务列表（按最近更新时间倒序，仅 admin 可操作）。"""
     task_dicts = run_service.list_tasks()
     return [TaskDetail(**item) for item in task_dicts]
 

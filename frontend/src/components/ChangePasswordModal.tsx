@@ -53,8 +53,8 @@ export function ChangePasswordModal() {
   }
 
   return (
-    <ModalBase open maxWidthClass="max-w-md">
-      <div aria-labelledby="change-pwd-title" className="overflow-hidden">
+    <ModalBase open maxWidthClass="max-w-md" ariaLabelledBy="change-pwd-title">
+      <div className="overflow-hidden">
         {/* 顶部装饰带 */}
         <div className="h-1.5 bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400" />
 

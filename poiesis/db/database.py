@@ -114,6 +114,9 @@ class Database:
 
             if not self._has_composite_unique(conn, "foreshadowing", ["book_id", "hint_key"]):
                 self._migrate_foreshadowing_table(conn)
+
+            if not self._has_composite_unique(conn, "timeline", ["book_id", "event_key"]):
+                self._migrate_timeline_table(conn)
         finally:
             conn.execute("PRAGMA foreign_keys=ON")
 
@@ -409,6 +412,55 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_foreshadowing_book_id ON foreshadowing(book_id)"
         )
 
+    def _migrate_timeline_table(self, conn: sqlite3.Connection) -> None:
+        self._ensure_column(conn, "timeline", "book_id", "INTEGER NOT NULL DEFAULT 1")
+        conn.executescript(
+            """
+            DROP TABLE IF EXISTS timeline_v2;
+
+            CREATE TABLE IF NOT EXISTS timeline_v2 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL DEFAULT 1,
+                event_key TEXT NOT NULL,
+                chapter_number INTEGER,
+                description TEXT NOT NULL,
+                characters_involved JSON DEFAULT '[]',
+                timestamp_in_world TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(book_id, event_key),
+                FOREIGN KEY (book_id) REFERENCES books(id)
+            );
+
+            INSERT INTO timeline_v2 (
+                id,
+                book_id,
+                event_key,
+                chapter_number,
+                description,
+                characters_involved,
+                timestamp_in_world,
+                created_at
+            )
+            SELECT
+                id,
+                CASE
+                    WHEN book_id IS NULL OR book_id NOT IN (SELECT id FROM books) THEN 1
+                    ELSE book_id
+                END,
+                event_key,
+                chapter_number,
+                description,
+                characters_involved,
+                timestamp_in_world,
+                created_at
+            FROM timeline;
+
+            DROP TABLE timeline;
+            ALTER TABLE timeline_v2 RENAME TO timeline;
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_timeline_book_id ON timeline(book_id)")
+
     # ------------------------------------------------------------------
     # Books
     # ------------------------------------------------------------------
@@ -648,8 +700,7 @@ class Database:
                     (book_id, event_key, description, chapter_number,
                      characters_involved, timestamp_in_world)
                 VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(event_key) DO UPDATE SET
-                    book_id = excluded.book_id,
+                ON CONFLICT(book_id, event_key) DO UPDATE SET
                     description = excluded.description,
                     chapter_number = excluded.chapter_number,
                     characters_involved = excluded.characters_involved,
