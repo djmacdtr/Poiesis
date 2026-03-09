@@ -87,7 +87,7 @@ class OpenAIClient(LLMClient):
 
         response = self._client.chat.completions.create(  # type: ignore[call-overload]
             model=self.model,
-            messages=messages,  # type: ignore[arg-type]
+            messages=messages,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             response_format={"type": "json_object"},
@@ -117,9 +117,10 @@ class OpenAIClient(LLMClient):
         )
 
         for chunk in stream:
-            if not chunk.choices:
+            choices = getattr(chunk, "choices", None)
+            if not choices:
                 continue
-            delta = chunk.choices[0].delta
+            delta = choices[0].delta
             text = delta.content or getattr(delta, "reasoning_content", None)
             if text:
                 yield text
