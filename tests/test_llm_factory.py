@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import yaml
 
-from poiesis.db.database import Database
 from poiesis.config import ModelConfig
+from poiesis.db.database import Database
 from poiesis.run_loop import RunLoop, _build_llm
 
 

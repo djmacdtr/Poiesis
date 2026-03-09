@@ -8,7 +8,6 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
-
 LANGUAGE_WORLD_SEED_MAP: dict[str, str] = {
     "zh": "examples/world_seed_zh.yaml",
     "zh-cn": "examples/world_seed_zh.yaml",

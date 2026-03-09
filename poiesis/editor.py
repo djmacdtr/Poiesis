@@ -71,7 +71,11 @@ class ChapterEditor:
         return llm.complete(prompt, system=system)
 
     def _build_system_prompt(self) -> str:
-        language_hint = "请使用简体中文输出修订结果。" if self._language.lower().startswith("zh") else "Return edited prose in English."
+        language_hint = (
+            "请使用简体中文输出修订结果。"
+            if self._language.lower().startswith("zh")
+            else "Return edited prose in English."
+        )
         naming_hint = (
             "专有名词优先中文化处理。"
             if self._naming_policy == "localized_zh"

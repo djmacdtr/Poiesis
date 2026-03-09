@@ -30,17 +30,38 @@ class _FakeDB:
     def list_foreshadowing(self, book_id: int = 1):
         return list(self.hints)
 
-    def upsert_world_rule(self, rule_key: str, description: str, book_id: int = 1, is_immutable: bool = True):
+    def upsert_world_rule(
+        self, rule_key: str, description: str, book_id: int = 1, is_immutable: bool = True
+    ):
         self.rules.append({"rule_key": rule_key, "description": description, "book_id": book_id})
 
-    def upsert_character(self, name: str, book_id: int = 1, description: str | None = None, core_motivation: str | None = None, attributes=None):
+    def upsert_character(
+        self,
+        name: str,
+        book_id: int = 1,
+        description: str | None = None,
+        core_motivation: str | None = None,
+        attributes=None,
+    ):
         self.chars.append({"name": name, "description": description or "", "book_id": book_id})
 
-    def upsert_timeline_event(self, event_key: str, description: str, book_id: int = 1, timestamp_in_world: str | None = None, chapter_number: int | None = None, characters_involved=None):
+    def upsert_timeline_event(
+        self,
+        event_key: str,
+        description: str,
+        book_id: int = 1,
+        timestamp_in_world: str | None = None,
+        chapter_number: int | None = None,
+        characters_involved=None,
+    ):
         self.events.append({"event_key": event_key, "description": description, "book_id": book_id})
 
-    def upsert_foreshadowing(self, hint_key: str, description: str, book_id: int = 1, status: str = "pending"):
-        self.hints.append({"hint_key": hint_key, "description": description, "book_id": book_id, "status": status})
+    def upsert_foreshadowing(
+        self, hint_key: str, description: str, book_id: int = 1, status: str = "pending"
+    ):
+        self.hints.append(
+            {"hint_key": hint_key, "description": description, "book_id": book_id, "status": status}
+        )
 
 
 class _FakeWorld:
@@ -63,7 +84,9 @@ def _make_loop(language: str, db: _FakeDB) -> RunLoop:
 
 def _write_seed(path: Path, rule_desc: str) -> None:
     payload = {
-        "immutable_rules": [{"key": "magic_costs_life", "description": rule_desc, "is_immutable": True}],
+        "immutable_rules": [
+            {"key": "magic_costs_life", "description": rule_desc, "is_immutable": True}
+        ],
         "characters": [{"name": "测试角色", "description": "角色描述"}],
         "timeline_events": [{"event_key": "e1", "description": "时间线事件"}],
         "foreshadowing": [{"hint_key": "h1", "description": "伏笔描述", "status": "pending"}],
@@ -79,7 +102,9 @@ def test_load_world_seed_auto_selects_language_seed_when_empty(monkeypatch, tmp_
     db = _FakeDB()
     loop = _make_loop("zh-CN", db)
 
-    monkeypatch.setattr("poiesis.run_loop.resolve_world_seed_path", lambda language, default_seed: str(seed_zh))
+    monkeypatch.setattr(
+        "poiesis.run_loop.resolve_world_seed_path", lambda language, default_seed: str(seed_zh)
+    )
 
     loop.load_world_seed()
 
@@ -95,7 +120,9 @@ def test_load_world_seed_skips_auto_load_when_canon_exists(monkeypatch, tmp_path
     db.rules.append({"rule_key": "existing", "description": "已有规则", "book_id": 1})
     loop = _make_loop("zh-CN", db)
 
-    monkeypatch.setattr("poiesis.run_loop.resolve_world_seed_path", lambda language, default_seed: str(seed_zh))
+    monkeypatch.setattr(
+        "poiesis.run_loop.resolve_world_seed_path", lambda language, default_seed: str(seed_zh)
+    )
 
     loop.load_world_seed()
 
@@ -116,5 +143,10 @@ def test_load_world_seed_with_explicit_seed_path_always_loads(tmp_path: Path) ->
 
 
 def test_resolve_world_seed_path_supports_language_prefix_fallback() -> None:
-    assert resolve_world_seed_path("zh-TW", "examples/world_seed.yaml") == "examples/world_seed_zh.yaml"
-    assert resolve_world_seed_path("en-GB", "examples/world_seed.yaml") == "examples/world_seed.yaml"
+    assert (
+        resolve_world_seed_path("zh-TW", "examples/world_seed.yaml")
+        == "examples/world_seed_zh.yaml"
+    )
+    assert (
+        resolve_world_seed_path("en-GB", "examples/world_seed.yaml") == "examples/world_seed.yaml"
+    )

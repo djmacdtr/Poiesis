@@ -110,7 +110,9 @@ def test_run_in_background_streams_preview_and_marks_completed(monkeypatch) -> N
         def _load_key_from_db(self, key_name: str) -> str:
             return "sf-key"
 
-        def _generate_chapter(self, chapter_number: int, on_writer_delta=None, on_stage=None) -> None:
+        def _generate_chapter(
+            self, chapter_number: int, on_writer_delta=None, on_stage=None
+        ) -> None:
             if on_writer_delta is not None:
                 on_writer_delta("第一段")
                 on_writer_delta("第二段")
@@ -147,7 +149,9 @@ def test_run_in_background_fails_when_chapter_not_persisted(monkeypatch) -> None
         def _load_key_from_db(self, key_name: str) -> str:
             return "sf-key"
 
-        def _generate_chapter(self, chapter_number: int, on_writer_delta=None, on_stage=None) -> None:
+        def _generate_chapter(
+            self, chapter_number: int, on_writer_delta=None, on_stage=None
+        ) -> None:
             if on_writer_delta is not None:
                 on_writer_delta("正文")
 

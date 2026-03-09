@@ -138,7 +138,11 @@ class FactExtractor:
         return staging
 
     def _build_system_prompt(self) -> str:
-        language_hint = "JSON 字段值优先使用简体中文。" if self._language.lower().startswith("zh") else "Use concise English for JSON values."
+        language_hint = (
+            "JSON 字段值优先使用简体中文。"
+            if self._language.lower().startswith("zh")
+            else "Use concise English for JSON values."
+        )
         return (
             "你是世界设定分析师，只提取真正新增或变化的事实。"
             f"{language_hint}只返回合法 JSON，不要输出其他文本。"

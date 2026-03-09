@@ -124,7 +124,9 @@ class Database:
         conn.execute("UPDATE staging_changes SET book_id = 1 WHERE book_id IS NULL")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_characters_book_id ON characters(book_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_world_rules_book_id ON world_rules(book_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_foreshadowing_book_id ON foreshadowing(book_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_foreshadowing_book_id ON foreshadowing(book_id)"
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_timeline_book_id ON timeline(book_id)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_staging_changes_book_id ON staging_changes(book_id)"
@@ -133,7 +135,9 @@ class Database:
     def _ensure_default_book(self, conn: sqlite3.Connection) -> None:
         conn.execute(
             """
-            INSERT INTO books (id, name, language, style_preset, style_prompt, naming_policy, is_default)
+            INSERT INTO books (
+                id, name, language, style_preset, style_prompt, naming_policy, is_default
+            )
             SELECT 1, '默认小说', 'zh-CN', 'literary_cn', '', 'localized_zh', 1
             WHERE NOT EXISTS (SELECT 1 FROM books WHERE id = 1)
             """
@@ -149,9 +153,7 @@ class Database:
     ) -> None:
         columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})")}
         if column_name not in columns:
-            conn.execute(
-                f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def_sql}"
-            )
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def_sql}")
 
     def _has_composite_unique(
         self,
@@ -163,10 +165,7 @@ class Database:
             if int(index_row[2]) != 1:
                 continue
             index_name = index_row[1]
-            cols = [
-                info_row[2]
-                for info_row in conn.execute(f"PRAGMA index_info({index_name})")
-            ]
+            cols = [info_row[2] for info_row in conn.execute(f"PRAGMA index_info({index_name})")]
             if cols == expected_columns:
                 return True
         return False
@@ -193,7 +192,8 @@ class Database:
             );
 
             INSERT INTO chapters_v2 (
-                id, book_id, chapter_number, title, content, plan, word_count, status, created_at, updated_at
+                id, book_id, chapter_number, title, content,
+                plan, word_count, status, created_at, updated_at
             )
             SELECT
                 id,
@@ -294,7 +294,8 @@ class Database:
             );
 
             INSERT INTO characters_v2 (
-                id, book_id, name, description, core_motivation, attributes, status, created_at, updated_at
+                id, book_id, name, description, core_motivation,
+                attributes, status, created_at, updated_at
             )
             SELECT
                 id,
@@ -404,7 +405,9 @@ class Database:
             ALTER TABLE foreshadowing_v2 RENAME TO foreshadowing;
             """
         )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_foreshadowing_book_id ON foreshadowing(book_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_foreshadowing_book_id ON foreshadowing(book_id)"
+        )
 
     # ------------------------------------------------------------------
     # Books
@@ -439,7 +442,9 @@ class Database:
                 cur.execute("UPDATE books SET is_default = 0")
             cur.execute(
                 """
-                INSERT INTO books (name, language, style_preset, style_prompt, naming_policy, is_default)
+                INSERT INTO books (
+                    name, language, style_preset, style_prompt, naming_policy, is_default
+                )
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (name, language, style_preset, style_prompt, naming_policy, int(is_default)),
@@ -473,7 +478,15 @@ class Database:
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (name, language, style_preset, style_prompt, naming_policy, int(is_default), book_id),
+                (
+                    name,
+                    language,
+                    style_preset,
+                    style_prompt,
+                    naming_policy,
+                    int(is_default),
+                    book_id,
+                ),
             )
 
     # ------------------------------------------------------------------
@@ -493,7 +506,9 @@ class Database:
         with self._cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO characters (book_id, name, description, core_motivation, attributes, status)
+                INSERT INTO characters (
+                    book_id, name, description, core_motivation, attributes, status
+                )
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(book_id, name) DO UPDATE SET
                     description = excluded.description,
@@ -549,9 +564,7 @@ class Database:
             else:
                 cur.execute("SELECT * FROM characters")
             rows = cur.fetchall()
-        return [
-            {**dict(r), "attributes": json.loads(r["attributes"] or "{}")} for r in rows
-        ]
+        return [{**dict(r), "attributes": json.loads(r["attributes"] or "{}")} for r in rows]
 
     # ------------------------------------------------------------------
     # World rules
@@ -687,7 +700,10 @@ class Database:
             cur.execute(
                 """
                 INSERT INTO foreshadowing
-                    (book_id, hint_key, description, introduced_in_chapter, resolved_in_chapter, status)
+                    (
+                        book_id, hint_key, description,
+                        introduced_in_chapter, resolved_in_chapter, status
+                    )
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(book_id, hint_key) DO UPDATE SET
                     description = excluded.description,
@@ -695,7 +711,14 @@ class Database:
                     resolved_in_chapter = excluded.resolved_in_chapter,
                     status = excluded.status
                 """,
-                (book_id, hint_key, description, introduced_in_chapter, resolved_in_chapter, status),
+                (
+                    book_id,
+                    hint_key,
+                    description,
+                    introduced_in_chapter,
+                    resolved_in_chapter,
+                    status,
+                ),
             )
             return cur.lastrowid or 0
 
@@ -741,7 +764,14 @@ class Database:
                     (book_id, change_type, entity_type, entity_key, proposed_data, source_chapter)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (book_id, change_type, entity_type, entity_key, json.dumps(proposed_data), source_chapter),
+                (
+                    book_id,
+                    change_type,
+                    entity_type,
+                    entity_key,
+                    json.dumps(proposed_data),
+                    source_chapter,
+                ),
             )
             return cur.lastrowid or 0
 
@@ -782,9 +812,7 @@ class Database:
                     (status, book_id),
                 )
             rows = cur.fetchall()
-        return [
-            {**dict(r), "proposed_data": json.loads(r["proposed_data"] or "{}")} for r in rows
-        ]
+        return [{**dict(r), "proposed_data": json.loads(r["proposed_data"] or "{}")} for r in rows]
 
     def update_staging_status(
         self, change_id: int, status: str, rejection_reason: str | None = None
@@ -814,7 +842,9 @@ class Database:
         with self._cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO chapters (book_id, chapter_number, title, content, plan, word_count, status)
+                INSERT INTO chapters (
+                    book_id, chapter_number, title, content, plan, word_count, status
+                )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(book_id, chapter_number) DO UPDATE SET
                     title = excluded.title,
@@ -898,7 +928,10 @@ class Database:
             cur.execute(
                 """
                 INSERT INTO chapter_summaries
-                    (book_id, chapter_number, summary, key_events, characters_featured, new_facts_introduced)
+                    (
+                        book_id, chapter_number, summary,
+                        key_events, characters_featured, new_facts_introduced
+                    )
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(book_id, chapter_number) DO UPDATE SET
                     summary = excluded.summary,

@@ -66,7 +66,11 @@ class ChapterSummarizer:
         return raw
 
     def _build_system_prompt(self) -> str:
-        language_hint = "请使用简体中文输出摘要信息。" if self._language.lower().startswith("zh") else "Use English for summary values."
+        language_hint = (
+            "请使用简体中文输出摘要信息。"
+            if self._language.lower().startswith("zh")
+            else "Use English for summary values."
+        )
         style_hint = self._style_prompt or "摘要应客观、简洁、可检索。"
         return (
             "你是小说档案管理员，负责生成可入库的章节摘要。"

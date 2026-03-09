@@ -19,7 +19,7 @@ class _FakeStream:
     def __init__(self, chunks: list[str]) -> None:
         self.text_stream = chunks
 
-    def __enter__(self) -> "_FakeStream":
+    def __enter__(self) -> _FakeStream:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

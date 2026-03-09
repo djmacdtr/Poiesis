@@ -53,10 +53,14 @@ def test_status_uses_book_id_scope(tmp_path: Path, monkeypatch) -> None:
     )
     db.close()
 
-    monkeypatch.setattr("poiesis.config.load_config", lambda _p: _Cfg(database=_DbCfg(path=str(db_path))))
+    monkeypatch.setattr(
+        "poiesis.config.load_config", lambda _p: _Cfg(database=_DbCfg(path=str(db_path)))
+    )
 
     runner = CliRunner()
-    result = runner.invoke(main, ["status", "--config", "ignored.yaml", "--book-id", str(second_book_id)])
+    result = runner.invoke(
+        main, ["status", "--config", "ignored.yaml", "--book-id", str(second_book_id)]
+    )
 
     assert result.exit_code == 0
     assert "Book ID" in result.output

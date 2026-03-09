@@ -97,10 +97,13 @@ class ConsistencyVerifier:
         return VerificationResult(passed=passed, violations=violations, warnings=warnings)
 
     def _build_system_prompt(self) -> str:
-        language_hint = "JSON 中的 violations/warnings 优先使用简体中文。" if self._language.lower().startswith("zh") else "Return violations/warnings in English."
+        language_hint = (
+            "JSON 中的 violations/warnings 优先使用简体中文。"
+            if self._language.lower().startswith("zh")
+            else "Return violations/warnings in English."
+        )
         return (
-            "你是严格的连贯性审校员，必须识别硬性冲突与设定违规。"
-            f"{language_hint}只返回合法 JSON。"
+            f"你是严格的连贯性审校员，必须识别硬性冲突与设定违规。{language_hint}只返回合法 JSON。"
         )
 
     # ------------------------------------------------------------------
@@ -115,8 +118,9 @@ class ConsistencyVerifier:
     ) -> None:
         """Flag if the number of new world facts exceeds the budget."""
         new_rules = [
-            c for c in proposed_changes if c.get("entity_type") == "world_rule"
-            and c.get("change_type") == "upsert"
+            c
+            for c in proposed_changes
+            if c.get("entity_type") == "world_rule" and c.get("change_type") == "upsert"
         ]
         if len(new_rules) > self._new_rule_budget:
             violations.append(

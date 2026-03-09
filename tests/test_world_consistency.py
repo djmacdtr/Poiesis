@@ -138,5 +138,5 @@ class TestImmutableRules:
 
     def test_world_context_summary_flags_immutable(self, sample_world: WorldModel) -> None:
         """world_context_summary marks immutable rules with [IMMUTABLE]."""
-        summary = sample_world.world_context_summary()
+        summary = sample_world.world_context_summary(language="en-US")
         assert "[IMMUTABLE]" in summary

@@ -10,10 +10,11 @@ import os
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable
+from typing import Any
 
 # 日志环形缓冲区最大行数
 _MAX_LOG_LINES = 200
@@ -141,7 +142,7 @@ class TaskInfo:
         cls,
         payload: dict[str, Any],
         on_change: Callable[[], None] | None = None,
-    ) -> "TaskInfo":
+    ) -> TaskInfo:
         task = cls(
             task_id=payload.get("task_id", str(uuid.uuid4())),
             total_chapters=int(payload.get("total_chapters", 0)),
@@ -217,9 +218,7 @@ class TaskRegistry:
                 task.add_log(task.error)
             # 防御性修复：历史数据中出现“已完成但 0 进度”时，标记为异常终态，避免误导前端。
             elif (
-                task.status == "completed"
-                and task.total_chapters > 0
-                and task.current_chapter <= 0
+                task.status == "completed" and task.total_chapters > 0 and task.current_chapter <= 0
             ):
                 recovered = True
                 task.status = "failed"
@@ -265,7 +264,9 @@ class TaskRegistry:
             keep_ids.update(task.task_id for task in terminal_tasks[:keep_recent])
 
             before = len(self._tasks)
-            self._tasks = {task_id: task for task_id, task in self._tasks.items() if task_id in keep_ids}
+            self._tasks = {
+                task_id: task for task_id, task in self._tasks.items() if task_id in keep_ids
+            }
             removed = before - len(self._tasks)
 
         if removed > 0:
