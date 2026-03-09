@@ -57,14 +57,13 @@ def init_world(
 
     使用指定的 seed.yaml 路径（或默认路径）加载世界种子数据。
     """
-    from poiesis.run_loop import RunLoop
+    from poiesis.api.services.scene_run_service import initialize_world
 
     config_path = os.environ.get("POIESIS_CONFIG", "config.yaml")
     seed_path = body.seed_path if body else None
 
     try:
-        loop = RunLoop(config_path=config_path)
-        loop.load_world_seed(seed_path=seed_path)
+        initialize_world(config_path=config_path, book_id=1, seed_path=seed_path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail="世界种子文件不存在，请检查路径配置") from exc
     except Exception as exc:  # noqa: BLE001

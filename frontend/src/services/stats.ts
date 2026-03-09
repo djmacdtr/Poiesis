@@ -1,15 +1,17 @@
 /**
- * 统计数据服务（基于已有 API 数据本地聚合计算）
+ * 统计数据服务（围绕新 scene 工作台聚合）
  */
 import { fetchChaptersByBook } from './chapters'
-import { fetchStaging, fetchCanon } from './world'
+import { fetchReviewQueue, fetchLoops } from './run'
+import { fetchCanon } from './world'
 import type { DashboardStats, WordCountDataPoint } from '@/types'
 
 /** 聚合仪表盘统计数据 */
 export async function fetchDashboardStats(bookId: number = 1): Promise<DashboardStats> {
-  const [chapters, pending, canon] = await Promise.all([
+  const [chapters, reviews, loops, canon] = await Promise.all([
     fetchChaptersByBook(bookId),
-    fetchStaging('pending', bookId),
+    fetchReviewQueue(bookId),
+    fetchLoops(bookId),
     fetchCanon(bookId),
   ])
 
@@ -17,9 +19,9 @@ export async function fetchDashboardStats(bookId: number = 1): Promise<Dashboard
     totalChapters: chapters.length,
     completedChapters: chapters.filter((c) => c.status === 'completed' || c.status === 'published').length,
     totalWords: chapters.reduce((sum, c) => sum + c.word_count, 0),
-    pendingStagingCount: pending.length,
+    pendingReviewCount: reviews.items.filter((item) => item.status === 'pending').length,
     characterCount: canon.characters.length,
-    activeForeshadowingCount: canon.foreshadowing.filter((f) => f.status === 'active').length,
+    activeLoopCount: loops.items.filter((item) => item.status !== 'resolved' && item.status !== 'dropped').length,
   }
 }
 

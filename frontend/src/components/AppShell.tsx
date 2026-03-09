@@ -8,7 +8,7 @@ import {
   BookOpen,
   Globe,
   GitPullRequest,
-  BarChart2,
+  Orbit,
   BookMarked,
   Settings,
   LogOut,
@@ -22,11 +22,11 @@ import { toast } from 'sonner'
 /** 导航菜单项定义 */
 const navItems = [
   { to: '/', label: '仪表盘', icon: LayoutDashboard, end: true },
-  { to: '/run', label: '运行控制', icon: Play, end: false },
+  { to: '/runs', label: 'Run Board', icon: Play, end: false },
+  { to: '/reviews', label: 'Review Queue', icon: GitPullRequest, end: false },
+  { to: '/loops', label: 'Loop Board', icon: Orbit, end: false },
   { to: '/chapters', label: '章节列表', icon: BookOpen, end: false },
-  { to: '/canon', label: '世界设定', icon: Globe, end: false },
-  { to: '/staging', label: '候选审批', icon: GitPullRequest, end: false },
-  { to: '/stats', label: '统计分析', icon: BarChart2, end: false },
+  { to: '/canon', label: 'Canon Explorer', icon: Globe, end: false },
   { to: '/books', label: '书籍管理', icon: BookMarked, end: false },
   { to: '/settings', label: '系统设置', icon: Settings, end: false },
 ]
@@ -92,7 +92,7 @@ export function AppShell() {
       <div className="flex-1 flex flex-col min-w-0">
         {/* 顶部栏 */}
         <header className="h-16 shrink-0 bg-white border-b border-gray-200 flex items-center justify-between px-6">
-          <h1 className="text-base font-semibold text-gray-700">AI 小说写作控制台</h1>
+          <h1 className="text-base font-semibold text-gray-700">AI 小说 Scene 工作台</h1>
 
           {/* 用户信息与退出按钮 */}
           {user && (

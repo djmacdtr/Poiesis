@@ -1,13 +1,13 @@
-"""Language and style prompt guardrail tests."""
+"""中文提示词约束测试。"""
 
 from __future__ import annotations
 
-from poiesis.editor import ChapterEditor
-from poiesis.extractor import FactExtractor
-from poiesis.planner import ChapterPlanner
-from poiesis.summarizer import ChapterSummarizer
-from poiesis.verifier import ConsistencyVerifier
-from poiesis.writer import ChapterWriter
+from poiesis.pipeline.extraction.extractor_hub import ExtractorHub
+from poiesis.pipeline.planning.story_planner import StoryPlanner
+from poiesis.pipeline.summary.summarizer import ChapterSummarizer
+from poiesis.pipeline.verification.semantic_verifier import LLMSemanticVerifier
+from poiesis.pipeline.writing.editor import ChapterEditor
+from poiesis.pipeline.writing.writer import ChapterWriter
 
 
 class _DummyVectorStore:
@@ -22,7 +22,6 @@ def test_writer_system_prompt_prefers_chinese_and_localized_naming() -> None:
         style_prompt="文风要求：情绪内敛，细节真实。",
         naming_policy="localized_zh",
     )
-
     prompt = writer._build_system_prompt()
     assert "简体中文" in prompt
     assert "中文化" in prompt
@@ -30,13 +29,12 @@ def test_writer_system_prompt_prefers_chinese_and_localized_naming() -> None:
 
 
 def test_planner_system_prompt_prefers_chinese_json_values() -> None:
-    planner = ChapterPlanner(
+    planner = StoryPlanner(
         vector_store=_DummyVectorStore(),
         language="zh-CN",
         style_prompt="文风要求：叙事一致。",
         naming_policy="localized_zh",
     )
-
     prompt = planner._build_system_prompt()
     assert "简体中文" in prompt
     assert "合法 JSON" in prompt
@@ -50,21 +48,18 @@ def test_editor_system_prompt_prefers_chinese_output() -> None:
 
 
 def test_extractor_system_prompt_prefers_chinese_json_values() -> None:
-    extractor = FactExtractor(language="zh-CN")
-    prompt = extractor._build_system_prompt()
+    prompt = ExtractorHub(language="zh-CN")._build_system_prompt()
     assert "简体中文" in prompt
     assert "合法 JSON" in prompt
 
 
 def test_verifier_system_prompt_prefers_chinese_issue_descriptions() -> None:
-    verifier = ConsistencyVerifier(language="zh-CN")
-    prompt = verifier._build_system_prompt()
+    prompt = LLMSemanticVerifier(language="zh-CN")._build_system_prompt()
     assert "简体中文" in prompt
     assert "合法 JSON" in prompt
 
 
 def test_summarizer_system_prompt_prefers_chinese_summary_values() -> None:
-    summarizer = ChapterSummarizer(language="zh-CN")
-    prompt = summarizer._build_system_prompt()
+    prompt = ChapterSummarizer(language="zh-CN")._build_system_prompt()
     assert "简体中文" in prompt
     assert "合法 JSON" in prompt

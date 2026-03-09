@@ -18,6 +18,8 @@ class TestSchemaInitialization:
             "staging_changes",
             "chapters",
             "chapter_summaries",
+            "runs",
+            "run_chapters",
         }
         with tmp_db._cursor() as cur:
             cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -279,3 +281,71 @@ class TestForeshadowingCRUD:
         assert len(second_hints) == 1
         assert default_hints[0]["description"] == "默认伏笔"
         assert second_hints[0]["description"] == "副本伏笔"
+
+
+class TestRunTraceCRUD:
+    """CRUD tests for structured run traces."""
+
+    def test_create_and_get_run_trace(self, tmp_db: Database) -> None:
+        run_id = tmp_db.create_run_trace(
+            task_id="task-1",
+            book_id=1,
+            status="running",
+            config_snapshot={"generation": {"max_chapters": 3}},
+            llm_snapshot={"writer": {"provider": "openai", "model": "gpt-4o"}},
+        )
+
+        run = tmp_db.get_run_trace_by_task_id("task-1")
+        assert run_id > 0
+        assert run is not None
+        assert run["status"] == "running"
+        assert run["config_snapshot"]["generation"]["max_chapters"] == 3
+        assert run["llm_snapshot"]["writer"]["model"] == "gpt-4o"
+
+    def test_upsert_and_get_run_chapter_trace(self, tmp_db: Database) -> None:
+        run_id = tmp_db.create_run_trace(
+            task_id="task-2",
+            book_id=1,
+            status="running",
+            config_snapshot={},
+            llm_snapshot={},
+        )
+
+        tmp_db.upsert_run_chapter_trace(
+            run_id=run_id,
+            chapter_number=1,
+            status="final",
+            planner_output={"title": "第一章"},
+            retrieval_pack={"planner_query": "第 1 章 叙事线"},
+            draft_text="草稿",
+            final_content="定稿",
+            changeset={"characters": [], "raw_staging_changes": []},
+            verifier_issues=[{"severity": "warning", "reason": "轻微风险"}],
+            editor_rewrites=[{"attempt": 1}],
+            merge_result={"merged_count": 1},
+            summary_result={"summary": "摘要"},
+            metrics={"issues_count": 1, "changes_count": 0},
+        )
+
+        chapter = tmp_db.get_run_chapter_trace(run_id, 1)
+        assert chapter is not None
+        assert chapter["planner_output_json"]["title"] == "第一章"
+        assert chapter["retrieval_pack_json"]["planner_query"] == "第 1 章 叙事线"
+        assert chapter["draft_text"] == "草稿"
+        assert chapter["final_content"] == "定稿"
+        assert chapter["summary_json"]["summary"] == "摘要"
+
+    def test_update_run_trace_status_sets_finished_at(self, tmp_db: Database) -> None:
+        run_id = tmp_db.create_run_trace(
+            task_id="task-3",
+            book_id=1,
+            status="running",
+            config_snapshot={},
+            llm_snapshot={},
+        )
+        tmp_db.update_run_trace_status(run_id, status="failed", error_message="boom", finished=True)
+        run = tmp_db.get_run_trace_by_task_id("task-3")
+        assert run is not None
+        assert run["status"] == "failed"
+        assert run["error_message"] == "boom"
+        assert run["finished_at"] is not None

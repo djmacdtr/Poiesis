@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from poiesis.db.database import Database
-from poiesis.world import WorldModel
+from poiesis.domain.world.model import WorldModel
 
 
 class TestWorldModelLayers:

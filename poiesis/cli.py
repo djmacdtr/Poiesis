@@ -43,12 +43,19 @@ def main() -> None:
     help="目标书籍 ID。",
 )
 def run(config: str, max_chapters: int | None, seed: str | None, book_id: int) -> None:
-    """Run the generation loop."""
-    from poiesis.run_loop import RunLoop
+    """运行新的 scene 驱动主链。"""
+    from poiesis.api.services.scene_run_service import run_sync
+    from poiesis.config import load_config
 
-    loop = RunLoop(config_path=config, book_id=book_id)
-    loop.load_world_seed(seed_path=seed)
-    loop.run(max_chapters=max_chapters)
+    chapter_count = max_chapters or load_config(config).generation.max_chapters
+    run_id = run_sync(
+        config_path=config,
+        chapter_count=chapter_count,
+        book_id=book_id,
+        seed_path=seed,
+        log=lambda message: console.print(f"[cyan]{message}[/cyan]"),
+    )
+    console.print(f"[green]同步运行完成，run_id={run_id}[/green]")
 
 
 @main.command()
@@ -73,6 +80,7 @@ def run(config: str, max_chapters: int | None, seed: str | None, book_id: int) -
 )
 def init(config: str, seed: str | None, book_id: int) -> None:
     """Initialize a new world database from a seed file."""
+    from poiesis.api.services.scene_run_service import initialize_world
     from poiesis.config import load_config
     from poiesis.db.database import Database
 
@@ -80,11 +88,8 @@ def init(config: str, seed: str | None, book_id: int) -> None:
     db = Database(cfg.database.path)
     db.initialize_schema()
     console.print(f"[green]Database initialized at {cfg.database.path}[/green]")
-
-    from poiesis.run_loop import RunLoop
-
-    loop = RunLoop(config_path=config, book_id=book_id)
-    loop.load_world_seed(seed_path=seed)
+    db.close()
+    initialize_world(config_path=config, book_id=book_id, seed_path=seed)
     console.print("[bold green]World initialized successfully.[/bold green]")
 
 

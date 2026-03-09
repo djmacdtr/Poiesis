@@ -68,21 +68,18 @@ def test_status_uses_book_id_scope(tmp_path: Path, monkeypatch) -> None:
     assert "Chapters generated" in result.output
 
 
-def test_run_passes_book_id_to_runloop(monkeypatch) -> None:
+def test_run_passes_book_id_to_scene_run_sync(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    class _FakeRunLoop:
-        def __init__(self, config_path: str, book_id: int = 1) -> None:
-            captured["config_path"] = config_path
-            captured["book_id"] = book_id
+    def _fake_run_sync(config_path: str, chapter_count: int, book_id: int, seed_path=None, log=None) -> int:
+        captured["config_path"] = config_path
+        captured["book_id"] = book_id
+        captured["seed_path"] = seed_path
+        captured["chapter_count"] = chapter_count
+        assert callable(log)
+        return 99
 
-        def load_world_seed(self, seed_path=None) -> None:
-            captured["seed_path"] = seed_path
-
-        def run(self, max_chapters=None) -> None:
-            captured["max_chapters"] = max_chapters
-
-    monkeypatch.setattr("poiesis.run_loop.RunLoop", _FakeRunLoop)
+    monkeypatch.setattr("poiesis.api.services.scene_run_service.run_sync", _fake_run_sync)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -94,4 +91,4 @@ def test_run_passes_book_id_to_runloop(monkeypatch) -> None:
     assert captured["config_path"] == "config.yaml"
     assert captured["book_id"] == 7
     assert captured["seed_path"] is None
-    assert captured["max_chapters"] == 3
+    assert captured["chapter_count"] == 3

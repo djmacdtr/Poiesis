@@ -1,318 +1,246 @@
-# Poiesis Developer Guide
+# Poiesis Developer Guide / 开发者指南
 
-## Table of Contents
+## Table of Contents / 目录
 
 1. [Architecture Overview](#1-architecture-overview)
 2. [Module Responsibilities](#2-module-responsibilities)
 3. [How to Add a New LLM Provider](#3-how-to-add-a-new-llm-provider)
 4. [How to Extend Verification Rules](#4-how-to-extend-verification-rules)
-5. [Database Migration Guide](#5-database-migration-guide)
-6. [Vector Store Management](#6-vector-store-management)
-7. [Running Tests](#7-running-tests)
-8. [Configuration Reference](#8-configuration-reference)
+5. [How to Work with Scene Runs](#5-how-to-work-with-scene-runs)
+6. [Database Notes](#6-database-notes)
+7. [Vector Store Management](#7-vector-store-management)
+8. [Running Tests](#8-running-tests)
+9. [Configuration Reference](#9-configuration-reference)
 
 ---
 
-## 1. Architecture Overview
+## 1. Architecture Overview / 架构总览
 
-Poiesis is built around a **six-stage generation pipeline** that runs once per chapter:
+Poiesis 已从旧的 chapter 黑盒编排切换到 `Scene 优先` 的正式架构。
 
-```
-World Seed / Prior State
-        │
-        ▼
-┌───────────────┐
-│  ChapterPlanner│  ← Produces a structured JSON plan
-└──────┬────────┘
-       │ plan
-       ▼
-┌───────────────┐
-│  ChapterWriter │  ← Generates prose guided by the plan
-└──────┬────────┘
-       │ content
-       ▼
-┌───────────────┐
-│  FactExtractor │  ← Parses new world facts into staging changes
-└──────┬────────┘
-       │ proposed_changes
-       ▼
-┌────────────────────┐
-│ConsistencyVerifier  │  ← Checks for rule violations (LLM + rule-based)
-└──────┬─────────────┘
-       │ violations?
-    ┌──┴──┐
-   yes   no
-    │     │
-    ▼     ▼
-┌────────┐ ┌──────────────┐
-│ Editor │ │  WorldMerger  │  ← Approves & merges staging → canon
-└──┬─────┘ └──────┬───────┘
-   │ retry        │
-   └──────────────┤
-                  ▼
-         ┌─────────────────┐
-         │ChapterSummarizer │  ← Produces archival summary
-         └─────────────────┘
+当前主链：
+
+```text
+StoryPlanner
+  -> ChapterPlanner
+    -> ScenePlanner
+      -> SceneWriter
+        -> SceneExtractor
+          -> SceneVerifier
+            -> SceneEditor (when needed)
+              -> ChapterAssembler
+                -> ChapterSummarizer
 ```
 
-### Three-Layer Knowledge Model
+### Runtime Model / 运行时模型
 
-| Layer    | Contents                              | Mutability         |
-|----------|---------------------------------------|--------------------|
-| `canon`  | Approved world facts                  | Append/update only |
-| `staging`| Proposed changes from new chapters    | Pending review     |
-| `archive`| Rejected changes with reasons         | Immutable audit log|
+- `run`: 一次完整生成任务
+- `chapter`: 章节级目标和 scene 聚合结果
+- `scene`: 一等执行单元
+- `review`: scene 级人工处理入口（人工审阅队列）
+- `loop`: 故事承诺 / 伏笔 / 未闭合叙事线
 
----
+### Persistence Model / 持久化模型
 
-## 2. Module Responsibilities
+数据库已围绕 scene 工作流重构，核心表包括：
 
-| Module                       | Responsibility                                                  |
-|------------------------------|-----------------------------------------------------------------|
-| `poiesis/config.py`          | Pydantic v2 configuration models; `load_config(path)`          |
-| `poiesis/db/database.py`     | SQLite persistence layer; CRUD for all tables                  |
-| `poiesis/db/schema.sql`      | Table definitions; run via `initialize_schema()`               |
-| `poiesis/llm/base.py`        | `LLMClient` ABC with retry logic and JSON extraction helpers   |
-| `poiesis/llm/openai_client.py`  | OpenAI Chat Completions implementation                      |
-| `poiesis/llm/anthropic_client.py` | Anthropic Messages API implementation                     |
-| `poiesis/vector_store/store.py` | FAISS + sentence-transformers; add/search/remove + persistence |
-| `poiesis/world.py`           | `WorldModel`: in-memory three-layer state; staging operations  |
-| `poiesis/planner.py`         | `ChapterPlanner`: structured JSON chapter plan generation      |
-| `poiesis/writer.py`          | `ChapterWriter`: prose generation guided by plan               |
-| `poiesis/extractor.py`       | `FactExtractor`: new-fact mining from chapter text             |
-| `poiesis/verifier.py`        | `ConsistencyVerifier`: rule-based + LLM consistency checking   |
-| `poiesis/editor.py`          | `ChapterEditor`: surgical rewrite to fix violations            |
-| `poiesis/merger.py`          | `WorldMerger`: staging → canon + vector store + DB persistence |
-| `poiesis/summarizer.py`      | `ChapterSummarizer`: archival chapter summaries                |
-| `poiesis/originality.py`     | `OriginalityChecker`: cosine-similarity plagiarism guard       |
-| `poiesis/run_loop.py`        | `RunLoop`: orchestrates the full pipeline; CLI-facing          |
-| `poiesis/cli.py`             | Click CLI: `run`, `init`, `status` commands                    |
+- `runs`
+- `run_chapters`
+- `run_scenes`
+- `story_state_snapshots`
+- `loops`
+- `loop_events`
+- `scene_reviews`
+- `scene_patches`
+- `chapter_outputs`
+
+旧 `/api/run/*` 和旧 `RunLoop` 主入口已移除。
 
 ---
 
-## 3. How to Add a New LLM Provider
+## 2. Module Responsibilities / 模块职责
 
-1. **Create a new file** `poiesis/llm/<provider>_client.py`.
+| Module（模块） | Responsibility（职责） |
+|---|---|
+| `poiesis/config.py` | 配置模型与 `load_config()` |
+| `poiesis/db/database.py` | SQLite 持久化层 |
+| `poiesis/domain/world/model.py` | `WorldModel` 领域对象 |
+| `poiesis/domain/world/repository.py` | 世界状态装载与标准化 |
+| `poiesis/application/scene_contracts.py` | Scene 架构核心协议 |
+| `poiesis/application/use_cases.py` | 显式 use case（用例）组合 |
+| `poiesis/api/services/scene_run_service.py` | 新架构运行入口、世界初始化、同步/异步 run |
+| `poiesis/pipeline/planning/story_planner.py` | 章节级故事规划 |
+| `poiesis/pipeline/planning/chapter_planner.py` | StoryPlan -> ChapterPlan |
+| `poiesis/pipeline/planning/scene_planner.py` | ChapterPlan -> ScenePlan[] |
+| `poiesis/pipeline/writing/scene_writer.py` | scene 正文生成 |
+| `poiesis/pipeline/extraction/scene_extractor.py` | scene 变更提取适配层 |
+| `poiesis/pipeline/extraction/extractor_hub.py` | ChangeSet 聚合与分类 |
+| `poiesis/pipeline/verification/scene_verifier.py` | scene 校验适配层 |
+| `poiesis/pipeline/verification/hub.py` | VerifierHub 聚合 |
+| `poiesis/pipeline/writing/scene_editor.py` | scene 重写 |
+| `poiesis/pipeline/assembly/chapter_assembler.py` | chapter 聚合 |
+| `poiesis/pipeline/summary/summarizer.py` | 章节摘要生成 |
+| `poiesis/api/routers/runs.py` | run / chapter / scene 查询与启动 |
+| `poiesis/api/routers/reviews.py` | review 队列与动作 |
+| `poiesis/api/routers/loops.py` | loop board |
+| `poiesis/api/routers/canon.py` | canon explorer |
 
-2. **Subclass `LLMClient`** and implement `_complete` and `_complete_json`:
+---
+
+## 3. How to Add a New LLM Provider / 如何新增 LLM 提供商
+
+1. 新建 `poiesis/llm/<provider>_client.py`
+2. 继承 `LLMClient`
+3. 实现 `_complete` / `_complete_json`
+4. 在 `poiesis/api/services/scene_run_service.py` 的 `_build_llm()` 中注册新 provider
+5. 在 `pyproject.toml` 中补充依赖
+
+示例：
 
 ```python
 from poiesis.llm.base import LLMClient
 
+
 class MyProviderClient(LLMClient):
     def __init__(self, model: str, temperature: float, max_tokens: int) -> None:
         super().__init__(model=model, temperature=temperature, max_tokens=max_tokens)
-        # Initialise SDK client here
 
     def _complete(self, prompt: str, system: str | None = None, **kwargs) -> str:
-        # Call the provider API and return text
         ...
 
     def _complete_json(self, prompt: str, system: str | None = None, **kwargs) -> dict:
-        raw = self._complete(prompt + "\nReturn ONLY valid JSON.", system=system)
-        return self._extract_json(raw)  # inherited helper
-```
-
-3. **Register the provider** in `poiesis/run_loop.py` inside `_build_llm`:
-
-```python
-elif cfg.provider == "myprovider":
-    from poiesis.llm.myprovider_client import MyProviderClient
-    return MyProviderClient(model=cfg.model, temperature=cfg.temperature, max_tokens=cfg.max_tokens)
-```
-
-4. **Set the provider** in `config.yaml`:
-
-```yaml
-llm:
-  provider: "myprovider"
-  model: "my-model-name"
-```
-
-5. **Add the SDK dependency** to `pyproject.toml` under `[project] dependencies`.
-
-### SiliconFlow Notes
-
-SiliconFlow can be integrated as an OpenAI-compatible provider:
-
-- `provider`: `siliconflow`
-- `api_key`: `SILICONFLOW_API_KEY`
-- `base_url`: `https://api.siliconflow.cn/v1`
-
-Example (`config.yaml`):
-
-```yaml
-llm:
-    provider: "siliconflow"
-    model: "Qwen/Qwen2.5-72B-Instruct"
-    base_url: "https://api.siliconflow.cn/v1"
+        ...
 ```
 
 ---
 
-## 4. How to Extend Verification Rules
+## 4. How to Extend Verification Rules / 如何扩展校验规则
 
-### Adding a Rule-Based Check
+当前建议不要再往旧风格的“一个 verifier 文件里加私有方法”扩展，而是继续沿用 hub 拆分方式。
 
-Add a private method to `ConsistencyVerifier` in `poiesis/verifier.py`:
+### 添加新的规则子校验器
 
-```python
-def _check_my_new_rule(
-    self,
-    content: str,
-    world: WorldModel,
-    violations: list[str],
-    warnings: list[str],
-) -> None:
-    """Check that content does not violate my new rule."""
-    if "forbidden phrase" in content.lower():
-        violations.append("Forbidden phrase detected in chapter.")
-```
+1. 在 `poiesis/pipeline/verification/` 下新增文件，例如 `loop_verifier.py`
+2. 返回统一的 `VerifierIssue[]`
+3. 在 `VerifierHub` 中按固定顺序注册
 
-Then call it inside `verify()` before the LLM check:
+最小接口形态建议：
 
 ```python
-self._check_my_new_rule(content, world, violations, warnings)
+from poiesis.application.contracts import VerifierIssue
+
+
+class LoopVerifier:
+    def verify(self, world, proposed_changes) -> list[VerifierIssue]:
+        return []
 ```
 
-### Extending the LLM Check
+### 修改语义校验 Prompt（提示词）
 
-Edit `prompts/verifier.txt` to add a new numbered item to the checklist.
-The LLM response format (`violations` / `warnings` arrays) is already flexible
-enough to carry any new checks without code changes.
+编辑 `prompts/verifier.txt`。当前语义校验统一由 `LLMSemanticVerifier` 负责。
 
 ---
 
-## 5. Database Migration Guide
+## 5. How to Work with Scene Runs / 如何使用 Scene Runs
 
-Poiesis uses SQLite with a single schema file (`poiesis/db/schema.sql`).
-There is no migration framework; the schema uses `CREATE TABLE IF NOT EXISTS`
-so re-running `initialize_schema()` is always safe on an existing database.
+### 启动一个 run（运行任务）
 
-**Adding a new column to an existing table:**
+- API: `POST /api/runs`
+- CLI: `poiesis run --config config.yaml --max-chapters 2`
 
-```sql
-ALTER TABLE characters ADD COLUMN aliases JSON DEFAULT '[]';
-```
+### 读取运行详情
 
-Add this statement to `schema.sql` inside an `IF NOT EXISTS` guard pattern
-by placing it in a separate migration file and running it manually, or by
-checking for the column in Python before issuing the ALTER:
+- `GET /api/runs/{run_id}`
+- `GET /api/runs/{run_id}/chapters/{chapter_number}`
+- `GET /api/runs/{run_id}/chapters/{chapter_number}/scenes/{scene_number}`
 
-```python
-def _migrate_add_aliases(self) -> None:
-    conn = self._get_connection()
-    cur = conn.cursor()
-    cur.execute("PRAGMA table_info(characters)")
-    cols = {row['name'] for row in cur.fetchall()}
-    if 'aliases' not in cols:
-        conn.execute("ALTER TABLE characters ADD COLUMN aliases JSON DEFAULT '[]'")
-        conn.commit()
-```
+### 处理 review（审阅动作）
 
-**Adding a completely new table:** simply add the `CREATE TABLE IF NOT EXISTS`
-block to `schema.sql` and call `initialize_schema()` again.
+- `GET /api/reviews`
+- `POST /api/reviews/{review_id}/approve`
+- `POST /api/reviews/{review_id}/retry`
+- `POST /api/reviews/{review_id}/patch`
+
+### 查询 loops（剧情线索）
+
+- `GET /api/loops`
 
 ---
 
-## 6. Vector Store Management
+## 6. Database Notes / 数据库说明
 
-The vector store is managed by `poiesis/vector_store/store.py` using FAISS
-with sentence-transformers embeddings.
+当前数据库按新模型设计，不再考虑旧 schema 兼容。
 
-### Storage Layout
+### 结构原则
 
-```
-vector_store/
-├── index.faiss    # FAISS flat inner-product index
-└── metadata.pkl   # Python pickle of aligned metadata list
-```
+- `scene` 是一等实体
+- `trace`（轨迹）、`review`（审阅）、`patch`（修补）、`state snapshot`（状态快照）分表存储
+- `canon` 与 `process` 数据分层
+- 稳定领域对象优先结构化表字段；不稳定 payload（载荷）再放 JSON
 
-### Key Operations
-
-| Operation         | Method              | Notes                                          |
-|-------------------|---------------------|------------------------------------------------|
-| Add document      | `store.add(key, text, metadata)` | Replaces existing doc with same key  |
-| Similarity search | `store.search(query, k=5)` | Returns k nearest with scores            |
-| Remove document   | `store.remove(key)` | Rebuilds index (O(n)); avoid in hot path      |
-| Document count    | `len(store)`        | Includes only live (non-deleted) documents    |
-
-### Changing the Embedding Model
-
-Update `vector_store.embedding_model` in `config.yaml`. **Important:** changing
-the model invalidates the existing index because embedding dimensions change.
-Delete the `vector_store/` directory and re-index from scratch:
-
-```bash
-rm -rf vector_store/
-poiesis init --config config.yaml
-```
-
-### Re-indexing from the Database
+### 初始化方式
 
 ```python
 from poiesis.db.database import Database
-from poiesis.vector_store.store import VectorStore
 
 db = Database("poiesis.db")
 db.initialize_schema()
-vs = VectorStore("vector_store")
-
-for rule in db.list_world_rules():
-    vs.add(
-        key=f"world_rule:{rule['rule_key']}",
-        text=rule["description"],
-        metadata={"entity_type": "world_rule"},
-    )
-# Repeat for characters, timeline events, foreshadowing, chapter summaries
 ```
 
 ---
 
-## 7. Running Tests
+## 7. Vector Store Management / 向量存储管理
+
+向量存储仍由 `poiesis/vector_store/store.py` 管理。
+
+### 存储布局
+
+```text
+vector_store/
+├── index.faiss
+└── metadata.pkl
+```
+
+### 重要说明
+
+- 更换 embedding model（嵌入模型）后，需要重建 `vector_store/`
+- 当前 scene 主链仍会使用向量检索作为 prompt（提示词）上下文补充
+
+---
+
+## 8. Running Tests / 运行测试
 
 ```bash
-# Install dev dependencies
 pip install -e ".[dev]"
-
-# Run all tests with coverage
+ruff check poiesis tests
+mypy poiesis
 pytest
-
-# Run a specific test file
-pytest tests/test_database.py -v
-
-# Run a specific test class
-pytest tests/test_world_consistency.py::TestImmutableRules -v
-
-# Run without coverage (faster)
-pytest --no-cov
+cd frontend && npm run build
 ```
 
-Tests that touch the vector store (e.g., `test_originality.py`) require
-`sentence-transformers` and will download `all-MiniLM-L6-v2` on first run.
-Subsequent runs use the cached model.
+如果需要验证容器链路（Docker smoke）：
+
+```bash
+docker build -f docker/Dockerfile.api -t ghcr.io/djmacdtr/poiesis-api:ci-smoke --build-arg EMBEDDING_MODE=dummy .
+docker build -f docker/Dockerfile.web -t ghcr.io/djmacdtr/poiesis-web:ci-smoke .
+docker compose up -d
+```
 
 ---
 
-## 8. Configuration Reference
+## 9. Configuration Reference / 配置参考
 
-All fields have defaults. Override in `config.yaml`.
-
-| Key                              | Type    | Default                    | Description                                      |
-|----------------------------------|---------|----------------------------|--------------------------------------------------|
-| `llm.provider`                   | string  | `"openai"`                 | LLM provider: `"openai"` or `"anthropic"`        |
-| `llm.model`                      | string  | `"gpt-4o"`                 | Model identifier                                 |
-| `llm.temperature`                | float   | `0.8`                      | Sampling temperature (0.0–2.0)                   |
-| `llm.max_tokens`                 | int     | `4000`                     | Maximum tokens per completion                    |
-| `planner_llm.*`                  | —       | Same structure as `llm`    | Separate LLM config for the planner              |
-| `similarity.originality_threshold` | float | `0.85`                    | Cosine similarity above which content is flagged |
-| `similarity.fact_retrieval_k`    | int     | `10`                       | Facts to retrieve from vector store per query    |
-| `similarity.chapter_similarity_k`| int    | `5`                        | Chapters to compare for originality              |
-| `generation.max_chapters`        | int     | `100`                      | Total chapters to generate before stopping       |
-| `generation.rewrite_retries`     | int     | `3`                        | Max editor retries per verification failure      |
-| `generation.new_rule_budget`     | int     | `5`                        | Max new world facts introduced per chapter       |
-| `generation.target_word_count`   | int     | `3000`                     | Target chapter length in words                   |
-| `database.path`                  | string  | `"poiesis.db"`             | SQLite file path                                 |
-| `vector_store.path`              | string  | `"vector_store"`           | Directory for FAISS index files                  |
-| `vector_store.embedding_model`   | string  | `"all-MiniLM-L6-v2"`       | Sentence-transformers model name                 |
-| `world_seed`                     | string  | `"examples/world_seed.yaml"` | World seed file loaded on `init`               |
+| Key（配置项） | Type（类型） | Default（默认值） | Description（说明） |
+|---|---|---|---|
+| `llm.provider` | string | `"openai"` | writer / scene writer 使用的 provider |
+| `llm.model` | string | `"gpt-4o"` | writer 模型 |
+| `planner_llm.provider` | string | `"openai"` | planner / verifier 使用的 provider |
+| `planner_llm.model` | string | `"gpt-4o"` | planner 模型 |
+| `generation.max_chapters` | int | `100` | CLI 默认最大章节数 |
+| `generation.rewrite_retries` | int | `3` | scene 重写上限 |
+| `generation.new_rule_budget` | int | `5` | 单章新规则预算 |
+| `generation.target_word_count` | int | `3000` | 目标章节字数 |
+| `database.path` | string | `"poiesis.db"` | SQLite 文件路径 |
+| `vector_store.path` | string | `"vector_store"` | 向量索引目录 |
+| `vector_store.embedding_model` | string | `"all-MiniLM-L6-v2"` | embedding model |
+| `world_seed` | string | `"examples/world_seed.yaml"` | 默认 seed 文件 |

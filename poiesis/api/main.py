@@ -23,7 +23,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from poiesis.api.routers import auth, books, chapters, run, system_config, world
+from poiesis.api.routers import (
+    auth,
+    books,
+    canon,
+    chapters,
+    loops,
+    reviews,
+    runs,
+    system_config,
+)
 
 
 @asynccontextmanager
@@ -69,8 +78,10 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(books.router)
 app.include_router(chapters.router)
-app.include_router(world.router)
-app.include_router(run.router)
+app.include_router(runs.router)
+app.include_router(reviews.router)
+app.include_router(loops.router)
+app.include_router(canon.router)
 app.include_router(system_config.router)
 
 

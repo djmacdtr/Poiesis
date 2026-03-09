@@ -121,3 +121,141 @@ CREATE TABLE IF NOT EXISTS system_config (
     config_value TEXT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL UNIQUE,
+    book_id INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'running',
+    config_snapshot JSON DEFAULT '{}',
+    llm_snapshot JSON DEFAULT '{}',
+    error_message TEXT,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    finished_at TIMESTAMP,
+    FOREIGN KEY (book_id) REFERENCES books(id)
+);
+
+CREATE TABLE IF NOT EXISTS run_chapters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    chapter_number INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    planner_output_json JSON DEFAULT '{}',
+    retrieval_pack_json JSON DEFAULT '{}',
+    draft_text TEXT DEFAULT '',
+    final_content TEXT DEFAULT '',
+    changeset_json JSON DEFAULT '{}',
+    verifier_issues_json JSON DEFAULT '[]',
+    editor_rewrites_json JSON DEFAULT '[]',
+    merge_result_json JSON DEFAULT '{}',
+    summary_json JSON DEFAULT '{}',
+    metrics_json JSON DEFAULT '{}',
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(run_id, chapter_number),
+    FOREIGN KEY (run_id) REFERENCES runs(id)
+);
+
+CREATE TABLE IF NOT EXISTS run_scenes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    chapter_number INTEGER NOT NULL,
+    scene_number INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    scene_plan_json JSON DEFAULT '{}',
+    draft_json JSON DEFAULT '{}',
+    final_text TEXT DEFAULT '',
+    changeset_json JSON DEFAULT '{}',
+    verifier_issues_json JSON DEFAULT '[]',
+    review_required INTEGER NOT NULL DEFAULT 0,
+    review_reason TEXT DEFAULT '',
+    review_status TEXT DEFAULT 'auto_approved',
+    metrics_json JSON DEFAULT '{}',
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(run_id, chapter_number, scene_number),
+    FOREIGN KEY (run_id) REFERENCES runs(id)
+);
+
+CREATE TABLE IF NOT EXISTS story_state_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    chapter_number INTEGER NOT NULL,
+    snapshot_json JSON DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(book_id, chapter_number),
+    FOREIGN KEY (book_id) REFERENCES books(id)
+);
+
+CREATE TABLE IF NOT EXISTS loops (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    loop_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    introduced_in_scene TEXT DEFAULT '',
+    due_window TEXT DEFAULT '',
+    priority INTEGER NOT NULL DEFAULT 1,
+    related_characters JSON DEFAULT '[]',
+    resolution_requirements JSON DEFAULT '[]',
+    last_updated_scene TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(book_id, loop_id),
+    FOREIGN KEY (book_id) REFERENCES books(id)
+);
+
+CREATE TABLE IF NOT EXISTS loop_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    loop_id TEXT NOT NULL,
+    chapter_number INTEGER NOT NULL,
+    scene_number INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    payload_json JSON DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (book_id) REFERENCES books(id)
+);
+
+CREATE TABLE IF NOT EXISTS scene_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    chapter_number INTEGER NOT NULL,
+    scene_number INTEGER NOT NULL,
+    action TEXT NOT NULL DEFAULT 'pending',
+    status TEXT NOT NULL DEFAULT 'pending',
+    reason TEXT DEFAULT '',
+    patch_text TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES runs(id)
+);
+
+CREATE TABLE IF NOT EXISTS scene_patches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    chapter_number INTEGER NOT NULL,
+    scene_number INTEGER NOT NULL,
+    patch_text TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES runs(id)
+);
+
+CREATE TABLE IF NOT EXISTS chapter_outputs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    run_id INTEGER NOT NULL,
+    chapter_number INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    summary_json JSON DEFAULT '{}',
+    scene_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(book_id, chapter_number),
+    FOREIGN KEY (book_id) REFERENCES books(id),
+    FOREIGN KEY (run_id) REFERENCES runs(id)
+);

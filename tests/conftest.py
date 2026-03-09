@@ -17,8 +17,8 @@ from poiesis.config import (
     VectorStoreConfig,
 )
 from poiesis.db.database import Database
+from poiesis.domain.world.model import WorldModel
 from poiesis.llm.base import LLMClient
-from poiesis.world import WorldModel
 
 # ---------------------------------------------------------------------------
 # 全局 fixture：测试期间强制使用 DummyEmbeddingProvider（离线，无网络依赖）

@@ -111,54 +111,169 @@ export interface CanonData {
 }
 
 // ──────────────────────────────────────────────
-// Staging（候选变更）
+// Scene 工作台
 // ──────────────────────────────────────────────
 
-/** 变更状态 */
-export type StagingStatus = 'pending' | 'approved' | 'rejected'
-
-/** Staging 变更记录 */
-export interface StagingChange {
-  id: number
-  change_type: string
-  entity_type: string
-  entity_key: string
-  proposed_data: Record<string, unknown>
-  status: StagingStatus
-  source_chapter: number | null
-  rejection_reason: string | null
-  created_at: string
-}
-
-/** Staging 列表查询参数 */
-export type StagingFilter = StagingStatus | 'all'
-
-// ──────────────────────────────────────────────
-// 运行任务
-// ──────────────────────────────────────────────
-
-/** 运行任务状态 */
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'interrupted'
-
-/** 启动运行响应 */
 export interface RunResponse {
   task_id: string
-  status: TaskStatus
-  message?: string
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'interrupted'
 }
 
-/** 运行任务详情（轮询用） */
-export interface TaskDetail {
+export interface ScenePlan {
+  chapter_number: number
+  scene_number: number
+  title: string
+  goal: string
+  conflict: string
+  turning_point: string
+  location: string
+  pov_character: string
+  required_loops: string[]
+  continuity_requirements: string[]
+}
+
+export interface SceneDraft {
+  chapter_number: number
+  scene_number: number
+  title: string
+  content: string
+  retrieval_context: Record<string, unknown>
+}
+
+export interface SceneChangeSet {
+  characters: Array<Record<string, unknown>>
+  world_rules: Array<Record<string, unknown>>
+  timeline_events: Array<Record<string, unknown>>
+  loop_updates: Array<Record<string, unknown>>
+  uncertain_claims: Array<Record<string, unknown>>
+  raw_changes: Array<Record<string, unknown>>
+}
+
+export interface SceneIssue {
+  severity: 'fatal' | 'warning' | 'info'
+  type: string
+  reason: string
+  repair_hint: string
+  location: string
+}
+
+export interface SceneTrace {
+  run_id: number
+  chapter_number: number
+  scene_number: number
+  status: 'pending' | 'running' | 'completed' | 'needs_review' | 'failed' | 'approved'
+  scene_plan: ScenePlan
+  draft?: SceneDraft | null
+  final_text: string
+  changeset: SceneChangeSet
+  verifier_issues: SceneIssue[]
+  review_required: boolean
+  review_reason: string
+  review_status: string
+  metrics: Record<string, unknown>
+  error_message?: string | null
+}
+
+export interface StoryPlan {
+  book_id: number
+  focus: string
+  active_themes: string[]
+  active_loops: string[]
+  narrative_pressure: string
+}
+
+export interface SceneChapterPlan {
+  chapter_number: number
+  title: string
+  goal: string
+  hook: string
+  must_preserve: string[]
+  must_progress_loops: string[]
+  scene_count_target: number
+  notes: string[]
+  source_plan: Record<string, unknown>
+}
+
+export interface ChapterTraceDetail {
+  run_id: number
+  chapter_number: number
+  status: string
+  story_plan: StoryPlan
+  chapter_plan: SceneChapterPlan
+  scenes: SceneTrace[]
+  assembled_text: string
+  summary: Record<string, unknown>
+  metrics: Record<string, unknown>
+  review_required: boolean
+  error_message?: string | null
+}
+
+export interface ChapterOutput {
+  run_id: number
+  chapter_number: number
+  title: string
+  content: string
+  summary: Record<string, unknown>
+  scene_count: number
+  status: string
+}
+
+export interface SceneRunSummary {
+  id: number
   task_id: string
-  status: TaskStatus
-  progress?: number
-  current_chapter?: number
-  total_chapters?: number
-  logs?: string[]
-  error?: string
-  preview_text?: string
-  created_at?: string
-  updated_at?: string
+  book_id: number
+  status: string
+  current_chapter: number
+  total_chapters: number
+  created_at: string
+  updated_at: string
+  error_message?: string | null
+}
+
+export interface SceneRunDetail {
+  run: SceneRunSummary
+  chapters: Array<{
+    chapter_number: number
+    status: string
+    summary: Record<string, unknown>
+    metrics: Record<string, unknown>
+    review_required: boolean
+  }>
+}
+
+export interface ChapterDetailResponse {
+  trace: ChapterTraceDetail
+  output?: ChapterOutput | null
+}
+
+export interface SceneDetailResponse {
+  scene: SceneTrace
+  patches: Array<Record<string, unknown>>
+}
+
+export interface ReviewQueueItem {
+  id: number
+  run_id: number
+  chapter_number: number
+  scene_number: number
+  action: string
+  status: string
+  reason: string
+  patch_text: string
+  created_at: string
+  updated_at: string
+}
+
+export interface LoopState {
+  loop_id: string
+  title: string
+  status: 'open' | 'hinted' | 'escalated' | 'resolved' | 'dropped' | 'overdue'
+  introduced_in_scene: string
+  due_window: string
+  priority: number
+  related_characters: string[]
+  resolution_requirements: string[]
+  last_updated_scene: string
 }
 
 // ──────────────────────────────────────────────
@@ -198,12 +313,12 @@ export interface DashboardStats {
   completedChapters: number
   /** 总字数 */
   totalWords: number
-  /** 待审批变更数 */
-  pendingStagingCount: number
+  /** 待处理 review 数 */
+  pendingReviewCount: number
   /** 已注册角色数 */
   characterCount: number
-  /** 活跃伏笔数 */
-  activeForeshadowingCount: number
+  /** 活跃 loop 数 */
+  activeLoopCount: number
 }
 
 /** 字数趋势数据点 */

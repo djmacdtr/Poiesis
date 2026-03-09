@@ -131,6 +131,11 @@ class Database:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_staging_changes_book_id ON staging_changes(book_id)"
         )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_task_id ON runs(task_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_book_id ON runs(book_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_run_chapters_run_id ON run_chapters(run_id)"
+        )
 
     def _ensure_default_book(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -1053,3 +1058,530 @@ class Database:
                 "UPDATE users SET password_hash = ? WHERE id = ?",
                 (new_password_hash, user_id),
             )
+
+    # ------------------------------------------------------------------
+    # Run traces
+    # ------------------------------------------------------------------
+
+    def create_run_trace(
+        self,
+        task_id: str,
+        book_id: int,
+        status: str,
+        config_snapshot: dict[str, Any],
+        llm_snapshot: dict[str, Any],
+    ) -> int:
+        """创建一次 run 的摘要记录。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO runs (
+                    task_id, book_id, status, config_snapshot, llm_snapshot
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    book_id,
+                    status,
+                    json.dumps(config_snapshot),
+                    json.dumps(llm_snapshot),
+                ),
+            )
+            return cur.lastrowid or 0
+
+    def update_run_trace_status(
+        self,
+        run_id: int,
+        status: str,
+        error_message: str | None = None,
+        finished: bool = False,
+    ) -> None:
+        """更新 run 状态，必要时补 finished_at 与错误信息。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                UPDATE runs
+                SET
+                    status = ?,
+                    error_message = ?,
+                    finished_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE finished_at END
+                WHERE id = ?
+                """,
+                (status, error_message, int(finished), run_id),
+            )
+
+    def get_run_trace_by_task_id(self, task_id: str) -> dict[str, Any] | None:
+        """按 task_id 读取单条 run trace。"""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM runs WHERE task_id = ?", (task_id,))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["config_snapshot"] = json.loads(result.get("config_snapshot") or "{}")
+        result["llm_snapshot"] = json.loads(result.get("llm_snapshot") or "{}")
+        return result
+
+    def upsert_run_chapter_trace(
+        self,
+        run_id: int,
+        chapter_number: int,
+        status: str,
+        planner_output: dict[str, Any],
+        retrieval_pack: dict[str, Any],
+        draft_text: str,
+        final_content: str,
+        changeset: dict[str, Any],
+        verifier_issues: list[dict[str, Any]],
+        editor_rewrites: list[dict[str, Any]],
+        merge_result: dict[str, Any],
+        summary_result: dict[str, Any],
+        metrics: dict[str, Any],
+        error_message: str | None = None,
+    ) -> int:
+        """插入或更新某次 run 的单章 trace。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO run_chapters (
+                    run_id,
+                    chapter_number,
+                    status,
+                    planner_output_json,
+                    retrieval_pack_json,
+                    draft_text,
+                    final_content,
+                    changeset_json,
+                    verifier_issues_json,
+                    editor_rewrites_json,
+                    merge_result_json,
+                    summary_json,
+                    metrics_json,
+                    error_message
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, chapter_number) DO UPDATE SET
+                    status = excluded.status,
+                    planner_output_json = excluded.planner_output_json,
+                    retrieval_pack_json = excluded.retrieval_pack_json,
+                    draft_text = excluded.draft_text,
+                    final_content = excluded.final_content,
+                    changeset_json = excluded.changeset_json,
+                    verifier_issues_json = excluded.verifier_issues_json,
+                    editor_rewrites_json = excluded.editor_rewrites_json,
+                    merge_result_json = excluded.merge_result_json,
+                    summary_json = excluded.summary_json,
+                    metrics_json = excluded.metrics_json,
+                    error_message = excluded.error_message,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    run_id,
+                    chapter_number,
+                    status,
+                    json.dumps(planner_output),
+                    json.dumps(retrieval_pack),
+                    draft_text,
+                    final_content,
+                    json.dumps(changeset),
+                    json.dumps(verifier_issues),
+                    json.dumps(editor_rewrites),
+                    json.dumps(merge_result),
+                    json.dumps(summary_result),
+                    json.dumps(metrics),
+                    error_message,
+                ),
+            )
+            return cur.lastrowid or 0
+
+    def list_run_chapter_traces(self, run_id: int) -> list[dict[str, Any]]:
+        """按章节号顺序返回某次 run 的全部章节 trace。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM run_chapters WHERE run_id = ? ORDER BY chapter_number ASC",
+                (run_id,),
+            )
+            rows = cur.fetchall()
+        return [self._decode_run_chapter_trace(dict(row)) for row in rows]
+
+    def get_run_chapter_trace(self, run_id: int, chapter_number: int) -> dict[str, Any] | None:
+        """读取某次 run 的单章 trace。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM run_chapters
+                WHERE run_id = ? AND chapter_number = ?
+                """,
+                (run_id, chapter_number),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._decode_run_chapter_trace(dict(row))
+
+    def _decode_run_chapter_trace(self, result: dict[str, Any]) -> dict[str, Any]:
+        """把 JSON 列反序列化回 Python 结构，供服务层直接消费。"""
+        result["planner_output_json"] = json.loads(result.get("planner_output_json") or "{}")
+        result["retrieval_pack_json"] = json.loads(result.get("retrieval_pack_json") or "{}")
+        result["changeset_json"] = json.loads(result.get("changeset_json") or "{}")
+        result["verifier_issues_json"] = json.loads(result.get("verifier_issues_json") or "[]")
+        result["editor_rewrites_json"] = json.loads(result.get("editor_rewrites_json") or "[]")
+        result["merge_result_json"] = json.loads(result.get("merge_result_json") or "{}")
+        result["summary_json"] = json.loads(result.get("summary_json") or "{}")
+        result["metrics_json"] = json.loads(result.get("metrics_json") or "{}")
+        return result
+
+    # ------------------------------------------------------------------
+    # Scene 驱动架构：run scenes / reviews / loops / outputs
+    # ------------------------------------------------------------------
+
+    def upsert_run_scene_trace(self, run_id: int, payload: dict[str, Any]) -> int:
+        """插入或更新单个 scene 的 trace。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO run_scenes (
+                    run_id, chapter_number, scene_number, status, scene_plan_json, draft_json,
+                    final_text, changeset_json, verifier_issues_json, review_required,
+                    review_reason, review_status, metrics_json, error_message
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, chapter_number, scene_number) DO UPDATE SET
+                    status = excluded.status,
+                    scene_plan_json = excluded.scene_plan_json,
+                    draft_json = excluded.draft_json,
+                    final_text = excluded.final_text,
+                    changeset_json = excluded.changeset_json,
+                    verifier_issues_json = excluded.verifier_issues_json,
+                    review_required = excluded.review_required,
+                    review_reason = excluded.review_reason,
+                    review_status = excluded.review_status,
+                    metrics_json = excluded.metrics_json,
+                    error_message = excluded.error_message,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    run_id,
+                    int(payload["chapter_number"]),
+                    int(payload["scene_number"]),
+                    str(payload.get("status") or "pending"),
+                    json.dumps(payload.get("scene_plan") or {}),
+                    json.dumps(payload.get("draft") or {}),
+                    str(payload.get("final_text") or ""),
+                    json.dumps(payload.get("changeset") or {}),
+                    json.dumps(payload.get("verifier_issues") or []),
+                    int(bool(payload.get("review_required"))),
+                    str(payload.get("review_reason") or ""),
+                    str(payload.get("review_status") or "auto_approved"),
+                    json.dumps(payload.get("metrics") or {}),
+                    payload.get("error_message"),
+                ),
+            )
+            return cur.lastrowid or 0
+
+    def list_run_scene_traces(self, run_id: int, chapter_number: int | None = None) -> list[dict[str, Any]]:
+        """返回某次 run 下的全部 scene trace。"""
+        with self._cursor() as cur:
+            if chapter_number is None:
+                cur.execute(
+                    "SELECT * FROM run_scenes WHERE run_id = ? ORDER BY chapter_number, scene_number",
+                    (run_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT * FROM run_scenes
+                    WHERE run_id = ? AND chapter_number = ?
+                    ORDER BY scene_number
+                    """,
+                    (run_id, chapter_number),
+                )
+            rows = cur.fetchall()
+        return [self._decode_run_scene_trace(dict(row)) for row in rows]
+
+    def get_run_scene_trace(self, run_id: int, chapter_number: int, scene_number: int) -> dict[str, Any] | None:
+        """读取单个 scene trace。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM run_scenes
+                WHERE run_id = ? AND chapter_number = ? AND scene_number = ?
+                """,
+                (run_id, chapter_number, scene_number),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._decode_run_scene_trace(dict(row))
+
+    def _decode_run_scene_trace(self, row: dict[str, Any]) -> dict[str, Any]:
+        """反序列化 scene trace。"""
+        row["scene_plan_json"] = json.loads(row.get("scene_plan_json") or "{}")
+        row["draft_json"] = json.loads(row.get("draft_json") or "{}")
+        row["changeset_json"] = json.loads(row.get("changeset_json") or "{}")
+        row["verifier_issues_json"] = json.loads(row.get("verifier_issues_json") or "[]")
+        row["metrics_json"] = json.loads(row.get("metrics_json") or "{}")
+        row["review_required"] = bool(row.get("review_required"))
+        return row
+
+    def upsert_story_state_snapshot(
+        self,
+        book_id: int,
+        chapter_number: int,
+        snapshot: dict[str, Any],
+    ) -> int:
+        """保存章节后的故事状态快照。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO story_state_snapshots (book_id, chapter_number, snapshot_json)
+                VALUES (?, ?, ?)
+                ON CONFLICT(book_id, chapter_number) DO UPDATE SET
+                    snapshot_json = excluded.snapshot_json
+                """,
+                (book_id, chapter_number, json.dumps(snapshot)),
+            )
+            return cur.lastrowid or 0
+
+    def get_story_state_snapshot(self, book_id: int, chapter_number: int) -> dict[str, Any] | None:
+        """读取某一章的故事状态快照。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM story_state_snapshots
+                WHERE book_id = ? AND chapter_number = ?
+                """,
+                (book_id, chapter_number),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["snapshot_json"] = json.loads(result.get("snapshot_json") or "{}")
+        return result
+
+    def upsert_loop(self, book_id: int, loop: dict[str, Any]) -> int:
+        """插入或更新 loop 状态。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO loops (
+                    book_id, loop_id, title, status, introduced_in_scene, due_window,
+                    priority, related_characters, resolution_requirements, last_updated_scene
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(book_id, loop_id) DO UPDATE SET
+                    title = excluded.title,
+                    status = excluded.status,
+                    introduced_in_scene = excluded.introduced_in_scene,
+                    due_window = excluded.due_window,
+                    priority = excluded.priority,
+                    related_characters = excluded.related_characters,
+                    resolution_requirements = excluded.resolution_requirements,
+                    last_updated_scene = excluded.last_updated_scene,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    book_id,
+                    loop["loop_id"],
+                    loop["title"],
+                    loop.get("status", "open"),
+                    loop.get("introduced_in_scene", ""),
+                    loop.get("due_window", ""),
+                    int(loop.get("priority", 1)),
+                    json.dumps(loop.get("related_characters") or []),
+                    json.dumps(loop.get("resolution_requirements") or []),
+                    loop.get("last_updated_scene", ""),
+                ),
+            )
+            return cur.lastrowid or 0
+
+    def list_loops(self, book_id: int) -> list[dict[str, Any]]:
+        """返回一本书的全部 loop。"""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM loops WHERE book_id = ? ORDER BY updated_at DESC, id DESC", (book_id,))
+            rows = cur.fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["related_characters"] = json.loads(item.get("related_characters") or "[]")
+            item["resolution_requirements"] = json.loads(item.get("resolution_requirements") or "[]")
+            result.append(item)
+        return result
+
+    def add_loop_event(
+        self,
+        book_id: int,
+        loop_id: str,
+        chapter_number: int,
+        scene_number: int,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> int:
+        """记录 loop 生命周期事件。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO loop_events (
+                    book_id, loop_id, chapter_number, scene_number, event_type, payload_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (book_id, loop_id, chapter_number, scene_number, event_type, json.dumps(payload)),
+            )
+            return cur.lastrowid or 0
+
+    def create_scene_review(
+        self,
+        run_id: int,
+        chapter_number: int,
+        scene_number: int,
+        reason: str,
+    ) -> int:
+        """创建审阅队列项。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO scene_reviews (
+                    run_id, chapter_number, scene_number, action, status, reason
+                )
+                VALUES (?, ?, ?, 'pending', 'pending', ?)
+                """,
+                (run_id, chapter_number, scene_number, reason),
+            )
+            return cur.lastrowid or 0
+
+    def list_scene_reviews(self, book_id: int | None = None) -> list[dict[str, Any]]:
+        """返回审阅队列。"""
+        with self._cursor() as cur:
+            if book_id is None:
+                cur.execute("SELECT * FROM scene_reviews ORDER BY created_at DESC, id DESC")
+            else:
+                cur.execute(
+                    """
+                    SELECT sr.* FROM scene_reviews sr
+                    JOIN runs r ON r.id = sr.run_id
+                    WHERE r.book_id = ?
+                    ORDER BY sr.created_at DESC, sr.id DESC
+                    """,
+                    (book_id,),
+                )
+            rows = cur.fetchall()
+        return [dict(row) for row in rows]
+
+    def get_scene_review(self, review_id: int) -> dict[str, Any] | None:
+        """读取单条审阅记录。"""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM scene_reviews WHERE id = ?", (review_id,))
+            row = cur.fetchone()
+        return dict(row) if row else None
+
+    def update_scene_review(
+        self,
+        review_id: int,
+        action: str,
+        status: str,
+        patch_text: str | None = None,
+    ) -> dict[str, Any] | None:
+        """更新审阅动作。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                UPDATE scene_reviews
+                SET action = ?, status = ?, patch_text = COALESCE(?, patch_text), updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (action, status, patch_text, review_id),
+            )
+        return self.get_scene_review(review_id)
+
+    def add_scene_patch(self, run_id: int, chapter_number: int, scene_number: int, patch_text: str) -> int:
+        """记录 patch 文本。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO scene_patches (run_id, chapter_number, scene_number, patch_text)
+                VALUES (?, ?, ?, ?)
+                """,
+                (run_id, chapter_number, scene_number, patch_text),
+            )
+            return cur.lastrowid or 0
+
+    def list_scene_patches(self, run_id: int, chapter_number: int, scene_number: int) -> list[dict[str, Any]]:
+        """读取 scene 的全部 patch 记录。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM scene_patches
+                WHERE run_id = ? AND chapter_number = ? AND scene_number = ?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (run_id, chapter_number, scene_number),
+            )
+            rows = cur.fetchall()
+        return [dict(row) for row in rows]
+
+    def upsert_chapter_output(self, book_id: int, payload: dict[str, Any]) -> int:
+        """保存最终章节输出。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO chapter_outputs (
+                    book_id, run_id, chapter_number, title, content, summary_json, scene_count, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(book_id, chapter_number) DO UPDATE SET
+                    run_id = excluded.run_id,
+                    title = excluded.title,
+                    content = excluded.content,
+                    summary_json = excluded.summary_json,
+                    scene_count = excluded.scene_count,
+                    status = excluded.status,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    book_id,
+                    payload["run_id"],
+                    payload["chapter_number"],
+                    payload["title"],
+                    payload["content"],
+                    json.dumps(payload.get("summary") or {}),
+                    int(payload.get("scene_count") or 0),
+                    payload.get("status", "draft"),
+                ),
+            )
+            return cur.lastrowid or 0
+
+    def get_chapter_output(self, book_id: int, chapter_number: int) -> dict[str, Any] | None:
+        """读取最终章节输出。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM chapter_outputs
+                WHERE book_id = ? AND chapter_number = ?
+                """,
+                (book_id, chapter_number),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["summary_json"] = json.loads(item.get("summary_json") or "{}")
+        return item
+
+    def list_chapter_outputs(self, book_id: int) -> list[dict[str, Any]]:
+        """列出最终章节输出，供 runs/chapters 页面消费。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM chapter_outputs WHERE book_id = ? ORDER BY chapter_number ASC",
+                (book_id,),
+            )
+            rows = cur.fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["summary_json"] = json.loads(item.get("summary_json") or "{}")
+            item["summary_text"] = str(item["summary_json"].get("summary") or "")
+            result.append(item)
+        return result

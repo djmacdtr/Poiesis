@@ -8,7 +8,7 @@ import {
   FileText,
   GitPullRequest,
   Users,
-  Bookmark,
+  Orbit,
 } from 'lucide-react'
 import { StatCard } from '@/components/StatCard'
 import { WordTrendChart } from '@/components/WordTrendChart'
@@ -99,9 +99,9 @@ export default function Dashboard() {
           icon={<FileText className="w-5 h-5" />}
         />
         <StatCard
-          title="待审批变更"
-          value={stats?.pendingStagingCount ?? 0}
-          description="Staging 候选"
+          title="待处理 Review"
+          value={stats?.pendingReviewCount ?? 0}
+          description="需要人工接管的 scene"
           icon={<GitPullRequest className="w-5 h-5" />}
         />
         <StatCard
@@ -110,9 +110,9 @@ export default function Dashboard() {
           icon={<Users className="w-5 h-5" />}
         />
         <StatCard
-          title="活跃伏笔"
-          value={stats?.activeForeshadowingCount ?? 0}
-          icon={<Bookmark className="w-5 h-5" />}
+          title="活跃 Loops"
+          value={stats?.activeLoopCount ?? 0}
+          icon={<Orbit className="w-5 h-5" />}
         />
       </div>
 

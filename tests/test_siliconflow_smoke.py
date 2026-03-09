@@ -1,4 +1,4 @@
-"""SiliconFlow integration smoke test for RunLoop wiring."""
+"""SiliconFlow 接线烟测。"""
 
 from __future__ import annotations
 
@@ -6,14 +6,10 @@ from pathlib import Path
 
 import yaml
 
-from poiesis.run_loop import RunLoop
+from poiesis.api.services.scene_run_service import _build_context
 
 
-def test_run_loop_builds_siliconflow_clients_from_config_and_env(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    """RunLoop should wire both writer/planner LLMs to SiliconFlow when configured."""
+def test_build_context_builds_siliconflow_clients_from_config_and_env(tmp_path: Path, monkeypatch) -> None:
     captured: list[dict[str, object | None]] = []
 
     def fake_openai_init(self, model, temperature, max_tokens, api_key=None, base_url=None):
@@ -49,31 +45,19 @@ def test_run_loop_builds_siliconflow_clients_from_config_and_env(
             "max_tokens": 2000,
             "base_url": "https://api.siliconflow.cn/v1",
         },
-        "similarity": {
-            "originality_threshold": 0.85,
-            "fact_retrieval_k": 10,
-            "chapter_similarity_k": 5,
-        },
-        "generation": {
-            "max_chapters": 2,
-            "rewrite_retries": 1,
-            "new_rule_budget": 3,
-            "target_word_count": 500,
-        },
+        "similarity": {"originality_threshold": 0.85, "fact_retrieval_k": 10, "chapter_similarity_k": 5},
+        "generation": {"max_chapters": 2, "rewrite_retries": 1, "new_rule_budget": 3, "target_word_count": 500},
         "database": {"path": str(db_path)},
-        "vector_store": {
-            "path": str(vs_path),
-            "embedding_model": "all-MiniLM-L6-v2",
-        },
+        "vector_store": {"path": str(vs_path), "embedding_model": "all-MiniLM-L6-v2"},
         "world_seed": "examples/world_seed.yaml",
     }
 
     with config_path.open("w", encoding="utf-8") as fh:
         yaml.safe_dump(config_data, fh, sort_keys=False)
 
-    run_loop = RunLoop(config_path=str(config_path))
+    context, _, _ = _build_context(str(config_path), 1)
+    context.db.close()
 
-    assert run_loop is not None
     assert len(captured) == 2
     assert captured[0]["api_key"] == "sf-smoke-env-key"
     assert captured[1]["api_key"] == "sf-smoke-env-key"

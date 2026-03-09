@@ -23,6 +23,7 @@ ENV/
 
 # 测试 / 代码检查缓存
 .pytest_cache/
+.pytest-tmp/
 .mypy_cache/
 .ruff_cache/
 .tox/

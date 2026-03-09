@@ -1,19 +1,30 @@
 /**
  * 应用路由配置（含认证守卫）
  */
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AppShell } from '@/components/AppShell'
-import Dashboard from '@/pages/Dashboard'
-import Run from '@/pages/Run'
-import Chapters from '@/pages/Chapters'
-import ChapterDetail from '@/pages/ChapterDetail'
-import Canon from '@/pages/Canon'
-import Staging from '@/pages/Staging'
-import Stats from '@/pages/Stats'
-import Settings from '@/pages/Settings'
-import Books from '@/pages/Books'
-import LoginPage from '@/pages/Login'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
+
+const Dashboard = lazy(() => import('@/pages/Dashboard'))
+const RunBoard = lazy(() => import('@/pages/RunBoard'))
+const SceneRunDetail = lazy(() => import('@/pages/SceneRunDetail'))
+const ReviewQueue = lazy(() => import('@/pages/ReviewQueue'))
+const LoopBoard = lazy(() => import('@/pages/LoopBoard'))
+const Chapters = lazy(() => import('@/pages/Chapters'))
+const ChapterDetail = lazy(() => import('@/pages/ChapterDetail'))
+const Canon = lazy(() => import('@/pages/Canon'))
+const Settings = lazy(() => import('@/pages/Settings'))
+const Books = lazy(() => import('@/pages/Books'))
+const LoginPage = lazy(() => import('@/pages/Login'))
+
+function RouteFallback() {
+  return (
+    <div className="min-h-[240px] flex items-center justify-center rounded-xl border border-gray-200 bg-white text-sm text-gray-500">
+      页面加载中…
+    </div>
+  )
+}
 
 /** 需要登录的路由守卫：未登录时跳转 /login */
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -38,29 +49,33 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 function AppRoutes() {
   return (
-    <Routes>
-      {/* 登录页：不需要认证 */}
-      <Route path="/login" element={<LoginPage />} />
+    <Suspense fallback={<RouteFallback />}>
+      {/* 页面级懒加载优先压缩首屏主包，尤其是图表和后台管理页。 */}
+      <Routes>
+        {/* 登录页：不需要认证 */}
+        <Route path="/login" element={<LoginPage />} />
 
-      {/* 受保护页面：需要登录 */}
-      <Route
-        element={
-          <RequireAuth>
-            <AppShell />
-          </RequireAuth>
-        }
-      >
-        <Route index element={<Dashboard />} />
-        <Route path="run" element={<Run />} />
-        <Route path="chapters" element={<Chapters />} />
-        <Route path="chapters/:id" element={<ChapterDetail />} />
-        <Route path="canon" element={<Canon />} />
-        <Route path="staging" element={<Staging />} />
-        <Route path="stats" element={<Stats />} />
-        <Route path="books" element={<Books />} />
-        <Route path="settings" element={<Settings />} />
-      </Route>
-    </Routes>
+        {/* 受保护页面：需要登录 */}
+        <Route
+          element={
+            <RequireAuth>
+              <AppShell />
+            </RequireAuth>
+          }
+        >
+          <Route index element={<Dashboard />} />
+          <Route path="runs" element={<RunBoard />} />
+          <Route path="runs/:runId" element={<SceneRunDetail />} />
+          <Route path="reviews" element={<ReviewQueue />} />
+          <Route path="loops" element={<LoopBoard />} />
+          <Route path="chapters" element={<Chapters />} />
+          <Route path="chapters/:id" element={<ChapterDetail />} />
+          <Route path="canon" element={<Canon />} />
+          <Route path="books" element={<Books />} />
+          <Route path="settings" element={<Settings />} />
+        </Route>
+      </Routes>
+    </Suspense>
   )
 }
 

@@ -164,29 +164,36 @@ class TestUnauthorizedAccess:
         resp = client.get("/api/system/config")
         assert resp.status_code == 401
 
-    def test_post_run_without_auth_returns_401(self, tmp_db: Database) -> None:
-        """未登录时 POST /api/run 应返回 401。"""
+    def test_post_runs_without_auth_returns_401(self, tmp_db: Database) -> None:
+        """未登录时 POST /api/runs 应返回 401。"""
         client = _make_client(tmp_db)
-        resp = client.post("/api/run", json={"chapter_count": 1})
+        resp = client.post("/api/runs", json={"chapter_count": 1})
         assert resp.status_code == 401
 
-    def test_approve_staging_without_auth_returns_401(self, tmp_db: Database) -> None:
-        """未登录时 POST /api/world/staging/{id}/approve 应返回 401。"""
-        change_id = tmp_db.add_staging_change(
-            change_type="upsert",
-            entity_type="character",
-            entity_key="TestChar",
-            proposed_data={"name": "TestChar"},
+    def test_approve_review_without_auth_returns_401(self, tmp_db: Database) -> None:
+        """未登录时 POST /api/reviews/{id}/approve 应返回 401。"""
+        run_id = tmp_db.create_run_trace(
+            task_id="auth-review-run",
+            book_id=1,
+            status="running",
+            config_snapshot={},
+            llm_snapshot={},
+        )
+        review_id = tmp_db.create_scene_review(
+            run_id=run_id,
+            chapter_number=1,
+            scene_number=1,
+            reason="需要人工审阅",
         )
         client = _make_client(tmp_db)
-        resp = client.post(f"/api/world/staging/{change_id}/approve", json={})
+        resp = client.post(f"/api/reviews/{review_id}/approve", json={})
         assert resp.status_code == 401
 
     def test_public_endpoints_accessible_without_auth(self, tmp_db: Database) -> None:
         """公开只读接口（chapters、canon）无需认证即可访问。"""
         client = _make_client(tmp_db)
         assert client.get("/api/chapters").status_code == 200
-        assert client.get("/api/world/canon").status_code == 200
+        assert client.get("/api/canon").status_code == 200
         assert client.get("/health").status_code == 200
 
 
