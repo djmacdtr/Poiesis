@@ -11,6 +11,7 @@ class ChapterSummaryItem(BaseModel):
     """章节列表项（不含正文），对应前端 ChapterSummaryItem 类型。"""
 
     id: int
+    book_id: int
     chapter_number: int
     title: str | None
     word_count: int

@@ -31,15 +31,15 @@ def _normalize_chapter(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def list_chapters(db: Database) -> list[dict[str, Any]]:
+def list_chapters(db: Database, book_id: int = 1) -> list[dict[str, Any]]:
     """返回所有章节的摘要列表（不含正文）。"""
-    rows = db.list_chapters()
+    rows = db.list_chapters(book_id=book_id)
     return [_normalize_chapter(r) for r in rows]
 
 
-def get_chapter(db: Database, chapter_id: int) -> dict[str, Any] | None:
+def get_chapter(db: Database, chapter_id: int, book_id: int = 1) -> dict[str, Any] | None:
     """按章节行 id（primary key）查询章节详情，不存在时返回 None。"""
-    row = db.get_chapter_by_id(chapter_id)
+    row = db.get_chapter_by_id(chapter_id, book_id=book_id)
     if row is None:
         return None
     return _normalize_chapter(row)

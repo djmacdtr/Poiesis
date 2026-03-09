@@ -35,11 +35,18 @@ def main() -> None:
     type=click.Path(exists=True),
     help="Path to world_seed.yaml (overrides config).",
 )
-def run(config: str, max_chapters: int | None, seed: str | None) -> None:
+@click.option(
+    "--book-id",
+    default=1,
+    type=click.IntRange(1),
+    show_default=True,
+    help="目标书籍 ID。",
+)
+def run(config: str, max_chapters: int | None, seed: str | None, book_id: int) -> None:
     """Run the generation loop."""
     from poiesis.run_loop import RunLoop
 
-    loop = RunLoop(config_path=config)
+    loop = RunLoop(config_path=config, book_id=book_id)
     loop.load_world_seed(seed_path=seed)
     loop.run(max_chapters=max_chapters)
 
@@ -57,7 +64,14 @@ def run(config: str, max_chapters: int | None, seed: str | None) -> None:
     type=click.Path(exists=True),
     help="Path to world_seed.yaml.",
 )
-def init(config: str, seed: str | None) -> None:
+@click.option(
+    "--book-id",
+    default=1,
+    type=click.IntRange(1),
+    show_default=True,
+    help="目标书籍 ID。",
+)
+def init(config: str, seed: str | None, book_id: int) -> None:
     """Initialize a new world database from a seed file."""
     from poiesis.config import load_config
     from poiesis.db.database import Database
@@ -69,7 +83,7 @@ def init(config: str, seed: str | None) -> None:
 
     from poiesis.run_loop import RunLoop
 
-    loop = RunLoop(config_path=config)
+    loop = RunLoop(config_path=config, book_id=book_id)
     loop.load_world_seed(seed_path=seed)
     console.print("[bold green]World initialized successfully.[/bold green]")
 
@@ -107,7 +121,14 @@ def serve(config: str, host: str, port: int, reload: bool) -> None:
     show_default=True,
     help="Path to config.yaml.",
 )
-def status(config: str) -> None:
+@click.option(
+    "--book-id",
+    default=1,
+    type=click.IntRange(1),
+    show_default=True,
+    help="目标书籍 ID。",
+)
+def status(config: str, book_id: int) -> None:
     """Show current world state and generation progress."""
     from poiesis.config import load_config
     from poiesis.db.database import Database
@@ -116,16 +137,21 @@ def status(config: str) -> None:
     db = Database(cfg.database.path)
     db.initialize_schema()
 
-    chapters = db.list_chapters()
-    rules = db.list_world_rules()
-    characters = db.list_characters()
-    pending = db.list_staging_changes(status="pending")
+    if db.get_book(book_id) is None:
+        db.close()
+        raise click.ClickException(f"book_id={book_id} 不存在")
+
+    chapters = db.list_chapters(book_id=book_id)
+    rules = db.list_world_rules(book_id=book_id)
+    characters = db.list_characters(book_id=book_id)
+    pending = db.list_staging_changes(status="pending", book_id=book_id)
 
     # 构建并打印状态汇总表格
     table = Table(title="Poiesis World Status", show_header=True, header_style="bold magenta")
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="white")
 
+    table.add_row("Book ID", str(book_id))
     table.add_row("Chapters generated", str(len(chapters)))
     table.add_row("World rules", str(len(rules)))
     table.add_row("Characters", str(len(characters)))

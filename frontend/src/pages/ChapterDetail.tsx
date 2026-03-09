@@ -1,7 +1,7 @@
 /**
  * 章节详情页：展示章节正文、写作计划及 AI 生成摘要
  */
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 import { fetchChapter } from '@/services/chapters'
@@ -10,11 +10,13 @@ import { formatDate, formatWordCount, chapterStatusLabel } from '@/lib/utils'
 
 export default function ChapterDetail() {
   const { id } = useParams<{ id: string }>()
+  const [searchParams] = useSearchParams()
   const chapterId = Number(id)
+  const bookId = Number(searchParams.get('book') || '1')
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['chapter', chapterId],
-    queryFn: () => fetchChapter(chapterId),
+    queryKey: ['chapter', chapterId, bookId],
+    queryFn: () => fetchChapter(chapterId, bookId),
     enabled: !isNaN(chapterId),
   })
 
@@ -26,7 +28,7 @@ export default function ChapterDetail() {
     <div className="space-y-5 max-w-3xl">
       {/* 返回按钮 */}
       <Link
-        to="/chapters"
+        to={`/chapters?book=${bookId}`}
         className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-indigo-600 transition-colors"
       >
         <ArrowLeft className="w-4 h-4" />

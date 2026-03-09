@@ -16,11 +16,26 @@ class SystemConfigRequest(BaseModel):
     anthropic_api_key: str | None = None
     """Anthropic API Key（明文，将在服务端加密存储）。"""
 
+    siliconflow_api_key: str | None = None
+    """SiliconFlow API Key（明文，将在服务端加密存储）。"""
+
     embedding_provider: str | None = None
     """Embedding 提供者：local 或 remote。"""
 
     default_chapter_count: int | None = None
     """默认章节生成数。"""
+
+    llm_provider: str | None = None
+    """写作模型 provider（openai/anthropic/siliconflow）。"""
+
+    llm_model: str | None = None
+    """写作模型名称。"""
+
+    planner_llm_provider: str | None = None
+    """规划模型 provider（openai/anthropic/siliconflow）。"""
+
+    planner_llm_model: str | None = None
+    """规划模型名称。"""
 
 
 class SystemConfigStatus(BaseModel):
@@ -29,8 +44,20 @@ class SystemConfigStatus(BaseModel):
     has_openai_api_key: bool = False
     """是否已配置 OpenAI API Key。"""
 
+    openai_api_key_preview: str | None = None
+    """OpenAI API Key 脱敏预览（前4后4）。"""
+
     has_anthropic_api_key: bool = False
     """是否已配置 Anthropic API Key。"""
+
+    anthropic_api_key_preview: str | None = None
+    """Anthropic API Key 脱敏预览（前4后4）。"""
+
+    has_siliconflow_api_key: bool = False
+    """是否已配置 SiliconFlow API Key。"""
+
+    siliconflow_api_key_preview: str | None = None
+    """SiliconFlow API Key 脱敏预览（前4后4）。"""
 
     embedding_provider: str | None = None
     """已保存的 Embedding 提供者（来自系统配置）。"""
@@ -43,3 +70,27 @@ class SystemConfigStatus(BaseModel):
 
     default_chapter_count: int | None = None
     """当前默认章节生成数。"""
+
+    llm_provider: str | None = None
+    """已保存的写作模型 provider（来自系统配置）。"""
+
+    llm_model: str | None = None
+    """已保存的写作模型名称（来自系统配置）。"""
+
+    planner_llm_provider: str | None = None
+    """已保存的规划模型 provider（来自系统配置）。"""
+
+    planner_llm_model: str | None = None
+    """已保存的规划模型名称（来自系统配置）。"""
+
+    llm_provider_effective: str
+    """写作模型实际 provider（DB 覆盖后，回退 config.yaml）。"""
+
+    llm_model_effective: str
+    """写作模型实际 model（DB 覆盖后，回退 config.yaml）。"""
+
+    planner_llm_provider_effective: str
+    """规划模型实际 provider（DB 覆盖后，回退 config.yaml）。"""
+
+    planner_llm_model_effective: str
+    """规划模型实际 model（DB 覆盖后，回退 config.yaml）。"""

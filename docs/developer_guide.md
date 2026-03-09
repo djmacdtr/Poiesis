@@ -131,6 +131,23 @@ llm:
 
 5. **Add the SDK dependency** to `pyproject.toml` under `[project] dependencies`.
 
+### SiliconFlow Notes
+
+SiliconFlow can be integrated as an OpenAI-compatible provider:
+
+- `provider`: `siliconflow`
+- `api_key`: `SILICONFLOW_API_KEY`
+- `base_url`: `https://api.siliconflow.cn/v1`
+
+Example (`config.yaml`):
+
+```yaml
+llm:
+    provider: "siliconflow"
+    model: "Qwen/Qwen2.5-72B-Instruct"
+    base_url: "https://api.siliconflow.cn/v1"
+```
+
 ---
 
 ## 4. How to Extend Verification Rules

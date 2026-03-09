@@ -212,6 +212,7 @@ __marimo__/
 # Poiesis 运行时数据（Docker volume 持久化目录内容）
 data/poiesis.db
 data/vector_store/
+data/task_registry.json
 
 # 排除对前端源代码 lib 目录的误忽略（根级 lib/ 规则会误匹配 frontend/src/lib）
 !frontend/src/lib/

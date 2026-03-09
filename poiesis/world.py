@@ -36,22 +36,30 @@ class WorldModel:
     # Loading
     # ------------------------------------------------------------------
 
-    def load_from_db(self, db: Database) -> None:
+    def load_from_db(self, db: Database, book_id: int = 1) -> None:
         """Populate the canon layer from the database.
 
         Args:
             db: Initialised :class:`~poiesis.db.database.Database` instance.
         """
-        self.canon["characters"] = {c["name"]: c for c in db.list_characters()}
-        self.canon["world_rules"] = {r["rule_key"]: r for r in db.list_world_rules()}
-        self.canon["timeline"] = {e["event_key"]: e for e in db.list_timeline_events()}
-        self.canon["foreshadowing"] = {f["hint_key"]: f for f in db.list_foreshadowing()}
+        self.canon["characters"] = {
+            c["name"]: c for c in db.list_characters(book_id=book_id)
+        }
+        self.canon["world_rules"] = {
+            r["rule_key"]: r for r in db.list_world_rules(book_id=book_id)
+        }
+        self.canon["timeline"] = {
+            e["event_key"]: e for e in db.list_timeline_events(book_id=book_id)
+        }
+        self.canon["foreshadowing"] = {
+            f["hint_key"]: f for f in db.list_foreshadowing(book_id=book_id)
+        }
 
         # 加载待审核的暂存变更
-        self.staging = db.list_staging_changes(status="pending")
+        self.staging = db.list_staging_changes(status="pending", book_id=book_id)
 
         # 加载已拒绝的归档变更
-        self.archive = db.list_staging_changes(status="rejected")
+        self.archive = db.list_staging_changes(status="rejected", book_id=book_id)
 
     # ------------------------------------------------------------------
     # Staging operations
@@ -147,7 +155,7 @@ class WorldModel:
         """Return all world rules flagged as immutable."""
         return [r for r in self.canon["world_rules"].values() if r.get("is_immutable")]
 
-    def world_context_summary(self, max_rules: int = 20) -> str:
+    def world_context_summary(self, max_rules: int = 20, language: str = "zh-CN") -> str:
         """Build a concise plain-text summary of the canon for use in prompts.
 
         Args:
@@ -157,26 +165,35 @@ class WorldModel:
             Multi-line string describing the world state.
         """
         lines: list[str] = []
+        zh_mode = language.lower().startswith("zh")
+
+        rule_title = "=== 世界规则 ===" if zh_mode else "=== World Rules ==="
+        chars_title = "\n=== 角色设定 ===" if zh_mode else "\n=== Characters ==="
+        timeline_title = "\n=== 时间线 ===" if zh_mode else "\n=== Timeline ==="
+        hint_title = "\n=== 待回收伏笔 ===" if zh_mode else "\n=== Pending Foreshadowing ==="
+        immutable_tag = "【不可变】" if zh_mode else " [IMMUTABLE]"
+        motivation_label = "动机" if zh_mode else "motivation"
+        unknown_label = "未知" if zh_mode else "unknown"
 
         rules = list(self.canon["world_rules"].values())[:max_rules]
         if rules:
-            lines.append("=== World Rules ===")
+            lines.append(rule_title)
             for r in rules:
-                immutable = " [IMMUTABLE]" if r.get("is_immutable") else ""
+                immutable = immutable_tag if r.get("is_immutable") else ""
                 lines.append(f"- {r.get('rule_key', '')}{immutable}: {r.get('description', '')}")
 
         chars = list(self.canon["characters"].values())
         if chars:
-            lines.append("\n=== Characters ===")
+            lines.append(chars_title)
             for c in chars:
                 lines.append(
                     f"- {c.get('name', '')}: {c.get('description', '')} "
-                    f"(motivation: {c.get('core_motivation', 'unknown')})"
+                    f"({motivation_label}: {c.get('core_motivation', unknown_label)})"
                 )
 
         events = list(self.canon["timeline"].values())
         if events:
-            lines.append("\n=== Timeline ===")
+            lines.append(timeline_title)
             for e in events:
                 lines.append(
                     f"- [{e.get('timestamp_in_world', '?')}] {e.get('description', '')}"
@@ -184,7 +201,7 @@ class WorldModel:
 
         hints = [h for h in self.canon["foreshadowing"].values() if h.get("status") == "pending"]
         if hints:
-            lines.append("\n=== Pending Foreshadowing ===")
+            lines.append(hint_title)
             for h in hints:
                 lines.append(f"- {h.get('hint_key', '')}: {h.get('description', '')}")
 

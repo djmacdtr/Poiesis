@@ -39,10 +39,22 @@ class TestGetSystemConfig:
         body = resp.json()
         assert body["has_openai_api_key"] is False
         assert body["has_anthropic_api_key"] is False
+        assert body["has_siliconflow_api_key"] is False
+        assert body["openai_api_key_preview"] is None
+        assert body["anthropic_api_key_preview"] is None
+        assert body["siliconflow_api_key_preview"] is None
         assert body["embedding_provider"] is None
         assert body["embedding_provider_effective"] in ("local", "remote")
         assert body["embedding_service_health"] is None
         assert body["default_chapter_count"] is None
+        assert body["llm_provider"] is None
+        assert body["llm_model"] is None
+        assert body["planner_llm_provider"] is None
+        assert body["planner_llm_model"] is None
+        assert isinstance(body["llm_provider_effective"], str)
+        assert isinstance(body["llm_model_effective"], str)
+        assert isinstance(body["planner_llm_provider_effective"], str)
+        assert isinstance(body["planner_llm_model_effective"], str)
 
 
 class TestPostSystemConfig:
@@ -59,6 +71,7 @@ class TestPostSystemConfig:
         body = resp.json()
         assert body["has_openai_api_key"] is True
         assert body["has_anthropic_api_key"] is False
+        assert body["openai_api_key_preview"] == "sk-t...-key"
 
     def test_save_anthropic_key_shows_configured(self, tmp_db: Database) -> None:
         """保存 Anthropic Key 后，has_anthropic_api_key 应为 True。"""
@@ -70,6 +83,7 @@ class TestPostSystemConfig:
         assert resp.status_code == 200
         body = resp.json()
         assert body["has_anthropic_api_key"] is True
+        assert body["anthropic_api_key_preview"] == "sk-a...-key"
 
     def test_response_does_not_contain_plaintext_key(self, tmp_db: Database) -> None:
         """响应体不应包含明文 API Key。"""
@@ -81,6 +95,18 @@ class TestPostSystemConfig:
         assert resp.status_code == 200
         resp_text = resp.text
         assert "sk-secret-should-not-appear" not in resp_text
+
+    def test_save_siliconflow_key_shows_configured(self, tmp_db: Database) -> None:
+        """保存 SiliconFlow Key 后，has_siliconflow_api_key 应为 True。"""
+        client = _make_client(tmp_db)
+        resp = client.post(
+            "/api/system/config",
+            json={"siliconflow_api_key": "sk-siliconflow-test-key"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["has_siliconflow_api_key"] is True
+        assert body["siliconflow_api_key_preview"] == "sk-s...-key"
 
     def test_save_embedding_provider_and_chapter_count(self, tmp_db: Database) -> None:
         """保存 embedding_provider 与 default_chapter_count 应正确返回。"""
@@ -194,6 +220,102 @@ class TestPostSystemConfig:
         assert resp.status_code == 200
         body = resp.json()
         assert body["has_openai_api_key"] is False
+        assert body["openai_api_key_preview"] is None
+
+    def test_clear_siliconflow_key_by_empty_string(self, tmp_db: Database) -> None:
+        """传入空字符串应清除已保存的 SiliconFlow Key。"""
+        client = _make_client(tmp_db)
+        client.post("/api/system/config", json={"siliconflow_api_key": "sk-sf-test"})
+
+        resp = client.post("/api/system/config", json={"siliconflow_api_key": ""})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["has_siliconflow_api_key"] is False
+        assert body["siliconflow_api_key_preview"] is None
+
+    def test_siliconflow_key_stored_encrypted_and_decryptable(self, tmp_db: Database) -> None:
+        """SiliconFlow Key 应加密存储且可通过服务层解密读取。"""
+        from poiesis.api.services.system_config_service import (
+            KEY_SILICONFLOW,
+            get_decrypted_key,
+        )
+
+        client = _make_client(tmp_db)
+        plaintext = "sk-sf-very-secret"
+        client.post("/api/system/config", json={"siliconflow_api_key": plaintext})
+
+        raw = tmp_db.get_system_config(KEY_SILICONFLOW)
+        assert raw is not None
+        assert raw != plaintext
+        assert get_decrypted_key(tmp_db, KEY_SILICONFLOW) == plaintext
+
+    def test_save_llm_and_planner_model_config(self, tmp_db: Database) -> None:
+        """保存 llm/planner_llm 的 provider+model 应正确回显并给出 effective 值。"""
+        client = _make_client(tmp_db)
+        resp = client.post(
+            "/api/system/config",
+            json={
+                "llm_provider": "anthropic",
+                "llm_model": "claude-3-7-sonnet-latest",
+                "planner_llm_provider": "openai",
+                "planner_llm_model": "gpt-4o-mini",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["llm_provider"] == "anthropic"
+        assert body["llm_model"] == "claude-3-7-sonnet-latest"
+        assert body["planner_llm_provider"] == "openai"
+        assert body["planner_llm_model"] == "gpt-4o-mini"
+        assert body["llm_provider_effective"] == "anthropic"
+        assert body["llm_model_effective"] == "claude-3-7-sonnet-latest"
+        assert body["planner_llm_provider_effective"] == "openai"
+        assert body["planner_llm_model_effective"] == "gpt-4o-mini"
+
+    def test_invalid_llm_provider_returns_422(self, tmp_db: Database) -> None:
+        """非法 llm_provider 应返回 422。"""
+        client = _make_client(tmp_db)
+        resp = client.post(
+            "/api/system/config",
+            json={"llm_provider": "unknown-provider"},
+        )
+        assert resp.status_code == 422
+
+    def test_clear_model_config_falls_back_to_yaml(self, tmp_db: Database) -> None:
+        """清空模型配置后，effective 值应回退到 config.yaml 默认值。"""
+        client = _make_client(tmp_db)
+
+        save_resp = client.post(
+            "/api/system/config",
+            json={
+                "llm_provider": "anthropic",
+                "llm_model": "claude-3-7-sonnet-latest",
+                "planner_llm_provider": "siliconflow",
+                "planner_llm_model": "Qwen/Qwen2.5-72B-Instruct",
+            },
+        )
+        assert save_resp.status_code == 200
+
+        clear_resp = client.post(
+            "/api/system/config",
+            json={
+                "llm_provider": "",
+                "llm_model": "",
+                "planner_llm_provider": "",
+                "planner_llm_model": "",
+            },
+        )
+        assert clear_resp.status_code == 200
+        body = clear_resp.json()
+
+        assert body["llm_provider"] is None
+        assert body["llm_model"] is None
+        assert body["planner_llm_provider"] is None
+        assert body["planner_llm_model"] is None
+        assert body["llm_provider_effective"] == "openai"
+        assert body["llm_model_effective"] == "gpt-4o"
+        assert body["planner_llm_provider_effective"] == "openai"
+        assert body["planner_llm_model_effective"] == "gpt-4o"
 
 
 class TestCrypto:

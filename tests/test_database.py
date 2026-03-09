@@ -84,6 +84,19 @@ class TestCharacterCRUD:
         assert char["attributes"]["skills"] == ["swords", "magic"]
         assert char["attributes"]["level"] == 5
 
+    def test_character_isolated_by_book_id(self, tmp_db: Database) -> None:
+        second_book = tmp_db.create_book(name="副本A")
+        tmp_db.upsert_character(name="Hero", description="默认书", book_id=1)
+        tmp_db.upsert_character(name="Hero", description="副本书", book_id=second_book)
+
+        default_char = tmp_db.get_character("Hero", book_id=1)
+        second_char = tmp_db.get_character("Hero", book_id=second_book)
+
+        assert default_char is not None
+        assert second_char is not None
+        assert default_char["description"] == "默认书"
+        assert second_char["description"] == "副本书"
+
 
 class TestWorldRuleCRUD:
     """CRUD tests for the world_rules table."""
@@ -102,6 +115,19 @@ class TestWorldRuleCRUD:
         assert all(r["is_immutable"] == 1 for r in immutable)
         assert any(r["rule_key"] == "r1" for r in immutable)
         assert not any(r["rule_key"] == "r2" for r in immutable)
+
+    def test_world_rule_isolated_by_book_id(self, tmp_db: Database) -> None:
+        second_book = tmp_db.create_book(name="副本B")
+        tmp_db.upsert_world_rule("gravity", "重力恒定", book_id=1)
+        tmp_db.upsert_world_rule("gravity", "重力可变", book_id=second_book)
+
+        default_rule = tmp_db.get_world_rule("gravity", book_id=1)
+        second_rule = tmp_db.get_world_rule("gravity", book_id=second_book)
+
+        assert default_rule is not None
+        assert second_rule is not None
+        assert default_rule["description"] == "重力恒定"
+        assert second_rule["description"] == "重力可变"
 
 
 class TestTimelineCRUD:
@@ -236,3 +262,20 @@ class TestChapterSummaryCRUD:
         summaries = tmp_db.list_chapter_summaries()
         nums = [s["chapter_number"] for s in summaries]
         assert nums == [1, 2]
+
+
+class TestForeshadowingCRUD:
+    """CRUD tests for the foreshadowing table."""
+
+    def test_foreshadowing_isolated_by_book_id(self, tmp_db: Database) -> None:
+        second_book = tmp_db.create_book(name="副本C")
+        tmp_db.upsert_foreshadowing("hint_1", "默认伏笔", book_id=1)
+        tmp_db.upsert_foreshadowing("hint_1", "副本伏笔", book_id=second_book)
+
+        default_hints = tmp_db.list_foreshadowing(book_id=1)
+        second_hints = tmp_db.list_foreshadowing(book_id=second_book)
+
+        assert len(default_hints) == 1
+        assert len(second_hints) == 1
+        assert default_hints[0]["description"] == "默认伏笔"
+        assert second_hints[0]["description"] == "副本伏笔"

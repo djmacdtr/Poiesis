@@ -20,19 +20,23 @@ router = APIRouter(prefix="/api/world", tags=["世界设定"])
 
 
 @router.get("/canon", response_model=CanonData)
-def get_canon(db: Database = Depends(get_db)) -> CanonData:
+def get_canon(
+    book_id: int | None = Query(default=None, ge=1),
+    db: Database = Depends(get_db),
+) -> CanonData:
     """获取完整的 Canon 快照（世界规则、角色、时间线、伏笔）。"""
-    data = world_service.get_canon(db)
+    data = world_service.get_canon(db, book_id=book_id)
     return CanonData(**data)
 
 
 @router.get("/staging", response_model=list[StagingChange])
 def list_staging(
     status: str | None = Query(default=None, description="过滤状态：pending/approved/rejected"),
+    book_id: int | None = Query(default=None, ge=1),
     db: Database = Depends(get_db),
 ) -> list[StagingChange]:
     """获取 staging 变更列表，不传 status 则返回全部。"""
-    rows = world_service.list_staging(db, status=status)
+    rows = world_service.list_staging(db, status=status, book_id=book_id)
     return [StagingChange(**r) for r in rows]
 
 

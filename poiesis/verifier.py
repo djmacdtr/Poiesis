@@ -25,7 +25,12 @@ class VerificationResult:
 class ConsistencyVerifier:
     """Verifies that a chapter is internally consistent with world canon."""
 
-    def __init__(self, new_rule_budget: int = 5, prompt_path: str | None = None) -> None:
+    def __init__(
+        self,
+        new_rule_budget: int = 5,
+        prompt_path: str | None = None,
+        language: str = "zh-CN",
+    ) -> None:
         """Initialise the verifier.
 
         Args:
@@ -34,6 +39,7 @@ class ConsistencyVerifier:
         """
         self._new_rule_budget = new_rule_budget
         self._prompt_path = Path(prompt_path) if prompt_path else _PROMPT_PATH
+        self._language = language
 
     def verify(
         self,
@@ -66,7 +72,7 @@ class ConsistencyVerifier:
         self._check_new_fact_budget(proposed_changes, violations, warnings)
 
         # --- 基于 LLM 的语义检查 ---
-        world_context = world.world_context_summary()
+        world_context = world.world_context_summary(language=self._language)
         changes_text = json.dumps(proposed_changes, indent=2)
         plan_text = json.dumps(plan, indent=2)
 
@@ -80,10 +86,7 @@ class ConsistencyVerifier:
             new_rule_budget=self._new_rule_budget,
         )
 
-        system = (
-            "You are a strict continuity editor. Identify every hard violation. "
-            "Return ONLY valid JSON."
-        )
+        system = self._build_system_prompt()
         raw = llm.complete_json(prompt, system=system)
 
         violations.extend(raw.get("violations", []))
@@ -92,6 +95,16 @@ class ConsistencyVerifier:
 
         passed = llm_passed and len(violations) == 0
         return VerificationResult(passed=passed, violations=violations, warnings=warnings)
+
+    def _build_system_prompt(self) -> str:
+        language_hint = (
+            "JSON 中的 violations/warnings 优先使用简体中文。"
+            if self._language.lower().startswith("zh")
+            else "Return violations/warnings in English."
+        )
+        return (
+            f"你是严格的连贯性审校员，必须识别硬性冲突与设定违规。{language_hint}只返回合法 JSON。"
+        )
 
     # ------------------------------------------------------------------
     # Rule-based helpers
@@ -105,8 +118,9 @@ class ConsistencyVerifier:
     ) -> None:
         """Flag if the number of new world facts exceeds the budget."""
         new_rules = [
-            c for c in proposed_changes if c.get("entity_type") == "world_rule"
-            and c.get("change_type") == "upsert"
+            c
+            for c in proposed_changes
+            if c.get("entity_type") == "world_rule" and c.get("change_type") == "upsert"
         ]
         if len(new_rules) > self._new_rule_budget:
             violations.append(

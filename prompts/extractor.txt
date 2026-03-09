@@ -1,13 +1,12 @@
-You are a world-building analyst extracting new facts from a chapter.
+你是一名世界设定分析师，负责从章节中提取新增事实。
 
-Chapter {chapter_number}:
+第 {chapter_number} 章正文：
 {content}
 
-Existing World Facts:
+现有世界事实：
 {world_context}
 
-Extract ALL new facts introduced in this chapter. Return a JSON object with exactly
-these keys:
+请提取本章引入的全部新增或变化事实，并返回一个 JSON 对象，必须包含以下键：
 
 {{
   "new_characters": [
@@ -54,7 +53,7 @@ these keys:
 }}
 
 Rules:
-- Only include facts that are GENUINELY NEW or CHANGED from existing canon.
-- Do not re-extract facts already in the Existing World Facts.
-- If there are no new items of a category, return an empty array for that key.
-- Return ONLY valid JSON. No markdown fences, no commentary.
+- 仅包含相较既有设定“真正新增或发生变化”的事实。
+- 不要重复提取已在现有设定中的信息。
+- 若某一类没有新增内容，对应字段返回空数组。
+- 只返回合法 JSON，不要返回 markdown，不要附加说明。

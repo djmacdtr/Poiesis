@@ -1,24 +1,23 @@
-You are a surgical editor fixing consistency violations in chapter {chapter_number}.
+你是一名精修编辑，负责修复第 {chapter_number} 章中的一致性问题。
 
-Original Chapter:
+原章节：
 {content}
 
-Violations to Fix:
+待修复违规点：
 {violations}
 
-Chapter Plan (must be honoured in full):
+章节计划（必须完整遵循）：
 {plan}
 
-World Canon:
+世界设定：
 {world_context}
 
-Instructions:
-- Identify the EXACT passages that contain each listed violation.
-- Rewrite ONLY those passages to remove the violation.
-- Keep all other text completely unchanged.
-- Preserve the narrative voice, pacing, and style throughout.
-- Ensure every element of the chapter plan is still present after your edits.
-- Do not introduce any new violations while fixing existing ones.
-- Do not add new world facts beyond what is in the plan.
+修订要求：
+- 精确定位每条违规对应的原文段落。
+- 只重写存在问题的段落，未违规内容尽量保持不变。
+- 保持全章叙述声音、节奏与风格稳定。
+- 修订后仍需覆盖章节计划中的关键要素。
+- 修复旧问题时不得引入新矛盾。
+- 不得新增计划之外的重大世界设定。
 
-Return the complete corrected chapter. No title heading, no meta-commentary, no author notes.
+返回修订后的完整章节正文，不要输出标题或任何解释说明。

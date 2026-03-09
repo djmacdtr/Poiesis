@@ -3,6 +3,10 @@ llm:
   model: "gpt-4o"
   temperature: 0.8
   max_tokens: 4000
+  # SiliconFlow example:
+  # provider: "siliconflow"
+  # model: "Qwen/Qwen2.5-72B-Instruct"
+  # base_url: "https://api.siliconflow.cn/v1"
 
 planner_llm:
   provider: "openai"

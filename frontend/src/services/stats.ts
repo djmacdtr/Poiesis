@@ -1,16 +1,16 @@
 /**
  * 统计数据服务（基于已有 API 数据本地聚合计算）
  */
-import { fetchChapters } from './chapters'
+import { fetchChaptersByBook } from './chapters'
 import { fetchStaging, fetchCanon } from './world'
 import type { DashboardStats, WordCountDataPoint } from '@/types'
 
 /** 聚合仪表盘统计数据 */
-export async function fetchDashboardStats(): Promise<DashboardStats> {
+export async function fetchDashboardStats(bookId: number = 1): Promise<DashboardStats> {
   const [chapters, pending, canon] = await Promise.all([
-    fetchChapters(),
-    fetchStaging('pending'),
-    fetchCanon(),
+    fetchChaptersByBook(bookId),
+    fetchStaging('pending', bookId),
+    fetchCanon(bookId),
   ])
 
   return {
@@ -24,8 +24,8 @@ export async function fetchDashboardStats(): Promise<DashboardStats> {
 }
 
 /** 生成字数趋势数据（按章节排序） */
-export async function fetchWordCountTrend(): Promise<WordCountDataPoint[]> {
-  const chapters = await fetchChapters()
+export async function fetchWordCountTrend(bookId: number = 1): Promise<WordCountDataPoint[]> {
+  const chapters = await fetchChaptersByBook(bookId)
   return chapters
     .slice()
     .sort((a, b) => a.chapter_number - b.chapter_number)

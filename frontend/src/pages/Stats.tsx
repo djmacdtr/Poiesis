@@ -2,6 +2,8 @@
  * 统计分析页：章节状态分布、各章字数对比图
  */
 import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   BarChart,
   Bar,
@@ -15,18 +17,50 @@ import {
   Cell,
   Legend,
 } from 'recharts'
-import { fetchChapters } from '@/services/chapters'
+import { fetchChaptersByBook } from '@/services/chapters'
+import { fetchBooks } from '@/services/books'
 import { LoadingSpinner, ErrorMessage, EmptyState } from '@/components/Feedback'
 import { chapterStatusLabel } from '@/lib/utils'
+import type { BookItem } from '@/types'
 
 /** 饼图颜色 */
 const PIE_COLORS = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444']
+const ACTIVE_BOOK_ID_KEY = 'poiesis.activeBookId'
 
 export default function Stats() {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['chapters'],
-    queryFn: fetchChapters,
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [activeBookId, setActiveBookId] = useState<number>(() => {
+    const fromQuery = Number(searchParams.get('book') || '')
+    if (Number.isFinite(fromQuery) && fromQuery > 0) return fromQuery
+    if (typeof window === 'undefined') return 1
+    const raw = window.localStorage.getItem(ACTIVE_BOOK_ID_KEY)
+    return raw ? Number(raw) || 1 : 1
   })
+
+  const { data: books = [] } = useQuery<BookItem[]>({
+    queryKey: ['books'],
+    queryFn: fetchBooks,
+    staleTime: 30_000,
+  })
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['chapters', activeBookId],
+    queryFn: () => fetchChaptersByBook(activeBookId),
+  })
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(ACTIVE_BOOK_ID_KEY, String(activeBookId))
+    setSearchParams({ book: String(activeBookId) }, { replace: true })
+  }, [activeBookId, setSearchParams])
+
+  useEffect(() => {
+    if (books.length === 0) return
+    const exists = books.some((item) => item.id === activeBookId)
+    if (exists) return
+    const next = books.find((item) => item.is_default)?.id ?? books[0].id
+    setActiveBookId(next)
+  }, [activeBookId, books])
 
   if (isLoading) return <LoadingSpinner text="加载统计数据…" />
   if (error) return <ErrorMessage message={(error as Error).message} />
@@ -53,7 +87,20 @@ export default function Stats() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold text-gray-800">统计分析</h2>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold text-gray-800">统计分析</h2>
+        <select
+          value={activeBookId}
+          onChange={(e) => setActiveBookId(Number(e.target.value))}
+          className="min-w-56 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+        >
+          {books.map((book) => (
+            <option key={book.id} value={book.id}>
+              {book.name}（{book.language} / {book.style_preset}）
+            </option>
+          ))}
+        </select>
+      </div>
 
       {/* 汇总数字 */}
       <div className="grid grid-cols-3 gap-4">

@@ -13,6 +13,7 @@ export type ChapterStatus = 'draft' | 'completed' | 'published'
 /** 章节列表项（轻量版，不含正文） */
 export interface ChapterSummaryItem {
   id: number
+  book_id: number
   chapter_number: number
   title: string
   word_count: number
@@ -38,6 +39,7 @@ export interface ChapterPlan {
 /** 章节摘要（AI 生成） */
 export interface ChapterSummary {
   id: number
+  book_id?: number
   chapter_number: number
   summary: string
   key_events: string[]
@@ -136,7 +138,7 @@ export type StagingFilter = StagingStatus | 'all'
 // ──────────────────────────────────────────────
 
 /** 运行任务状态 */
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed'
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'interrupted'
 
 /** 启动运行响应 */
 export interface RunResponse {
@@ -154,8 +156,34 @@ export interface TaskDetail {
   total_chapters?: number
   logs?: string[]
   error?: string
+  preview_text?: string
   created_at?: string
   updated_at?: string
+}
+
+// ──────────────────────────────────────────────
+// 书籍
+// ──────────────────────────────────────────────
+
+export interface BookItem {
+  id: number
+  name: string
+  language: string
+  style_preset: string
+  style_prompt: string
+  naming_policy: string
+  is_default: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface BookUpsertRequest {
+  name: string
+  language: string
+  style_preset: string
+  style_prompt: string
+  naming_policy: string
+  is_default: boolean
 }
 
 // ──────────────────────────────────────────────

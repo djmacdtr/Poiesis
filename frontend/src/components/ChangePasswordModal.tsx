@@ -5,6 +5,7 @@ import { useState, type FormEvent } from 'react'
 import { KeyRound, X, Eye, EyeOff } from 'lucide-react'
 import { changePassword } from '@/services/auth'
 import { useAuth } from '@/contexts/AuthContext'
+import { ModalBase } from '@/components/ModalBase'
 import { toast } from 'sonner'
 
 export function ChangePasswordModal() {
@@ -52,14 +53,8 @@ export function ChangePasswordModal() {
   }
 
   return (
-    /* 遮罩层 */
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="change-pwd-title"
-        className="relative bg-white rounded-2xl shadow-xl w-full max-w-md mx-4 overflow-hidden"
-      >
+    <ModalBase open maxWidthClass="max-w-md">
+      <div aria-labelledby="change-pwd-title" className="overflow-hidden">
         {/* 顶部装饰带 */}
         <div className="h-1.5 bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400" />
 
@@ -69,7 +64,7 @@ export function ChangePasswordModal() {
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center">
                 <KeyRound className="w-5 h-5 text-amber-500" />
-              </div>
+            </div>
               <div>
                 <h2 id="change-pwd-title" className="text-base font-semibold text-gray-800">请修改初始密码</h2>
                 <p className="text-xs text-gray-500 mt-0.5">检测到您正在使用默认密码，为安全起见请立即更改</p>
@@ -176,6 +171,6 @@ export function ChangePasswordModal() {
           </form>
         </div>
       </div>
-    </div>
+    </ModalBase>
   )
 }

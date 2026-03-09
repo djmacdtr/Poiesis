@@ -2,12 +2,14 @@
  * 运行控制页：启动写作任务并实时轮询进度
  */
 import { useState, useEffect, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Play, Square } from 'lucide-react'
 import { toast } from 'sonner'
-import { startRun, fetchTaskStatus } from '@/services/run'
+import { createTaskEventSource, startRun, fetchTaskStatus, fetchTaskList, pruneTaskHistory } from '@/services/run'
+import { getSystemConfig } from '@/services/systemConfig'
+import { fetchBooks } from '@/services/books'
 import { LoadingSpinner, ErrorMessage } from '@/components/Feedback'
-import type { TaskDetail } from '@/types'
+import type { BookItem, TaskDetail } from '@/types'
 
 /** 任务状态中文映射 */
 const statusLabel: Record<string, string> = {
@@ -15,6 +17,7 @@ const statusLabel: Record<string, string> = {
   running: '运行中',
   completed: '已完成',
   failed: '失败',
+  interrupted: '已中断（待重试）',
 }
 
 /** 任务状态颜色 */
@@ -23,13 +26,85 @@ const statusColor: Record<string, string> = {
   running: 'text-blue-600 bg-blue-50',
   completed: 'text-green-600 bg-green-50',
   failed: 'text-red-600 bg-red-50',
+  interrupted: 'text-amber-700 bg-amber-100',
+}
+
+const restartFailureKeywords = ['热重载', '重启', '中断']
+const ACTIVE_TASK_ID_KEY = 'poiesis.activeTaskId'
+const ACTIVE_BOOK_ID_KEY = 'poiesis.activeBookId'
+const taskFilters = ['all', 'pending', 'running', 'completed', 'failed', 'interrupted'] as const
+type TaskFilter = (typeof taskFilters)[number]
+
+function isInvalidCompletedTask(task: TaskDetail): boolean {
+  return task.status === 'completed' && (task.current_chapter ?? 0) <= 0 && (task.total_chapters ?? 0) > 0
+}
+
+function getTaskProgressPercent(task: TaskDetail): number {
+  if (typeof task.progress === 'number') {
+    return Math.max(0, Math.min(100, Math.round(task.progress * 100)))
+  }
+  if (task.current_chapter != null && task.total_chapters != null && task.total_chapters > 0) {
+    return Math.max(0, Math.min(100, Math.round((task.current_chapter / task.total_chapters) * 100)))
+  }
+  return 0
+}
+
+function getCurrentStepText(task: TaskDetail): string {
+  const latestLog = task.logs?.[task.logs.length - 1]
+  if (latestLog) return latestLog
+  if (isInvalidCompletedTask(task)) return '任务记录异常：显示已完成但无章节产出，请重新发起生成'
+  if (task.status === 'completed') return '全部章节已完成'
+  if (task.status === 'interrupted') return '任务因服务重启中断，等待重试'
+  if (task.status === 'failed') return task.error ?? '任务执行失败'
+  if (task.status === 'running') return '任务运行中，等待新日志'
+  return '等待任务启动'
+}
+
+function getPreviewPlaceholder(task: TaskDetail | undefined, isPreviewStreaming: boolean): string {
+  if (!task) return '等待任务启动…'
+  if (task.status === 'running' || task.status === 'pending') {
+    if (isPreviewStreaming) return '正在接收模型正文片段…'
+    return '正文流已暂停，任务仍在后处理（提取/校验/入库）…'
+  }
+  if (task.status === 'completed') return '任务已完成，可在章节列表查看正文。'
+  if (task.status === 'failed') return task.error ?? '任务失败，未收到可用正文片段。'
+  if (task.status === 'interrupted') return '任务已中断，请重试。'
+  return '等待模型返回正文片段…'
 }
 
 export default function Run() {
+  const queryClient = useQueryClient()
   const [chapterCount, setChapterCount] = useState(1)
-  const [taskId, setTaskId] = useState<string | null>(null)
+  const [activeBookId, setActiveBookId] = useState<number>(() => {
+    if (typeof window === 'undefined') return 1
+    const raw = window.localStorage.getItem(ACTIVE_BOOK_ID_KEY)
+    return raw ? Number(raw) || 1 : 1
+  })
+  const [taskId, setTaskId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null
+    return window.localStorage.getItem(ACTIVE_TASK_ID_KEY)
+  })
   const [isStarting, setIsStarting] = useState(false)
+  const [isPruning, setIsPruning] = useState(false)
+  const [taskFilter, setTaskFilter] = useState<TaskFilter>('all')
+  const [keepRecentCount, setKeepRecentCount] = useState(20)
+  const [previewText, setPreviewText] = useState('')
+  const [isPreviewStreaming, setIsPreviewStreaming] = useState(false)
+  const eventSourceRef = useRef<EventSource | null>(null)
+  const eventSourceTaskIdRef = useRef<string | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
+
+  const { data: systemConfig, error: configError } = useQuery({
+    queryKey: ['systemConfigForRun'],
+    queryFn: getSystemConfig,
+    staleTime: 15_000,
+  })
+
+  const { data: books = [] } = useQuery<BookItem[]>({
+    queryKey: ['books'],
+    queryFn: fetchBooks,
+    staleTime: 30_000,
+  })
 
   // 轮询任务状态
   const {
@@ -41,29 +116,156 @@ export default function Run() {
     enabled: !!taskId,
     refetchInterval: (query) => {
       const status = query.state.data?.status
-      if (status === 'completed' || status === 'failed') return false
+      if (status === 'completed' || status === 'failed' || status === 'interrupted') return false
       return 2000
     },
   })
 
+  const { data: taskList = [], refetch: refetchTaskList } = useQuery<TaskDetail[]>({
+    queryKey: ['taskList'],
+    queryFn: fetchTaskList,
+    refetchInterval: (query) => {
+      const tasks = query.state.data ?? []
+      const hasRunningTask = tasks.some((item) => item.status === 'pending' || item.status === 'running')
+      return hasRunningTask ? 2000 : 5000
+    },
+  })
+
+  const filteredTaskList = taskList.filter((item) => {
+    if (taskFilter === 'all') return true
+    return item.status === taskFilter
+  })
+
   // 任务状态变化通知
   useEffect(() => {
-    if (task?.status === 'completed') {
+    if (task && isInvalidCompletedTask(task)) {
+      toast.warning('任务状态异常：显示已完成但未记录章节进度，请重试')
+    } else if (task?.status === 'completed') {
       toast.success('写作任务已完成！')
+      // 任务完成后主动刷新章节缓存，避免章节列表停留在旧的空结果。
+      void queryClient.invalidateQueries({ queryKey: ['chapters', activeBookId] })
+    } else if (task?.status === 'interrupted') {
+      toast.warning(`任务中断：${task.error ?? '服务热重载或重启导致中断，请重试'}`)
     } else if (task?.status === 'failed') {
       toast.error(`任务失败：${task.error ?? '未知错误'}`)
     }
-  }, [task?.status])
+  }, [activeBookId, queryClient, task, task?.status])
 
   // 自动滚动日志到底部
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [task?.logs])
 
+  // 任务详情轮询可作为 SSE 预览的兜底来源（例如页面刷新后）。
+  useEffect(() => {
+    if (!taskId) {
+      setPreviewText('')
+      return
+    }
+    if (typeof task?.preview_text === 'string') {
+      setPreviewText((prev) => {
+        if (task.preview_text!.length >= prev.length) return task.preview_text!
+        return prev
+      })
+    }
+  }, [taskId, task?.preview_text])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (taskId) {
+      window.localStorage.setItem(ACTIVE_TASK_ID_KEY, taskId)
+      return
+    }
+    window.localStorage.removeItem(ACTIVE_TASK_ID_KEY)
+  }, [taskId])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(ACTIVE_BOOK_ID_KEY, String(activeBookId))
+  }, [activeBookId])
+
+  useEffect(() => {
+    if (books.length === 0) return
+    const exists = books.some((item) => item.id === activeBookId)
+    if (exists) return
+    const next = books.find((item) => item.is_default)?.id ?? books[0].id
+    setActiveBookId(next)
+  }, [activeBookId, books])
+
+  // 订阅 SSE：实时接收日志与正文预览增量。
+  useEffect(() => {
+    if (!taskId) {
+      eventSourceRef.current?.close()
+      eventSourceRef.current = null
+      eventSourceTaskIdRef.current = null
+      setIsPreviewStreaming(false)
+      return
+    }
+
+    const isTerminal = task?.status === 'completed' || task?.status === 'failed' || task?.status === 'interrupted'
+    if (isTerminal) {
+      eventSourceRef.current?.close()
+      eventSourceRef.current = null
+      eventSourceTaskIdRef.current = null
+      setIsPreviewStreaming(false)
+      return
+    }
+
+    if (eventSourceRef.current && eventSourceTaskIdRef.current === taskId) {
+      return
+    }
+
+    eventSourceRef.current?.close()
+    const es = createTaskEventSource(taskId)
+    eventSourceRef.current = es
+    eventSourceTaskIdRef.current = taskId
+    setIsPreviewStreaming(true)
+
+    es.addEventListener('preview', (event) => {
+      const evt = event as MessageEvent
+      try {
+        const payload = JSON.parse(evt.data) as { delta?: string }
+        if (payload.delta) {
+          setPreviewText((prev) => `${prev}${payload.delta}`)
+        }
+      } catch {
+        // Ignore malformed preview payloads.
+      }
+    })
+
+    es.addEventListener('status', () => {
+      setIsPreviewStreaming(false)
+      es.close()
+      if (eventSourceRef.current === es) {
+        eventSourceRef.current = null
+        eventSourceTaskIdRef.current = null
+      }
+    })
+
+    es.onerror = () => {
+      setIsPreviewStreaming(false)
+      es.close()
+      if (eventSourceRef.current === es) {
+        eventSourceRef.current = null
+        eventSourceTaskIdRef.current = null
+      }
+    }
+
+    return () => {
+      es.close()
+      if (eventSourceRef.current === es) {
+        eventSourceRef.current = null
+        eventSourceTaskIdRef.current = null
+      }
+      setIsPreviewStreaming(false)
+    }
+  }, [taskId, task?.status])
+
   const handleStart = async () => {
     setIsStarting(true)
     try {
-      const res = await startRun(chapterCount)
+      const res = await startRun(chapterCount, activeBookId)
+      setPreviewText('')
       setTaskId(res.task_id)
       toast.success(`任务已启动，ID：${res.task_id}`)
     } catch (err) {
@@ -74,18 +276,181 @@ export default function Run() {
   }
 
   const handleReset = () => {
+    setPreviewText('')
     setTaskId(null)
   }
 
+  const handleSelectTask = (selectedTaskId: string) => {
+    setTaskId(selectedTaskId)
+  }
+
+  const handlePruneHistory = async () => {
+    const keep = Number.isFinite(keepRecentCount) ? Math.max(0, Math.floor(keepRecentCount)) : 20
+    setIsPruning(true)
+    try {
+      const result = await pruneTaskHistory(keep)
+      const refreshed = await refetchTaskList()
+      const nextTaskList = refreshed.data ?? []
+      toast.success(`历史清理完成：删除 ${result.removed} 条，剩余 ${result.remaining} 条`)
+      if (taskId) {
+        const stillExists = nextTaskList.some((item) => item.task_id === taskId)
+        if (!stillExists) setTaskId(null)
+      }
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setIsPruning(false)
+    }
+  }
+
   const isRunning = task?.status === 'running' || task?.status === 'pending'
+  const taskErrorMessage = taskError ? (taskError as Error).message : null
+  const isMissingTaskError =
+    !!taskErrorMessage &&
+    (taskErrorMessage.includes('不存在') || taskErrorMessage.toLowerCase().includes('404'))
+  const isRestartInterruptedFailure =
+    (task?.status === 'failed' || task?.status === 'interrupted') &&
+    !!task.error &&
+    restartFailureKeywords.some((keyword) => task.error!.includes(keyword))
+  const taskStatusLabel = task?.status ? (statusLabel[task.status] ?? task.status) : ''
+  const taskStatusColor = task?.status ? (statusColor[task.status] ?? '') : ''
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-6 max-w-4xl">
       <h2 className="text-lg font-semibold text-gray-800">运行控制</h2>
+
+      <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-700">历史任务</h3>
+          <span className="text-xs text-gray-500">可点击继续查看详情</span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {taskFilters.map((filter) => {
+            const active = taskFilter === filter
+            const label = filter === 'all' ? '全部' : (statusLabel[filter] ?? filter)
+            return (
+              <button
+                key={filter}
+                onClick={() => setTaskFilter(filter)}
+                className={`rounded-full px-2.5 py-1 text-xs transition-colors ${active ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 p-3">
+          <span className="text-xs text-gray-600">清理历史：保留最近</span>
+          <input
+            type="number"
+            min={0}
+            max={500}
+            value={keepRecentCount}
+            onChange={(e) => setKeepRecentCount(Number(e.target.value))}
+            className="w-20 rounded border border-gray-300 px-2 py-1 text-xs"
+          />
+          <span className="text-xs text-gray-600">条（运行中任务始终保留）</span>
+          <button
+            onClick={handlePruneHistory}
+            disabled={isPruning}
+            className="ml-auto rounded-md bg-gray-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-900 disabled:opacity-50"
+          >
+            {isPruning ? '清理中…' : '清理历史'}
+          </button>
+        </div>
+
+        {filteredTaskList.length === 0 && (
+          <p className="text-sm text-gray-500">暂无任务记录，点击下方“开始运行”创建新任务。</p>
+        )}
+
+        {filteredTaskList.length > 0 && (
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {filteredTaskList.map((item) => {
+              const percent = getTaskProgressPercent(item)
+              const currentStep = getCurrentStepText(item)
+              const itemStatusLabel = statusLabel[item.status] ?? item.status
+              const itemStatusColor = statusColor[item.status] ?? 'text-gray-700 bg-gray-100'
+
+              return (
+                <button
+                  key={item.task_id}
+                  onClick={() => handleSelectTask(item.task_id)}
+                  className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${taskId === item.task_id ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:bg-gray-50'}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-mono text-[11px] text-gray-500 truncate">{item.task_id}</p>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${itemStatusColor}`}>
+                      {itemStatusLabel}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-600 truncate">当前阶段：{currentStep}</p>
+                  <div className="mt-2 space-y-1">
+                    <div className="flex items-center justify-between text-[11px] text-gray-500">
+                      <span>
+                        写作进度：{item.current_chapter ?? 0} / {item.total_chapters ?? 0} 章
+                      </span>
+                      <span>{percent}%</span>
+                    </div>
+                    <div className="h-1.5 w-full rounded-full bg-gray-100">
+                      <div
+                        className="h-1.5 rounded-full bg-indigo-500 transition-all"
+                        style={{ width: `${percent}%` }}
+                      />
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
 
       {/* 启动表单 */}
       <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
         <h3 className="text-sm font-semibold text-gray-700">启动写作任务</h3>
+
+        <div className="rounded-lg border border-gray-100 bg-gray-50 p-3 space-y-1">
+          <p className="text-xs font-medium text-gray-700">当前生效模型配置</p>
+          {configError && <p className="text-xs text-red-600">读取模型配置失败</p>}
+          {!configError && !systemConfig && <p className="text-xs text-gray-500">加载中…</p>}
+          {systemConfig && (
+            <>
+              <p className="text-xs text-gray-600">
+                写作模型：
+                <span className="font-mono text-[11px] text-gray-700 ml-1">
+                  {systemConfig.llm_provider_effective} / {systemConfig.llm_model_effective}
+                </span>
+              </p>
+              <p className="text-xs text-gray-600">
+                规划模型：
+                <span className="font-mono text-[11px] text-gray-700 ml-1">
+                  {systemConfig.planner_llm_provider_effective} / {systemConfig.planner_llm_model_effective}
+                </span>
+              </p>
+            </>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3">
+          <label className="text-sm text-gray-600 shrink-0" htmlFor="book-id">
+            目标书籍
+          </label>
+          <select
+            id="book-id"
+            value={activeBookId}
+            onChange={(e) => setActiveBookId(Number(e.target.value))}
+            disabled={isStarting || isRunning || books.length === 0}
+            className="min-w-56 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50 bg-white"
+          >
+            {books.map((book) => (
+              <option key={book.id} value={book.id}>
+                {book.name}（{book.language} / {book.style_preset}）
+              </option>
+            ))}
+          </select>
+        </div>
 
         <div className="flex items-center gap-3">
           <label className="text-sm text-gray-600 shrink-0" htmlFor="chapter-count">
@@ -135,13 +500,29 @@ export default function Run() {
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-700">任务状态</h3>
             {task?.status && (
-              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${statusColor[task.status] ?? ''}`}>
-                {statusLabel[task.status] ?? task.status}
+              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${taskStatusColor}`}>
+                {taskStatusLabel}
               </span>
             )}
           </div>
 
-          {taskError && <ErrorMessage message={(taskError as Error).message} />}
+          {taskError && !isMissingTaskError && <ErrorMessage message={taskErrorMessage ?? '获取任务状态失败'} />}
+
+          {taskError && isMissingTaskError && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              <p className="font-semibold">任务状态已失效</p>
+              <p className="mt-1 break-words">{taskErrorMessage}</p>
+              <p className="mt-2 text-xs text-amber-700">
+                这通常是开发模式热重载后，旧任务 ID 不再可追踪。请重置后重新发起任务。
+              </p>
+              <button
+                onClick={handleReset}
+                className="mt-3 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 transition-colors"
+              >
+                重置当前任务
+              </button>
+            </div>
+          )}
 
           {task && (
             <div className="space-y-2 text-sm text-gray-600">
@@ -150,12 +531,12 @@ export default function Run() {
                 <div className="space-y-1">
                   <div className="flex justify-between text-xs text-gray-500">
                     <span>进度：{task.current_chapter} / {task.total_chapters} 章</span>
-                    <span>{Math.round((task.current_chapter / task.total_chapters) * 100)}%</span>
+                    <span>{getTaskProgressPercent(task)}%</span>
                   </div>
                   <div className="w-full bg-gray-100 rounded-full h-1.5">
                     <div
                       className="bg-indigo-500 h-1.5 rounded-full transition-all"
-                      style={{ width: `${(task.current_chapter / task.total_chapters) * 100}%` }}
+                      style={{ width: `${getTaskProgressPercent(task)}%` }}
                     />
                   </div>
                 </div>
@@ -163,9 +544,42 @@ export default function Run() {
             </div>
           )}
 
+          {(task?.status === 'failed' || task?.status === 'interrupted') && task.error && (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              <p className="font-semibold">
+                {task.status === 'interrupted' ? '任务中断原因' : '任务失败原因'}
+              </p>
+              <p className="mt-1 break-words">{task.error}</p>
+              {isRestartInterruptedFailure && (
+                <div className="mt-2 space-y-1 text-xs text-red-600">
+                  <p>检测到服务热重载或重启导致任务中断。</p>
+                  <p>建议：确认配置后重新点击“开始运行”。</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 正文流式预览 */}
+          {task && (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-xs text-gray-500">
+                <span>写作预览（流式）</span>
+                {isPreviewStreaming && <span className="text-indigo-600">接收中…</span>}
+              </div>
+              <div className="min-h-24 max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 text-xs leading-5 text-gray-700">
+                {previewText || getPreviewPlaceholder(task, isPreviewStreaming)}
+              </div>
+            </div>
+          )}
+
           {/* 日志输出 */}
           {task?.logs && task.logs.length > 0 && (
             <div className="bg-gray-900 rounded-lg p-3 max-h-48 overflow-y-auto font-mono text-xs text-green-400 space-y-0.5">
+              {isRestartInterruptedFailure && (
+                <div className="mb-2 rounded border border-amber-400/60 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
+                  任务因服务热重载/重启中断。请重置后重新发起。
+                </div>
+              )}
               {task.logs.map((log, i) => (
                 <div key={i}>{log}</div>
               ))}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,25 @@ def force_dummy_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
     """在所有测试中强制使用本地 dummy embedding，确保无外网依赖。"""
     monkeypatch.setenv("POIESIS_EMBEDDING_PROVIDER", "local")
 
+
+@pytest.fixture(autouse=True)
+def isolate_task_registry_storage(tmp_path: Path) -> Generator[None, None, None]:
+    """隔离任务注册表持久化文件，避免测试污染 data/task_registry.json。"""
+    from poiesis.api.task_registry import registry
+
+    original_storage_path = registry._storage_path
+    registry._storage_path = str(tmp_path / "task_registry.json")
+    with registry._lock:
+        registry._tasks.clear()
+    registry._persist()
+
+    try:
+        yield
+    finally:
+        with registry._lock:
+            registry._tasks.clear()
+        registry._storage_path = original_storage_path
+
 # ---------------------------------------------------------------------------
 # Mock LLM
 # ---------------------------------------------------------------------------
@@ -53,6 +73,11 @@ class MockLLMClient(LLMClient):
         self, prompt: str, system: str | None = None, **kwargs: Any
     ) -> dict[str, Any]:
         return self._json_response
+
+    def _stream_complete(
+        self, prompt: str, system: str | None = None, **kwargs: Any
+    ) -> Iterator[str]:
+        yield self._text_response
 
 
 # ---------------------------------------------------------------------------

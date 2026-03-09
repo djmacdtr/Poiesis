@@ -8,6 +8,28 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+LANGUAGE_WORLD_SEED_MAP: dict[str, str] = {
+    "zh": "examples/world_seed_zh.yaml",
+    "zh-cn": "examples/world_seed_zh.yaml",
+    "en": "examples/world_seed.yaml",
+    "en-us": "examples/world_seed.yaml",
+}
+
+
+def resolve_world_seed_path(language: str, default_seed: str) -> str:
+    """Resolve seed path by language, falling back to config default path."""
+    key = (language or "").strip().lower()
+    if not key:
+        return default_seed
+    exact = LANGUAGE_WORLD_SEED_MAP.get(key)
+    if exact:
+        return exact
+    if key.startswith("zh"):
+        return LANGUAGE_WORLD_SEED_MAP["zh"]
+    if key.startswith("en"):
+        return LANGUAGE_WORLD_SEED_MAP["en"]
+    return default_seed
+
 
 class ModelConfig(BaseModel):
     """Configuration for an LLM model."""
@@ -16,6 +38,7 @@ class ModelConfig(BaseModel):
     model: str = "gpt-4o"
     temperature: float = Field(default=0.8, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4000, gt=0)
+    base_url: str | None = None
 
 
 class SimilarityConfig(BaseModel):
