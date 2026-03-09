@@ -68,6 +68,12 @@ export default function Dashboard() {
   if (statsLoading) return <LoadingSpinner text="加载统计数据…" />
   if (statsError) return <ErrorMessage message={(statsError as Error).message} />
 
+  const formatLanguage = (language: string) => {
+    if (language === 'zh-CN') return '中文'
+    if (language === 'en-US') return '英文'
+    return language
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3">
@@ -79,7 +85,7 @@ export default function Dashboard() {
         >
           {books.map((book) => (
             <option key={book.id} value={book.id}>
-              {book.name}（{book.language} / {book.style_preset}）
+              {book.name}（{formatLanguage(book.language)} / {book.style_preset}）
             </option>
           ))}
         </select>
@@ -99,9 +105,9 @@ export default function Dashboard() {
           icon={<FileText className="w-5 h-5" />}
         />
         <StatCard
-          title="待处理 Review"
+          title="待处理审阅"
           value={stats?.pendingReviewCount ?? 0}
-          description="需要人工接管的 scene"
+          description="需要人工接管的场景"
           icon={<GitPullRequest className="w-5 h-5" />}
         />
         <StatCard
@@ -110,7 +116,7 @@ export default function Dashboard() {
           icon={<Users className="w-5 h-5" />}
         />
         <StatCard
-          title="活跃 Loops"
+          title="活跃剧情线索"
           value={stats?.activeLoopCount ?? 0}
           icon={<Orbit className="w-5 h-5" />}
         />

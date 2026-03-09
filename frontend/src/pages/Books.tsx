@@ -28,6 +28,16 @@ const STYLE_PRESETS: Array<{ value: string; label: string; prompt: string }> = [
   },
 ]
 
+function getLanguageLabel(language: string): string {
+  if (language === 'zh-CN') return '中文'
+  if (language === 'en-US') return '英文'
+  return language
+}
+
+function getStylePresetLabel(stylePreset: string): string {
+  return STYLE_PRESETS.find((item) => item.value === stylePreset)?.label ?? stylePreset
+}
+
 export default function BooksPage() {
   const queryClient = useQueryClient()
 
@@ -111,7 +121,7 @@ export default function BooksPage() {
           >
             {books.map((book) => (
               <option key={book.id} value={book.id}>
-                {book.name}（{book.language} / {book.style_preset}{book.is_default ? ' / 默认' : ''}）
+                {book.name}（{getLanguageLabel(book.language)} / {getStylePresetLabel(book.style_preset)}{book.is_default ? ' / 默认' : ''}）
               </option>
             ))}
           </select>
@@ -141,8 +151,8 @@ export default function BooksPage() {
               onChange={(e) => setBookLanguage(e.target.value)}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
             >
-              <option value="zh-CN">zh-CN（中文）</option>
-              <option value="en-US">en-US（英文）</option>
+              <option value="zh-CN">中文</option>
+              <option value="en-US">英文</option>
             </select>
           </div>
 

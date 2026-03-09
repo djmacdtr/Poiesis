@@ -1,5 +1,5 @@
 /**
- * 系统设置页：配置 API Key、Embedding Provider，以及初始化世界
+ * 系统设置页：配置模型密钥、嵌入方式，以及初始化世界。
  */
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -24,6 +24,12 @@ function isProvider(value: string): value is LLMProvider {
 
 function getFirstModel(provider: LLMProvider): string {
   return MODEL_OPTIONS[provider][0]
+}
+
+function getEmbeddingProviderLabel(provider: string | null | undefined): string {
+  if (provider === 'remote') return '远程模式'
+  if (provider === 'local') return '本地模式'
+  return '未设置'
 }
 
 export default function SettingsPage() {
@@ -119,9 +125,9 @@ export default function SettingsPage() {
         系统设置
       </h2>
 
-      {/* API Key 配置卡片 */}
+      {/* 模型密钥配置卡片 */}
       <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
-        <h3 className="text-sm font-semibold text-gray-700">API Key 配置</h3>
+        <h3 className="text-sm font-semibold text-gray-700">模型密钥配置</h3>
 
         {/* 当前状态 */}
         <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
@@ -132,7 +138,7 @@ export default function SettingsPage() {
               ) : (
                 <XCircle className="w-4 h-4 text-gray-400" />
               )}
-              <span className="text-gray-600">OpenAI Key</span>
+              <span className="text-gray-600">OpenAI 密钥</span>
               <span className={`text-xs px-1.5 py-0.5 rounded ${configStatus?.has_openai_api_key ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-400'}`}>
                 {configStatus?.has_openai_api_key ? '已配置' : '未配置'}
               </span>
@@ -148,7 +154,7 @@ export default function SettingsPage() {
               ) : (
                 <XCircle className="w-4 h-4 text-gray-400" />
               )}
-              <span className="text-gray-600">Anthropic Key</span>
+              <span className="text-gray-600">Anthropic 密钥</span>
               <span className={`text-xs px-1.5 py-0.5 rounded ${configStatus?.has_anthropic_api_key ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-400'}`}>
                 {configStatus?.has_anthropic_api_key ? '已配置' : '未配置'}
               </span>
@@ -164,7 +170,7 @@ export default function SettingsPage() {
               ) : (
                 <XCircle className="w-4 h-4 text-gray-400" />
               )}
-              <span className="text-gray-600">SiliconFlow Key</span>
+              <span className="text-gray-600">SiliconFlow 密钥</span>
               <span className={`text-xs px-1.5 py-0.5 rounded ${configStatus?.has_siliconflow_api_key ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-400'}`}>
                 {configStatus?.has_siliconflow_api_key ? '已配置' : '未配置'}
               </span>
@@ -181,7 +187,7 @@ export default function SettingsPage() {
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="openai-key">
-              OpenAI API Key
+              OpenAI API 密钥
               <span className="ml-1 font-normal text-gray-400">（留空则保持不变，输入新值可覆盖）</span>
             </label>
             <input
@@ -197,7 +203,7 @@ export default function SettingsPage() {
 
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="anthropic-key">
-              Anthropic API Key
+              Anthropic API 密钥
               <span className="ml-1 font-normal text-gray-400">（留空则保持不变）</span>
             </label>
             <input
@@ -213,7 +219,7 @@ export default function SettingsPage() {
 
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="siliconflow-key">
-              SiliconFlow API Key
+              SiliconFlow API 密钥
               <span className="ml-1 font-normal text-gray-400">（留空则保持不变）</span>
             </label>
             <input
@@ -229,7 +235,7 @@ export default function SettingsPage() {
 
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="embedding-provider">
-              Embedding Provider
+              嵌入方式
             </label>
             <select
               id="embedding-provider"
@@ -237,16 +243,16 @@ export default function SettingsPage() {
               onChange={(e) => setEmbeddingProvider(e.target.value as 'local' | 'remote' | '')}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
             >
-              <option value="">— 不修改（已保存：{configStatus?.embedding_provider ?? '未设置'}）</option>
-              <option value="local">local（轻量离线）</option>
-              <option value="remote">remote（依赖 embed 服务）</option>
+              <option value="">— 不修改（已保存：{getEmbeddingProviderLabel(configStatus?.embedding_provider)}）</option>
+              <option value="local">本地模式（轻量离线）</option>
+              <option value="remote">远程模式（依赖嵌入服务）</option>
             </select>
             <p className="mt-1 text-xs text-gray-500">
-              当前生效：{configStatus?.embedding_provider_effective ?? 'local'}
+              当前生效：{configStatus?.embedding_provider_effective === 'remote' ? '远程模式' : '本地模式'}
             </p>
             {configStatus?.embedding_service_health && (
               <p className={`mt-1 text-xs ${configStatus.embedding_service_health.reachable ? 'text-green-600' : 'text-amber-600'}`}>
-                remote 健康状态：{configStatus.embedding_service_health.reachable ? '可达' : '不可达'}
+                远程嵌入服务状态：{configStatus.embedding_service_health.reachable ? '可达' : '不可达'}
                 {!configStatus.embedding_service_health.reachable && configStatus.embedding_service_health.error_msg
                   ? `（${configStatus.embedding_service_health.error_msg}）`
                   : ''}
@@ -273,7 +279,7 @@ export default function SettingsPage() {
           <hr className="border-gray-100" />
 
           <div className="space-y-1">
-            <p className="text-sm font-semibold text-gray-700">写作模型（llm）</p>
+            <p className="text-sm font-semibold text-gray-700">写作模型</p>
             <p className="text-xs text-gray-500">
               当前生效：{configStatus?.llm_provider_effective} / {configStatus?.llm_model_effective}
             </p>
@@ -281,7 +287,7 @@ export default function SettingsPage() {
 
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="llm-provider">
-              写作 Provider
+              写作提供商
             </label>
             <select
               id="llm-provider"
@@ -312,7 +318,7 @@ export default function SettingsPage() {
 
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="llm-model">
-              写作 Model
+              写作模型
             </label>
             <input
               id="llm-model"
@@ -328,11 +334,11 @@ export default function SettingsPage() {
                 <option key={model} value={model} />
               ))}
             </datalist>
-            <p className="mt-1 text-xs text-gray-500">支持手动输入任意模型标识。</p>
+            <p className="mt-1 text-xs text-gray-500">支持手动输入任意模型名称。</p>
           </div>
 
           <div className="space-y-1">
-            <p className="text-sm font-semibold text-gray-700">规划模型（planner_llm）</p>
+            <p className="text-sm font-semibold text-gray-700">规划模型</p>
             <p className="text-xs text-gray-500">
               当前生效：{configStatus?.planner_llm_provider_effective} / {configStatus?.planner_llm_model_effective}
             </p>
@@ -340,7 +346,7 @@ export default function SettingsPage() {
 
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="planner-provider">
-              规划 Provider
+              规划提供商
             </label>
             <select
               id="planner-provider"
@@ -371,7 +377,7 @@ export default function SettingsPage() {
 
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="planner-model">
-              规划 Model
+              规划模型
             </label>
             <input
               id="planner-model"
@@ -390,7 +396,7 @@ export default function SettingsPage() {
                 <option key={model} value={model} />
               ))}
             </datalist>
-            <p className="mt-1 text-xs text-gray-500">支持手动输入任意模型标识。</p>
+            <p className="mt-1 text-xs text-gray-500">支持手动输入任意模型名称。</p>
           </div>
         </div>
 
@@ -413,7 +419,7 @@ export default function SettingsPage() {
             disabled={saveMutation.isPending}
             className="px-4 py-2 bg-amber-50 text-amber-700 border border-amber-200 text-sm rounded-lg hover:bg-amber-100 disabled:opacity-50 transition-colors"
           >
-            清空模型配置并回退 YAML
+            清空模型配置并回退默认文件
           </button>
         </div>
       </div>
@@ -421,7 +427,7 @@ export default function SettingsPage() {
       <ConfirmModal
         open={confirmClearModelOpen}
         title="确认清空模型配置"
-        description="将清空 llm 与 planner_llm 的数据库配置，后续新任务会回退到 config.yaml 默认模型。"
+        description="将清空写作模型与规划模型的数据库配置，后续新任务会回退到 config.yaml 默认模型。"
         confirmText="确认清空"
         cancelText="取消"
         danger

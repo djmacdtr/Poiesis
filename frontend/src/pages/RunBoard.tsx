@@ -1,5 +1,5 @@
 /**
- * Scene 驱动运行面板：启动 run、查看进度、跳转详情。
+ * 场景化运行面板：启动任务、查看进度、跳转详情。
  */
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -8,6 +8,20 @@ import { toast } from 'sonner'
 import { fetchBooks } from '@/services/books'
 import { fetchSceneRuns, startSceneRun } from '@/services/run'
 import type { BookItem, SceneRunSummary } from '@/types'
+
+const runStatusLabel: Record<string, string> = {
+  pending: '等待中',
+  running: '运行中',
+  completed: '已完成',
+  failed: '失败',
+  interrupted: '已中断',
+}
+
+function formatLanguage(language: string): string {
+  if (language === 'zh-CN') return '中文'
+  if (language === 'en-US') return '英文'
+  return language
+}
 
 export default function RunBoard() {
   const queryClient = useQueryClient()
@@ -30,7 +44,7 @@ export default function RunBoard() {
     setIsSubmitting(true)
     try {
       await startSceneRun(chapterCount, bookId)
-      toast.success('Scene 驱动 run 已启动')
+      toast.success('场景化运行任务已启动')
       await queryClient.invalidateQueries({ queryKey: ['sceneRuns'] })
     } catch (error) {
       toast.error((error as Error).message)
@@ -42,8 +56,8 @@ export default function RunBoard() {
   return (
     <div className="space-y-6">
       <section className="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm">
-        <h2 className="text-xl font-semibold text-stone-900">Scene Run Board</h2>
-        <p className="mt-1 text-sm text-stone-500">新的主链以 scene 为一等实体，chapter 只作为聚合与发布层。</p>
+        <h2 className="text-xl font-semibold text-stone-900">运行面板</h2>
+        <p className="mt-1 text-sm text-stone-500">新的主链以场景为一等实体，章节只作为聚合与发布层。</p>
         <div className="mt-5 grid gap-4 md:grid-cols-[1fr_160px_160px_auto]">
           <select
             value={bookId}
@@ -52,7 +66,7 @@ export default function RunBoard() {
           >
             {books.map((book) => (
               <option key={book.id} value={book.id}>
-                {book.name} / {book.language}
+                {book.name} / {formatLanguage(book.language)}
               </option>
             ))}
           </select>
@@ -65,14 +79,14 @@ export default function RunBoard() {
             className="rounded-xl border border-stone-300 px-3 py-2 text-sm"
           />
           <div className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-600">
-            自动通过，异常进 review
+            默认自动通过，异常进入审阅
           </div>
           <button
             onClick={handleStart}
             disabled={isSubmitting}
             className="rounded-xl bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-800 disabled:opacity-50"
           >
-            {isSubmitting ? '启动中…' : '启动 Run'}
+            {isSubmitting ? '启动中…' : '启动任务'}
           </button>
         </div>
       </section>
@@ -83,24 +97,24 @@ export default function RunBoard() {
           <span className="text-xs text-stone-500">会持续刷新状态</span>
         </div>
         <div className="mt-4 space-y-3">
-          {runs.length === 0 && <p className="text-sm text-stone-500">当前还没有 scene run。</p>}
+          {runs.length === 0 && <p className="text-sm text-stone-500">当前还没有运行任务。</p>}
           {runs.map((run) => (
             <article key={run.id} className="rounded-xl border border-stone-200 p-4">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-sm font-medium text-stone-900">Run #{run.id}</p>
+                  <p className="text-sm font-medium text-stone-900">任务 #{run.id}</p>
                   <p className="mt-1 text-xs text-stone-500">{run.task_id}</p>
                 </div>
                 <span className="rounded-full bg-stone-100 px-2.5 py-1 text-xs text-stone-700">
-                  {run.status}
+                  {runStatusLabel[run.status] ?? run.status}
                 </span>
               </div>
               <div className="mt-3 grid gap-2 text-sm text-stone-600 md:grid-cols-3">
-                <span>Book: {run.book_id}</span>
+                <span>书籍：{run.book_id}</span>
                 <span>
-                  Progress: {run.current_chapter}/{run.total_chapters}
+                  进度：{run.current_chapter}/{run.total_chapters}
                 </span>
-                <span>Updated: {run.updated_at || '-'}</span>
+                <span>更新时间：{run.updated_at || '-'}</span>
               </div>
               {run.error_message && (
                 <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{run.error_message}</p>
