@@ -110,6 +110,20 @@ class TaskInfo:
         self._logs.append(message)
         self._touch()
 
+    def _apply_recovery_state(self, status: str, error: str) -> None:
+        """Directly set recovery state without triggering on_change callbacks.
+
+        Used during registry load to avoid premature persist calls before all
+        tasks are registered.
+        """
+        self._status = status
+        self._error = error
+        if not self._logs:
+            self._logs.append(error)
+        elif self._logs[-1] != error:
+            self._logs.append(error)
+        self.updated_at = datetime.now(UTC).isoformat()
+
     @property
     def logs(self) -> list[str]:
         """返回当前日志列表（最新的在末尾）。"""
@@ -215,21 +229,16 @@ class TaskRegistry:
             task = TaskInfo.from_dict(item)
             if task.status in ("pending", "running"):
                 recovered = True
-                error_msg = "服务发生热重载或重启，原任务已中断，请重新发起生成。"
-                task._status = "interrupted"
-                task._error = error_msg
-                task._logs.append(error_msg)
-                task.updated_at = datetime.now(UTC).isoformat()
+                task._apply_recovery_state(
+                    status="interrupted",
+                    error="服务发生热重载或重启，原任务已中断，请重新发起生成。",
+                )
             # 防御性修复：历史数据中出现"已完成但 0 进度"时，标记为异常终态，避免误导前端。
             elif (
                 task.status == "completed" and task.total_chapters > 0 and task.current_chapter <= 0
             ):
                 recovered = True
-                task._status = "failed"
-                task._error = _INVALID_COMPLETED_MSG
-                if not task._logs:
-                    task._logs.append(_INVALID_COMPLETED_MSG)
-                task.updated_at = datetime.now(UTC).isoformat()
+                task._apply_recovery_state(status="failed", error=_INVALID_COMPLETED_MSG)
             self._tasks[task.task_id] = task
 
         # Attach on_change after all tasks are registered so future updates persist correctly.
