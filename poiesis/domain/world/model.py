@@ -27,6 +27,37 @@ class WorldModel:
         # WorldModel 只持有当前使用的仓储实例，便于把持久化协调继续隔离在领域对象外。
         self._repository: WorldRepository | None = None
 
+    def list_loops(self) -> list[dict[str, Any]]:
+        """返回当前内存中的 loop 列表。"""
+        return list(self.loop_state)
+
+    def get_loop(self, loop_id: str) -> dict[str, Any] | None:
+        """按 loop_id 查询单条线索状态。"""
+        for item in self.loop_state:
+            if item.get("loop_id") == loop_id:
+                return item
+        return None
+
+    def active_loop_ids(self) -> list[str]:
+        """返回当前仍需关注的剧情线索 ID。"""
+        return [
+            str(item.get("loop_id"))
+            for item in self.loop_state
+            if item.get("status") not in {"resolved", "dropped"}
+        ]
+
+    def upsert_loop(self, loop: dict[str, Any]) -> None:
+        """同步更新内存中的 loop 状态。"""
+        existing = self.get_loop(str(loop.get("loop_id") or ""))
+        if existing is None:
+            self.loop_state.append(dict(loop))
+            return
+        existing.update(loop)
+
+    def set_story_state(self, story_state: dict[str, Any]) -> None:
+        """替换当前故事状态摘要。"""
+        self.story_state = dict(story_state)
+
     def load_from_db(
         self,
         db: Database,
@@ -117,6 +148,8 @@ class WorldModel:
         chars_title = "\n=== 角色设定 ===" if zh_mode else "\n=== Characters ==="
         timeline_title = "\n=== 时间线 ===" if zh_mode else "\n=== Timeline ==="
         hint_title = "\n=== 待回收伏笔 ===" if zh_mode else "\n=== Pending Foreshadowing ==="
+        story_title = "\n=== 当前故事状态 ===" if zh_mode else "\n=== Story State ==="
+        loop_title = "\n=== 剧情线索 ===" if zh_mode else "\n=== Narrative Loops ==="
         immutable_tag = "【不可变】" if zh_mode else " [IMMUTABLE]"
         motivation_label = "动机" if zh_mode else "motivation"
         unknown_label = "未知" if zh_mode else "unknown"
@@ -150,5 +183,34 @@ class WorldModel:
             lines.append(hint_title)
             for hint in hints:
                 lines.append(f"- {hint.get('hint_key', '')}: {hint.get('description', '')}")
+
+        if self.story_state:
+            lines.append(story_title)
+            lines.append(
+                f"- {'最近已发布章节' if zh_mode else 'Last published chapter'}: "
+                f"{self.story_state.get('last_published_chapter', 0)}"
+            )
+            lines.append(
+                f"- {'当前活动章节' if zh_mode else 'Active chapter'}: "
+                f"{self.story_state.get('active_chapter', 1)}"
+            )
+            recent_scene_refs = list(self.story_state.get("recent_scene_refs") or [])
+            if recent_scene_refs:
+                label = "最近场景" if zh_mode else "Recent scenes"
+                lines.append(f"- {label}: {', '.join(str(item) for item in recent_scene_refs)}")
+
+        active_loops = [
+            loop
+            for loop in self.loop_state
+            if loop.get("status") not in {"resolved", "dropped"}
+        ]
+        if active_loops:
+            lines.append(loop_title)
+            for loop in active_loops[:10]:
+                due = loop.get("due_window") or unknown_label
+                lines.append(
+                    f"- {loop.get('loop_id', '')}: {loop.get('title', '')} "
+                    f"[{loop.get('status', '')}] ({'回收窗口' if zh_mode else 'due'}: {due})"
+                )
 
         return "\n".join(lines)

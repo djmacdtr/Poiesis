@@ -8,6 +8,7 @@ from poiesis.domain.world.model import WorldModel
 from poiesis.llm.base import LLMClient
 from poiesis.pipeline.verification.budget_verifier import BudgetVerifier
 from poiesis.pipeline.verification.canon_verifier import CanonVerifier
+from poiesis.pipeline.verification.loop_verifier import LoopVerifier
 from poiesis.pipeline.verification.result import VerificationResult
 from poiesis.pipeline.verification.semantic_verifier import LLMSemanticVerifier
 
@@ -24,6 +25,7 @@ class VerifierHub:
         self._new_rule_budget = new_rule_budget
         self._budget_verifier = BudgetVerifier(new_rule_budget)
         self._canon_verifier = CanonVerifier()
+        self._loop_verifier = LoopVerifier()
         self._llm_verifier = LLMSemanticVerifier(prompt_path=prompt_path, language=language)
 
     def verify(
@@ -34,11 +36,19 @@ class VerifierHub:
         world: WorldModel,
         proposed_changes: list[dict[str, Any]],
         llm: LLMClient,
+        required_loops: list[str] | None = None,
+        loop_updates: list[dict[str, Any]] | None = None,
     ) -> VerificationResult:
         """按固定顺序执行子校验器，便于问题归因和后续指标统计。"""
         issues = [
             *self._budget_verifier.verify(proposed_changes),
             *self._canon_verifier.verify(world, proposed_changes),
+            *self._loop_verifier.verify(
+                chapter_number=chapter_number,
+                world=world,
+                required_loops=required_loops or [],
+                loop_updates=loop_updates or [],
+            ),
             *self._llm_verifier.verify(
                 chapter_number=chapter_number,
                 content=content,

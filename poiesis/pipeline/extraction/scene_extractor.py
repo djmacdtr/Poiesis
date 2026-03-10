@@ -29,12 +29,19 @@ class SceneExtractor:
         )
         loop_updates = []
         for loop_id in scene_plan.required_loops:
+            existing = world.get_loop(loop_id)
             loop_updates.append(
                 {
                     "loop_id": loop_id,
-                    "status": "hinted",
-                    "title": loop_id,
+                    "action": "progressed" if existing else "introduced",
+                    "status": "escalated" if existing else "open",
+                    "title": str((existing or {}).get("title") or loop_id),
                     "source_scene": f"{scene_plan.chapter_number}-{scene_plan.scene_number}",
+                    "due_start_chapter": (existing or {}).get("due_start_chapter"),
+                    "due_end_chapter": (existing or {}).get("due_end_chapter"),
+                    "priority": int((existing or {}).get("priority") or 1),
+                    "related_characters": list((existing or {}).get("related_characters") or []),
+                    "resolution_requirements": list((existing or {}).get("resolution_requirements") or []),
                 }
             )
         return ChangeSet(

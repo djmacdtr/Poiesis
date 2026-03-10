@@ -103,11 +103,25 @@ export interface Foreshadowing {
 }
 
 /** Canon 数据整体响应 */
+export interface StoryStateSummary {
+  last_published_chapter: number
+  published_chapters: number[]
+  active_chapter: number
+  recent_scene_refs: string[]
+  open_loop_count: number
+  resolved_loop_count: number
+  overdue_loop_count: number
+  chapter_summary: Record<string, unknown>
+  published_at: string
+}
+
+/** Canon 数据整体响应 */
 export interface CanonData {
   world_rules: WorldRule[]
   characters: Character[]
   timeline: TimelineEvent[]
   foreshadowing: Foreshadowing[]
+  story_state: StoryStateSummary
 }
 
 // ──────────────────────────────────────────────
@@ -311,6 +325,8 @@ export interface LoopState {
   title: string
   status: 'open' | 'hinted' | 'escalated' | 'resolved' | 'dropped' | 'overdue'
   introduced_in_scene: string
+  due_start_chapter: number | null
+  due_end_chapter: number | null
   due_window: string
   priority: number
   related_characters: string[]

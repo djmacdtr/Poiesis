@@ -63,6 +63,7 @@ class CanonData(BaseModel):
     characters: list[Character] = []
     timeline: list[TimelineEvent] = []
     foreshadowing: list[Foreshadowing] = []
+    story_state: dict[str, Any] = {}
 
 
 class StagingChange(BaseModel):

@@ -23,6 +23,7 @@ class SceneVerifier:
         changeset: ChangeSet,
         llm: LLMClient,
     ) -> list[VerifierIssue]:
+        chapter_required_loops = chapter_plan.get("must_progress_loops")
         result = self._verifier_hub.verify(
             chapter_number=scene_plan.chapter_number,
             content=content,
@@ -30,6 +31,19 @@ class SceneVerifier:
             world=world,
             proposed_changes=changeset.raw_changes,
             llm=llm,
+            required_loops=list(
+                dict.fromkeys(
+                    [
+                        *scene_plan.required_loops,
+                        *(
+                            list(chapter_required_loops)
+                            if isinstance(chapter_required_loops, list)
+                            else []
+                        ),
+                    ]
+                )
+            ),
+            loop_updates=changeset.loop_updates,
         )
         return [
             VerifierIssue(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from poiesis.application.scene_contracts import (
@@ -117,6 +118,50 @@ def _build_chapter_plan(chapter_number: int, payload: dict[str, Any]) -> Chapter
         **payload,
     }
     return ChapterPlan.model_validate(merged)
+
+
+def _parse_scene_ref(scene_ref: str) -> tuple[int | None, int | None]:
+    """把形如 3-2 的 scene 引用解析为章号和 scene 号。"""
+    if "-" not in scene_ref:
+        return None, None
+    chapter, scene = scene_ref.split("-", 1)
+    try:
+        return int(chapter), int(scene)
+    except ValueError:
+        return None, None
+
+
+def _build_story_state_snapshot(
+    chapter_trace: ChapterTrace,
+    world: WorldModel,
+) -> dict[str, Any]:
+    """把发布时刻的 world / loop 状态压缩成正式故事快照。"""
+    loops = world.list_loops()
+    open_loops = [item for item in loops if item.get("status") in {"open", "hinted", "escalated"}]
+    resolved_loops = [item for item in loops if item.get("status") == "resolved"]
+    overdue_loops = [item for item in loops if item.get("status") == "overdue"]
+    return {
+        "chapter_number": chapter_trace.chapter_number,
+        "last_published_chapter": chapter_trace.chapter_number,
+        "published_chapters": list(
+            dict.fromkeys(
+                [*list(world.story_state.get("published_chapters") or []), chapter_trace.chapter_number]
+            )
+        ),
+        "active_chapter": chapter_trace.chapter_number + 1,
+        "recent_scene_refs": [
+            f"{scene.chapter_number}-{scene.scene_number}"
+            for scene in chapter_trace.scenes
+        ],
+        "published_at": datetime.now(UTC).isoformat(),
+        "open_loop_count": len(open_loops),
+        "resolved_loop_count": len(resolved_loops),
+        "overdue_loop_count": len(overdue_loops),
+        "open_loops": open_loops,
+        "resolved_loops": resolved_loops,
+        "overdue_loops": overdue_loops,
+        "chapter_summary": dict(chapter_trace.summary),
+    }
 
 
 class GenerateSceneUseCase:
@@ -241,40 +286,109 @@ class GenerateSceneUseCase:
 class AdvanceLoopStateUseCase:
     """根据 scene 变更推进 loop 状态。"""
 
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: Database, world: WorldModel) -> None:
         self._db = db
+        self._world = world
 
     def _normalize_loop_status(self, value: str) -> str:
         """把运行时字符串收口到合法 loop 状态。"""
         valid = {"open", "hinted", "escalated", "resolved", "dropped", "overdue"}
         return value if value in valid else "hinted"
 
+    def _normalize_due_bound(self, value: Any) -> int | None:
+        """把章节边界统一转成整数，非法值直接视为未设置。"""
+        if value in {None, ""}:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _derive_status(self, action: str, existing: dict[str, Any] | None, raw_status: str) -> LoopStatus:
+        """优先依据规范动作推导状态，避免上游字段语义漂移。"""
+        if action == "introduced":
+            return "open"
+        if action == "progressed":
+            return "escalated"
+        if action == "resolved":
+            return "resolved"
+        if action == "dropped":
+            return "dropped"
+        if action == "reopen":
+            return "open"
+        if existing is not None:
+            return cast(LoopStatus, self._normalize_loop_status(str(existing.get("status") or raw_status or "hinted")))
+        return cast(LoopStatus, self._normalize_loop_status(raw_status or "hinted"))
+
+    def _mark_overdue_loops(self, book_id: int, chapter_number: int) -> None:
+        """根据当前章节推进结果，把已超过窗口的开放线索标记为 overdue。"""
+        for existing in list(self._world.list_loops()):
+            due_end = existing.get("due_end_chapter")
+            status = str(existing.get("status") or "")
+            if due_end is None or status not in {"open", "hinted", "escalated"}:
+                continue
+            if int(due_end) >= chapter_number:
+                continue
+            overdue_loop = {
+                **existing,
+                "status": "overdue",
+                "due_window": existing.get("due_window") or (
+                    f"第 {existing.get('due_start_chapter')}-{due_end} 章"
+                    if existing.get("due_start_chapter") is not None
+                    else f"最迟第 {due_end} 章"
+                ),
+            }
+            self._db.upsert_loop(book_id, overdue_loop)
+            self._world.upsert_loop(overdue_loop)
+
     def execute(self, book_id: int, scene: SceneTrace) -> None:
         """将 loop 更新落到 loops / loop_events。"""
         for item in scene.changeset.loop_updates:
+            loop_id = str(item.get("loop_id") or f"loop-{scene.scene_number}")
+            existing = self._world.get_loop(loop_id)
+            due_start = self._normalize_due_bound(item.get("due_start_chapter"))
+            due_end = self._normalize_due_bound(item.get("due_end_chapter"))
+            action = str(item.get("action") or "")
             loop = LoopState(
-                loop_id=str(item.get("loop_id") or f"loop-{scene.scene_number}"),
-                title=str(item.get("title") or item.get("loop_id") or "未命名线索"),
-                status=cast(
-                    LoopStatus,
-                    self._normalize_loop_status(str(item.get("status") or "hinted")),
+                loop_id=loop_id,
+                title=str(item.get("title") or (existing or {}).get("title") or loop_id or "未命名线索"),
+                status=self._derive_status(action, existing, str(item.get("status") or "")),
+                introduced_in_scene=str(
+                    (existing or {}).get("introduced_in_scene")
+                    or item.get("source_scene")
+                    or f"{scene.chapter_number}-{scene.scene_number}"
                 ),
-                introduced_in_scene=str(item.get("source_scene") or f"{scene.chapter_number}-{scene.scene_number}"),
-                due_window=str(item.get("due_window") or ""),
-                priority=int(item.get("priority") or 1),
-                related_characters=list(item.get("related_characters") or []),
-                resolution_requirements=list(item.get("resolution_requirements") or []),
+                due_start_chapter=due_start if due_start is not None else (existing or {}).get("due_start_chapter"),
+                due_end_chapter=due_end if due_end is not None else (existing or {}).get("due_end_chapter"),
+                due_window=str(item.get("due_window") or (existing or {}).get("due_window") or ""),
+                priority=int(item.get("priority") or (existing or {}).get("priority") or 1),
+                related_characters=list(item.get("related_characters") or (existing or {}).get("related_characters") or []),
+                resolution_requirements=list(
+                    item.get("resolution_requirements") or (existing or {}).get("resolution_requirements") or []
+                ),
                 last_updated_scene=f"{scene.chapter_number}-{scene.scene_number}",
             )
-            self._db.upsert_loop(book_id, loop.model_dump(mode="json"))
+            payload = loop.model_dump(mode="json")
+            if not payload["due_window"]:
+                start = payload.get("due_start_chapter")
+                end = payload.get("due_end_chapter")
+                if start is not None and end is not None:
+                    payload["due_window"] = f"第 {start}-{end} 章"
+                elif end is not None:
+                    payload["due_window"] = f"最迟第 {end} 章"
+                elif start is not None:
+                    payload["due_window"] = f"自第 {start} 章起"
+            self._db.upsert_loop(book_id, payload)
+            self._world.upsert_loop(payload)
             self._db.add_loop_event(
                 book_id=book_id,
                 loop_id=loop.loop_id,
                 chapter_number=scene.chapter_number,
                 scene_number=scene.scene_number,
-                event_type=loop.status,
-                payload=item,
+                event_type=action or loop.status,
+                payload={**item, "status": payload["status"]},
             )
+        self._mark_overdue_loops(book_id, scene.chapter_number)
 
 
 class RefreshChapterAggregateUseCase:
@@ -283,13 +397,31 @@ class RefreshChapterAggregateUseCase:
     def __init__(self, context: SceneGenerationContext) -> None:
         self._context = context
 
-    def _build_blockers(self, scenes: list[SceneTrace], pending_reviews: int) -> PublishBlockers:
+    def _build_blockers(
+        self,
+        scenes: list[SceneTrace],
+        pending_reviews: int,
+        chapter_plan: ChapterPlan,
+    ) -> PublishBlockers:
         """把 scene 与 review 状态压缩成章节门禁结果。"""
         blockers: list[str] = []
         if any(scene.status == "needs_review" for scene in scenes):
             blockers.append("仍有待审阅场景。")
         if pending_reviews > 0:
             blockers.append(f"仍有 {pending_reviews} 条待处理审阅记录。")
+        progressed_loops = {
+            str(item.get("loop_id") or "")
+            for scene in scenes
+            for item in scene.changeset.loop_updates
+            if item.get("loop_id")
+        }
+        missing_required = [
+            loop_id
+            for loop_id in chapter_plan.must_progress_loops
+            if loop_id not in progressed_loops
+        ]
+        if missing_required:
+            blockers.append(f"本章尚未推进必需剧情线索：{'、'.join(missing_required)}。")
         unfinished = [scene for scene in scenes if scene.status not in {"completed", "approved"}]
         if unfinished and not blockers:
             blockers.append("仍有场景未完成。")
@@ -321,7 +453,7 @@ class RefreshChapterAggregateUseCase:
         )
         chapter_plan = _build_chapter_plan(chapter_number, dict(row.get("planner_output_json") or {}))
         pending_reviews = self._context.db.count_pending_scene_reviews(run_id, chapter_number)
-        blockers = self._build_blockers(scenes, pending_reviews)
+        blockers = self._build_blockers(scenes, pending_reviews, chapter_plan)
         assembled_text = "\n\n".join(scene.final_text.strip() for scene in scenes if scene.final_text.strip())
 
         summary: dict[str, Any]
@@ -410,6 +542,16 @@ class RefreshChapterAggregateUseCase:
             characters_featured=list(summary.get("characters_featured") or []),
             new_facts_introduced=list(summary.get("new_facts_introduced") or []),
         )
+        self._context.world.set_story_state(
+            {
+                **self._context.world.story_state,
+                "active_chapter": chapter_number,
+                "recent_scene_refs": [
+                    f"{scene.chapter_number}-{scene.scene_number}"
+                    for scene in scenes
+                ],
+            }
+        )
         return chapter_trace, chapter_output, blockers
 
 
@@ -419,7 +561,7 @@ class GenerateChapterUseCase:
     def __init__(self, context: SceneGenerationContext) -> None:
         self._context = context
         self._scene_use_case = GenerateSceneUseCase(context)
-        self._loop_use_case = AdvanceLoopStateUseCase(context.db)
+        self._loop_use_case = AdvanceLoopStateUseCase(context.db, context.world)
 
     def execute(self, run_id: int, chapter_number: int) -> tuple[ChapterTrace, ChapterOutput]:
         """完整执行 chapter -> scenes，并把 scene trace 写入数据库。"""
@@ -427,7 +569,7 @@ class GenerateChapterUseCase:
         story_plan = StoryPlan(
             book_id=self._context.book_id,
             focus=f"第 {chapter_number} 章",
-            active_loops=[item["loop_id"] for item in self._context.db.list_loops(self._context.book_id)],
+            active_loops=self._context.world.active_loop_ids(),
             narrative_pressure="持续升级",
         )
         chapter_plan = self._context.chapter_planner.plan(
@@ -442,7 +584,6 @@ class GenerateChapterUseCase:
         for scene_plan in scene_plans:
             scene = self._scene_use_case.execute(run_id=run_id, chapter_plan=chapter_plan, scene_plan=scene_plan)
             self._context.db.upsert_run_scene_trace(run_id, scene.model_dump(mode="json"))
-            self._loop_use_case.execute(self._context.book_id, scene)
             if scene.review_required:
                 self._context.db.create_scene_review(
                     run_id=run_id,
@@ -450,6 +591,8 @@ class GenerateChapterUseCase:
                     scene_number=scene.scene_number,
                     reason=scene.review_reason,
                 )
+            else:
+                self._loop_use_case.execute(self._context.book_id, scene)
 
         refresh = RefreshChapterAggregateUseCase(self._context)
         chapter_trace, chapter_output, _ = refresh.execute(run_id, chapter_number)
@@ -513,12 +656,26 @@ class PublishChapterUseCase:
         self._context.db.upsert_story_state_snapshot(
             self._context.book_id,
             chapter_number,
+            _build_story_state_snapshot(chapter_trace, self._context.world),
+        )
+        self._context.world.set_story_state(
             {
-                "canon_summary": self._context.world.world_context_summary(language="zh-CN"),
-                "open_loops": self._context.db.list_loops(self._context.book_id),
-                "review_required": False,
-                "chapter_status": "published",
-            },
+                **self._context.world.story_state,
+                "last_published_chapter": chapter_number,
+                "published_chapters": list(
+                    dict.fromkeys(
+                        [
+                            *list(self._context.world.story_state.get("published_chapters") or []),
+                            chapter_number,
+                        ]
+                    )
+                ),
+                "active_chapter": chapter_number + 1,
+                "recent_scene_refs": [
+                    f"{scene.chapter_number}-{scene.scene_number}"
+                    for scene in chapter_trace.scenes
+                ],
+            }
         )
         return chapter_output
 
@@ -540,6 +697,7 @@ class _ReviewActionBase:
         self._context = context
         self._scene_use_case = GenerateSceneUseCase(context)
         self._refresh = RefreshChapterAggregateUseCase(context)
+        self._loop_use_case = AdvanceLoopStateUseCase(context.db, context.world)
 
     def _load_review_scene(
         self,
@@ -642,6 +800,7 @@ class ApproveSceneReviewUseCase(_ReviewActionBase):
             result_summary="人工审阅通过，保留当前场景文本。",
             input_payload={},
         )
+        self._loop_use_case.execute(self._context.book_id, approved_trace)
         self._refresh.execute(review["run_id"], review["chapter_number"])
         return updated_review
 
@@ -672,6 +831,8 @@ class RetrySceneUseCase(_ReviewActionBase):
             ),
             input_payload={},
         )
+        if not retried_trace.review_required:
+            self._loop_use_case.execute(self._context.book_id, retried_trace)
         self._refresh.execute(review["run_id"], review["chapter_number"])
         return updated_review
 
@@ -713,5 +874,7 @@ class ApplyPatchUseCase(_ReviewActionBase):
             ),
             input_payload={"patch_text": patch_text},
         )
+        if not patched_trace.review_required:
+            self._loop_use_case.execute(self._context.book_id, patched_trace)
         self._refresh.execute(review["run_id"], review["chapter_number"])
         return updated_review

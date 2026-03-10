@@ -93,6 +93,8 @@ class Database:
         self._ensure_column(conn, "scene_reviews", "resolved_scene_status", "TEXT DEFAULT ''")
         self._ensure_column(conn, "scene_reviews", "result_summary", "TEXT DEFAULT ''")
         self._ensure_column(conn, "scene_reviews", "closed_at", "TIMESTAMP")
+        self._ensure_column(conn, "loops", "due_start_chapter", "INTEGER")
+        self._ensure_column(conn, "loops", "due_end_chapter", "INTEGER")
         self._ensure_column(conn, "scene_patches", "before_text", "TEXT DEFAULT ''")
         self._ensure_column(conn, "scene_patches", "after_text", "TEXT DEFAULT ''")
         self._ensure_column(
@@ -1411,20 +1413,61 @@ class Database:
         result["snapshot_json"] = json.loads(result.get("snapshot_json") or "{}")
         return result
 
+    def get_latest_story_state_snapshot(self, book_id: int) -> dict[str, Any] | None:
+        """读取最近一次已发布章节的故事状态快照。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM story_state_snapshots
+                WHERE book_id = ?
+                ORDER BY chapter_number DESC, id DESC
+                LIMIT 1
+                """,
+                (book_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["snapshot_json"] = json.loads(result.get("snapshot_json") or "{}")
+        return result
+
+    def list_story_state_snapshots(self, book_id: int) -> list[dict[str, Any]]:
+        """列出某本书的全部故事状态快照，用于构建发布历史摘要。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM story_state_snapshots
+                WHERE book_id = ?
+                ORDER BY chapter_number ASC, id ASC
+                """,
+                (book_id,),
+            )
+            rows = cur.fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["snapshot_json"] = json.loads(item.get("snapshot_json") or "{}")
+            result.append(item)
+        return result
+
     def upsert_loop(self, book_id: int, loop: dict[str, Any]) -> int:
         """插入或更新 loop 状态。"""
         with self._cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO loops (
-                    book_id, loop_id, title, status, introduced_in_scene, due_window,
-                    priority, related_characters, resolution_requirements, last_updated_scene
+                    book_id, loop_id, title, status, introduced_in_scene, due_start_chapter,
+                    due_end_chapter, due_window, priority, related_characters,
+                    resolution_requirements, last_updated_scene
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(book_id, loop_id) DO UPDATE SET
                     title = excluded.title,
                     status = excluded.status,
                     introduced_in_scene = excluded.introduced_in_scene,
+                    due_start_chapter = excluded.due_start_chapter,
+                    due_end_chapter = excluded.due_end_chapter,
                     due_window = excluded.due_window,
                     priority = excluded.priority,
                     related_characters = excluded.related_characters,
@@ -1438,6 +1481,8 @@ class Database:
                     loop["title"],
                     loop.get("status", "open"),
                     loop.get("introduced_in_scene", ""),
+                    loop.get("due_start_chapter"),
+                    loop.get("due_end_chapter"),
                     loop.get("due_window", ""),
                     int(loop.get("priority", 1)),
                     json.dumps(loop.get("related_characters") or []),
@@ -1457,6 +1502,8 @@ class Database:
             item = dict(row)
             item["related_characters"] = json.loads(item.get("related_characters") or "[]")
             item["resolution_requirements"] = json.loads(item.get("resolution_requirements") or "[]")
+            item["due_start_chapter"] = item.get("due_start_chapter")
+            item["due_end_chapter"] = item.get("due_end_chapter")
             result.append(item)
         return result
 

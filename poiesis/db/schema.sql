@@ -196,6 +196,8 @@ CREATE TABLE IF NOT EXISTS loops (
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'open',
     introduced_in_scene TEXT DEFAULT '',
+    due_start_chapter INTEGER,
+    due_end_chapter INTEGER,
     due_window TEXT DEFAULT '',
     priority INTEGER NOT NULL DEFAULT 1,
     related_characters JSON DEFAULT '[]',

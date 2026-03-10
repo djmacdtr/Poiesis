@@ -408,3 +408,39 @@ class TestRunTraceCRUD:
         assert patches[0]["after_text"] == "修补后正文"
         assert patches[0]["applied_successfully"] is True
         assert patches[0]["verifier_issues_json"][0]["reason"] == "仍需润色"
+
+    def test_story_state_snapshot_and_loop_due_fields_round_trip(self, tmp_db: Database) -> None:
+        tmp_db.upsert_story_state_snapshot(
+            1,
+            2,
+            {
+                "last_published_chapter": 2,
+                "published_chapters": [1, 2],
+                "active_chapter": 3,
+                "recent_scene_refs": ["2-1", "2-2"],
+            },
+        )
+        tmp_db.upsert_loop(
+            1,
+            {
+                "loop_id": "loop-2",
+                "title": "港口暗号",
+                "status": "open",
+                "introduced_in_scene": "2-1",
+                "due_start_chapter": 2,
+                "due_end_chapter": 4,
+                "due_window": "第 2-4 章",
+                "priority": 2,
+                "related_characters": ["Hero"],
+                "resolution_requirements": ["揭露暗号来源"],
+                "last_updated_scene": "2-2",
+            },
+        )
+
+        latest_snapshot = tmp_db.get_latest_story_state_snapshot(1)
+        loops = tmp_db.list_loops(1)
+
+        assert latest_snapshot is not None
+        assert latest_snapshot["snapshot_json"]["active_chapter"] == 3
+        assert loops[0]["due_start_chapter"] == 2
+        assert loops[0]["due_end_chapter"] == 4

@@ -16,6 +16,7 @@ from poiesis.application.scene_contracts import (
     ChangeSet,
     ChapterOutput,
     ChapterPlan,
+    ChapterStatus,
     ChapterTrace,
     LoopState,
     PublishBlockers,
@@ -36,6 +37,7 @@ from poiesis.application.use_cases import (
 from poiesis.config import Config, load_config, resolve_world_seed_path
 from poiesis.db.database import Database
 from poiesis.domain.world.model import WorldModel
+from poiesis.domain.world.repository import WorldRepository
 from poiesis.llm.anthropic_client import AnthropicClient
 from poiesis.llm.openai_client import OpenAIClient
 from poiesis.llm.siliconflow_client import DEFAULT_SILICONFLOW_BASE_URL, SiliconFlowClient
@@ -262,6 +264,47 @@ def _chapter_publish_blockers(chapter_row: dict[str, Any]) -> PublishBlockers:
     )
 
 
+def _compute_publish_blockers(
+    chapter_row: dict[str, Any],
+    scene_rows: list[dict[str, Any]],
+    pending_reviews: int,
+) -> PublishBlockers:
+    """基于当前 chapter/scene 实时重算发布门禁，避免依赖陈旧 merge_result。"""
+    if str(chapter_row.get("status") or "") == "published":
+        return PublishBlockers(chapter_status="published", can_publish=True, blockers=[])
+
+    blockers: list[str] = []
+    if any(str(item.get("status") or "") == "needs_review" for item in scene_rows):
+        blockers.append("仍有待审阅场景。")
+    if pending_reviews > 0:
+        blockers.append(f"仍有 {pending_reviews} 条待处理审阅记录。")
+
+    planner_output = chapter_row.get("planner_output_json") or {}
+    must_progress_loops = [str(item) for item in planner_output.get("must_progress_loops") or []]
+    progressed_loops = {
+        str(update.get("loop_id") or "")
+        for scene in scene_rows
+        for update in (scene.get("changeset_json") or {}).get("loop_updates", [])
+        if update.get("loop_id")
+    }
+    missing_required = [loop_id for loop_id in must_progress_loops if loop_id not in progressed_loops]
+    if missing_required:
+        blockers.append(f"本章尚未推进必需剧情线索：{'、'.join(missing_required)}。")
+
+    status: ChapterStatus
+    if blockers:
+        status = "needs_review"
+    elif scene_rows:
+        status = "ready_to_publish"
+    else:
+        status = "draft"
+    return PublishBlockers(
+        chapter_status=status,
+        can_publish=status == "ready_to_publish",
+        blockers=blockers,
+    )
+
+
 def _build_scene_trace(run_id: int, scene_row: dict[str, Any]) -> SceneTrace:
     """把数据库记录映射为正式 SceneTrace。"""
     return SceneTrace.model_validate(
@@ -484,6 +527,25 @@ def get_run_detail(db: Database, run_id: int) -> dict[str, Any] | None:
     if run_item is None:
         return None
     chapters = db.list_run_chapter_traces(run_id)
+    chapter_summaries = []
+    for item in chapters:
+        scenes = db.list_run_scene_traces(run_id, int(item["chapter_number"]))
+        publish = _compute_publish_blockers(
+            item,
+            scenes,
+            db.count_pending_scene_reviews(run_id, int(item["chapter_number"])),
+        )
+        chapter_summaries.append(
+            {
+                "chapter_number": int(item["chapter_number"]),
+                "status": publish.chapter_status,
+                "summary": item.get("summary_json") or {},
+                "metrics": item.get("metrics_json") or {},
+                "review_required": publish.chapter_status == "needs_review",
+                "can_publish": publish.can_publish,
+                "blockers": publish.blockers,
+            }
+        )
     return {
         "run": RunSummary(
             id=int(run_item["id"]),
@@ -496,18 +558,7 @@ def get_run_detail(db: Database, run_id: int) -> dict[str, Any] | None:
             updated_at=str(run_item.get("finished_at") or run_item.get("started_at") or ""),
             error_message=run_item.get("error_message"),
         ),
-        "chapters": [
-            {
-                "chapter_number": int(item["chapter_number"]),
-                "status": str(item["status"]),
-                "summary": item.get("summary_json") or {},
-                "metrics": item.get("metrics_json") or {},
-                "review_required": bool((item.get("merge_result_json") or {}).get("review_required")),
-                "can_publish": bool((item.get("merge_result_json") or {}).get("can_publish")),
-                "blockers": list((item.get("merge_result_json") or {}).get("blockers") or []),
-            }
-            for item in chapters
-        ],
+        "chapters": chapter_summaries,
     }
 
 
@@ -517,6 +568,11 @@ def get_chapter_detail(db: Database, run_id: int, chapter_number: int) -> dict[s
     if row is None:
         return None
     scenes = db.list_run_scene_traces(run_id, chapter_number)
+    publish = _compute_publish_blockers(
+        row,
+        scenes,
+        db.count_pending_scene_reviews(run_id, chapter_number),
+    )
     trace = _build_chapter_trace(run_id, row, scenes)
     output_row = db.get_chapter_output(trace.story_plan.book_id, chapter_number)
     output: ChapterOutput | None = None
@@ -535,7 +591,7 @@ def get_chapter_detail(db: Database, run_id: int, chapter_number: int) -> dict[s
     return {
         "trace": trace,
         "output": output,
-        "publish": _chapter_publish_blockers(row),
+        "publish": publish,
     }
 
 
@@ -546,12 +602,21 @@ def get_scene_detail(db: Database, run_id: int, chapter_number: int, scene_numbe
         return None
     review = db.get_scene_review_by_scene(run_id, chapter_number, scene_number)
     chapter = db.get_run_chapter_trace(run_id, chapter_number)
+    chapter_scenes = db.list_run_scene_traces(run_id, chapter_number) if chapter else []
     return {
         "scene": _build_scene_trace(run_id, scene),
         "review": review,
         "review_events": _build_review_events(db.list_scene_review_events(int(review["id"]))) if review else [],
         "patches": _build_patch_records(db.list_scene_patches(run_id, chapter_number, scene_number)),
-        "publish_blockers": _chapter_publish_blockers(chapter) if chapter else PublishBlockers(),
+        "publish_blockers": (
+            _compute_publish_blockers(
+                chapter,
+                chapter_scenes,
+                db.count_pending_scene_reviews(run_id, chapter_number),
+            )
+            if chapter
+            else PublishBlockers()
+        ),
     }
 
 
@@ -601,4 +666,5 @@ def publish_chapter(
 
 def list_loops(db: Database, book_id: int = 1) -> list[LoopState]:
     """返回 loop 列表。"""
-    return [LoopState.model_validate(item) for item in db.list_loops(book_id)]
+    repo = WorldRepository()
+    return [LoopState.model_validate(item) for item in repo.list_loops(db, book_id)]

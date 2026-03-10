@@ -138,6 +138,9 @@ class LoopState(BaseModel):
     title: str
     status: LoopStatus = "open"
     introduced_in_scene: str = ""
+    due_start_chapter: int | None = None
+    due_end_chapter: int | None = None
+    # due_window 只用于 API 与前端展示，规则判断统一基于结构化章节范围。
     due_window: str = ""
     priority: int = 1
     related_characters: list[str] = Field(default_factory=list)

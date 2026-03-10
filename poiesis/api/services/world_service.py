@@ -12,16 +12,15 @@ def get_canon(db: Database, book_id: int | None = None) -> dict[str, Any]:
     """读取完整的 Canon 快照（世界规则、角色、时间线、伏笔）。"""
     repo = WorldRepository()
     book = book_id or 1
-    world_rules = repo.list_world_rules(db, book_id=book)
-    characters = repo.list_characters(db, book_id=book)
-    timeline = repo.list_timeline_events(db, book_id=book)
-    foreshadowing = repo.list_foreshadowing(db, book_id=book)
+    snapshot = repo.load_world_state(db, book_id=book)
+    canon = snapshot["canon"]
 
     return {
-        "world_rules": world_rules,
-        "characters": characters,
-        "timeline": timeline,
-        "foreshadowing": foreshadowing,
+        "world_rules": list(canon["world_rules"].values()),
+        "characters": list(canon["characters"].values()),
+        "timeline": list(canon["timeline"].values()),
+        "foreshadowing": list(canon["foreshadowing"].values()),
+        "story_state": snapshot["story_state"],
     }
 
 

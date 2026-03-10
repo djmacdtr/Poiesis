@@ -85,6 +85,46 @@ export default function Canon() {
         </select>
       </div>
 
+      <section className="grid gap-4 md:grid-cols-4">
+        <div className="rounded-xl border border-gray-200 bg-white p-4">
+          <p className="text-xs font-medium text-gray-500">最近已发布章节</p>
+          <p className="mt-2 text-2xl font-semibold text-gray-900">
+            {data?.story_state.last_published_chapter ?? 0}
+          </p>
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-white p-4">
+          <p className="text-xs font-medium text-gray-500">当前活动章节</p>
+          <p className="mt-2 text-2xl font-semibold text-gray-900">
+            {data?.story_state.active_chapter ?? 1}
+          </p>
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-white p-4">
+          <p className="text-xs font-medium text-gray-500">未闭合线索</p>
+          <p className="mt-2 text-2xl font-semibold text-gray-900">
+            {data?.story_state.open_loop_count ?? 0}
+          </p>
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-white p-4">
+          <p className="text-xs font-medium text-gray-500">已逾期线索</p>
+          <p className="mt-2 text-2xl font-semibold text-gray-900">
+            {data?.story_state.overdue_loop_count ?? 0}
+          </p>
+        </div>
+      </section>
+
+      {(data?.story_state.recent_scene_refs?.length ?? 0) > 0 && (
+        <section className="rounded-xl border border-gray-200 bg-white p-4">
+          <h3 className="text-sm font-semibold text-gray-800">最近发布章节涉及场景</h3>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {(data?.story_state.recent_scene_refs ?? []).map((item) => (
+              <span key={item} className="rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600">
+                {item}
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* 标签页导航 */}
       <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
         {tabs.map((tab) => (

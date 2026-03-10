@@ -277,3 +277,118 @@ def test_retry_and_patch_actions_update_trace_and_history(tmp_db: Database, samp
     assert scene_after_patch["patches"][0]["before_text"] == "第二段旧正文"
     assert scene_after_patch["patches"][0]["applied_successfully"] is True
     assert "人工修补要求" in scene_after_patch["scene"]["final_text"]
+
+
+def test_chapter_publish_blocked_when_required_loop_not_progressed(tmp_db: Database, sample_world, monkeypatch) -> None:
+    """章节缺少 must_progress loop 时，即便 scene 已完成也不可发布。"""
+    from poiesis.api.services import scene_run_service
+
+    run_id = tmp_db.create_run_trace(
+        task_id="missing-loop-task",
+        book_id=1,
+        status="running",
+        config_snapshot={},
+        llm_snapshot={},
+    )
+    tmp_db.upsert_run_chapter_trace(
+        run_id=run_id,
+        chapter_number=1,
+        status="draft",
+        planner_output={
+            "chapter_number": 1,
+            "title": "第一章",
+            "goal": "推进主线",
+            "must_progress_loops": ["loop-missing"],
+        },
+        retrieval_pack={"story_plan": {"book_id": 1, "focus": "第 1 章"}},
+        draft_text="",
+        final_content="章节正文",
+        changeset={"scene_count": 1},
+        verifier_issues=[],
+        editor_rewrites=[],
+        merge_result={"review_required": False, "can_publish": False, "blockers": []},
+        summary_result={"summary": "章节摘要"},
+        metrics={"scene_count": 1},
+    )
+    tmp_db.upsert_run_scene_trace(
+        run_id,
+        {
+            "chapter_number": 1,
+            "scene_number": 1,
+            "status": "completed",
+            "scene_plan": {
+                "chapter_number": 1,
+                "scene_number": 1,
+                "title": "场景1",
+                "goal": "建立冲突",
+            },
+            "draft": None,
+            "final_text": "正文",
+            "changeset": {"loop_updates": []},
+            "verifier_issues": [],
+            "review_required": False,
+            "review_reason": "",
+            "review_status": "completed",
+            "metrics": {},
+        },
+    )
+    context = _make_context(tmp_db, sample_world)
+    monkeypatch.setattr(
+        scene_run_service,
+        "_build_context_from_db",
+        lambda config_path, db, book_id, auto_seed=True: (context, object(), {"id": book_id}),
+    )
+    client = _make_client(tmp_db)
+
+    chapter_resp = client.get(f"/api/runs/{run_id}/chapters/1")
+    assert chapter_resp.status_code == 200
+    assert chapter_resp.json()["publish"]["can_publish"] is False
+    assert "必需剧情线索" in " ".join(chapter_resp.json()["publish"]["blockers"])
+
+    publish_resp = client.post(f"/api/runs/{run_id}/chapters/1/publish", json={})
+    assert publish_resp.status_code == 400
+
+
+def test_loops_and_canon_api_return_story_state(tmp_db: Database, sample_world) -> None:
+    """Loop Board 与 Canon Explorer 应能读取结构化 world 状态摘要。"""
+    sample_world.upsert_loop(
+        {
+            "loop_id": "loop-3",
+            "title": "黑塔回声",
+            "status": "overdue",
+            "introduced_in_scene": "1-1",
+            "due_start_chapter": 1,
+            "due_end_chapter": 2,
+            "due_window": "第 1-2 章",
+            "priority": 3,
+            "related_characters": ["Aelindra Voss"],
+            "resolution_requirements": ["揭示回声来源"],
+            "last_updated_scene": "1-2",
+        }
+    )
+    loop_item = sample_world.get_loop("loop-3")
+    assert loop_item is not None
+    tmp_db.upsert_loop(1, loop_item)
+    tmp_db.upsert_story_state_snapshot(
+        1,
+        2,
+        {
+            "last_published_chapter": 2,
+            "published_chapters": [1, 2],
+            "active_chapter": 3,
+            "recent_scene_refs": ["2-1", "2-2"],
+            "open_loop_count": 0,
+            "resolved_loop_count": 0,
+            "overdue_loop_count": 1,
+        },
+    )
+    client = _make_client(tmp_db)
+
+    loops_resp = client.get("/api/loops?book_id=1")
+    assert loops_resp.status_code == 200
+    assert loops_resp.json()["items"][0]["due_end_chapter"] == 2
+
+    canon_resp = client.get("/api/canon?book_id=1")
+    assert canon_resp.status_code == 200
+    assert canon_resp.json()["story_state"]["last_published_chapter"] == 2
+    assert canon_resp.json()["story_state"]["overdue_loop_count"] == 1
