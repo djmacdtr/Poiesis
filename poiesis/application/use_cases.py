@@ -192,6 +192,7 @@ def _build_story_state_snapshot(
     overdue_loops = [item for item in loops if item.get("status") == "overdue"]
     return {
         "chapter_number": chapter_trace.chapter_number,
+        "blueprint_revision_id": chapter_trace.story_plan.blueprint_revision_id,
         "last_published_chapter": chapter_trace.chapter_number,
         "published_chapters": list(
             dict.fromkeys(
@@ -544,6 +545,7 @@ class RefreshChapterAggregateUseCase:
             summary=summary,
         )
         chapter_output.status = blockers.chapter_status
+        chapter_output.blueprint_revision_id = effective_story_plan.blueprint_revision_id
 
         chapter_trace = ChapterTrace(
             run_id=run_id,
@@ -657,14 +659,64 @@ class GenerateChapterUseCase:
 
     def execute(self, run_id: int, chapter_number: int) -> tuple[ChapterTrace, ChapterOutput]:
         """完整执行 chapter -> scenes，并把 scene trace 写入数据库。"""
+        active_blueprint = self._context.db.get_active_blueprint_revision(self._context.book_id)
+        if active_blueprint is None:
+            raise ValueError("当前作品尚未锁定整书蓝图，无法开始正文生成")
+        roadmap_item = self._context.db.get_blueprint_chapter_roadmap_item(
+            int(active_blueprint["id"]),
+            chapter_number,
+        )
+        if roadmap_item is None:
+            raise ValueError(f"蓝图中不存在第 {chapter_number} 章路线，无法继续生成")
+
+        intent_row = self._context.db.get_creation_intent(self._context.book_id) or {}
+        selected_variant = (
+            self._context.db.get_concept_variant(int(active_blueprint.get("selected_variant_id") or 0))
+            if active_blueprint.get("selected_variant_id")
+            else None
+        )
         previous = self._context.db.list_chapter_outputs(book_id=self._context.book_id)
-        story_plan = _build_default_story_plan(self._context.book_id, chapter_number, self._context.world)
-        chapter_plan = self._context.chapter_planner.plan(
+        planned_loops = [
+            str(item.get("loop_id") or f"loop-{index}")
+            for index, item in enumerate(roadmap_item.get("planned_loops") or [], start=1)
+        ]
+        story_plan = StoryPlan(
+            book_id=self._context.book_id,
+            blueprint_revision_id=int(active_blueprint["id"]),
+            focus=str(roadmap_item.get("goal") or roadmap_item.get("title") or f"第 {chapter_number} 章"),
+            active_themes=list(intent_row.get("themes") or []),
+            active_loops=planned_loops,
+            narrative_pressure=str((selected_variant or {}).get("main_arc_pitch") or "持续升级"),
+        )
+        dynamic_plan = self._context.chapter_planner.plan(
             chapter_number=chapter_number,
             story_plan=story_plan,
             world=self._context.world,
             previous_summaries=[item.get("summary_text", "") for item in previous],
             llm=self._context.planner_llm,
+        )
+        chapter_plan = dynamic_plan.model_copy(
+            update={
+                "title": str(roadmap_item.get("title") or dynamic_plan.title or f"第 {chapter_number} 章"),
+                "goal": str(roadmap_item.get("goal") or dynamic_plan.goal),
+                "hook": str(roadmap_item.get("closure_function") or dynamic_plan.hook),
+                "must_progress_loops": planned_loops or list(dynamic_plan.must_progress_loops),
+                "notes": list(
+                    dict.fromkeys(
+                        [
+                            str(roadmap_item.get("core_conflict") or ""),
+                            *list(roadmap_item.get("character_progress") or []),
+                            *list(dynamic_plan.notes),
+                        ]
+                    )
+                ),
+                "source_plan": {
+                    **dict(dynamic_plan.source_plan),
+                    "blueprint_revision_id": int(active_blueprint["id"]),
+                    "blueprint_roadmap": roadmap_item,
+                    "selected_variant": selected_variant or {},
+                },
+            }
         )
         scene_plans = self._context.scene_planner.plan(chapter_plan)
         self._initialize_chapter_trace(run_id, story_plan, chapter_plan)
@@ -750,6 +802,7 @@ class PublishChapterUseCase:
             self._context.book_id,
             chapter_number,
             _build_story_state_snapshot(chapter_trace, self._context.world),
+            blueprint_revision_id=chapter_trace.story_plan.blueprint_revision_id,
         )
         self._context.world.set_story_state(
             {

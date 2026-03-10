@@ -359,6 +359,107 @@ export interface BookUpsertRequest {
   is_default: boolean
 }
 
+export interface CreationIntent {
+  genre: string
+  themes: string[]
+  tone: string
+  protagonist_prompt: string
+  conflict_prompt: string
+  ending_preference: string
+  forbidden_elements: string[]
+  length_preference: string
+  target_experience: string
+}
+
+export interface ConceptVariant {
+  id?: number | null
+  variant_no: number
+  hook: string
+  world_pitch: string
+  main_arc_pitch: string
+  ending_pitch: string
+  differentiators: string[]
+  selected: boolean
+}
+
+export interface WorldBlueprint {
+  setting_summary: string
+  immutable_rules: Array<{
+    key: string
+    description: string
+    is_immutable?: boolean
+    category?: string
+  }>
+  power_system: string
+  factions: string[]
+  taboo_rules: string[]
+}
+
+export interface CharacterBlueprint {
+  name: string
+  role: string
+  public_persona: string
+  core_motivation: string
+  fatal_flaw: string
+  non_negotiable_traits: string[]
+  relationship_constraints: string[]
+  arc_outline: string[]
+}
+
+export interface ChapterRoadmapItem {
+  chapter_number: number
+  title: string
+  goal: string
+  core_conflict: string
+  turning_point: string
+  character_progress: string[]
+  planned_loops: Array<Record<string, unknown>>
+  closure_function: string
+}
+
+export interface BlueprintRevision {
+  id: number
+  revision_number: number
+  is_active: boolean
+  change_reason: string
+  change_summary: string
+  affected_range: number[]
+  created_at: string
+}
+
+export interface BookBlueprint {
+  book_id: number
+  status: string
+  current_step: string
+  active_revision_id: number | null
+  selected_variant_id: number | null
+  intent: CreationIntent | null
+  concept_variants: ConceptVariant[]
+  selected_variant: ConceptVariant | null
+  world_draft: WorldBlueprint | null
+  world_confirmed: WorldBlueprint | null
+  character_draft: CharacterBlueprint[]
+  character_confirmed: CharacterBlueprint[]
+  roadmap_draft: ChapterRoadmapItem[]
+  roadmap_confirmed: ChapterRoadmapItem[]
+  revisions: BlueprintRevision[]
+}
+
+export interface BlueprintGenerateRequest {
+  feedback: string
+}
+
+export interface BlueprintReplanRequest {
+  starting_chapter: number
+  reason: string
+  guidance: string
+}
+
+export interface BookCreateWizardRequest {
+  book: BookUpsertRequest
+  intent: CreationIntent
+}
+
 // ──────────────────────────────────────────────
 // 统计（前端本地聚合）
 // ──────────────────────────────────────────────

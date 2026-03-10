@@ -5,10 +5,11 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, Plus } from 'lucide-react'
 import { toast } from 'sonner'
-import { createBook, fetchBooks, updateBook } from '@/services/books'
-import type { BookItem, BookUpsertRequest } from '@/types'
+import { createBook, fetchBookBlueprint, fetchBooks, saveCreationIntent, updateBook } from '@/services/books'
+import type { BookCreateWizardRequest, BookItem, BookUpsertRequest } from '@/types'
 import { LoadingSpinner, ErrorMessage } from '@/components/Feedback'
 import { BookCreateModal } from '@/components/BookCreateModal'
+import { BookBlueprintWorkspace } from '@/components/BookBlueprintWorkspace'
 
 const STYLE_PRESETS: Array<{ value: string; label: string; prompt: string }> = [
   {
@@ -56,13 +57,24 @@ export default function BooksPage() {
     staleTime: 30_000,
   })
 
+  const { data: blueprint } = useQuery({
+    queryKey: ['bookBlueprint', activeBookId],
+    queryFn: () => fetchBookBlueprint(activeBookId),
+    enabled: books.length > 0 && activeBookId > 0,
+  })
+
   const createMutation = useMutation({
-    mutationFn: (payload: BookUpsertRequest) => createBook(payload),
+    mutationFn: async (payload: BookCreateWizardRequest) => {
+      const created = await createBook(payload.book)
+      await saveCreationIntent(created.id, payload.intent)
+      return created
+    },
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['books'] })
+      queryClient.invalidateQueries({ queryKey: ['bookBlueprint', created.id] })
       setActiveBookId(created.id)
       setCreateModalOpen(false)
-      toast.success('书籍创建成功')
+      toast.success('作品已创建，请继续确认整书蓝图')
     },
     onError: (err: Error) => toast.error(`创建失败：${err.message}`),
   })
@@ -102,10 +114,10 @@ export default function BooksPage() {
   if (error) return <ErrorMessage message={(error as Error).message} />
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6 max-w-6xl">
       <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
         <BookOpen className="w-5 h-5" />
-        书籍管理
+        作品与蓝图管理
       </h2>
 
       <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
@@ -235,10 +247,12 @@ export default function BooksPage() {
             className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
           >
             <Plus className="w-4 h-4" />
-            新建书籍
+            新建作品
           </button>
         </div>
       </div>
+
+      {activeBookId > 0 && <BookBlueprintWorkspace bookId={activeBookId} blueprint={blueprint} />}
 
       <BookCreateModal
         open={createModalOpen}

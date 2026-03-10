@@ -49,7 +49,6 @@ def test_build_context_builds_siliconflow_clients_from_config_and_env(tmp_path: 
         "generation": {"max_chapters": 2, "rewrite_retries": 1, "new_rule_budget": 3, "target_word_count": 500},
         "database": {"path": str(db_path)},
         "vector_store": {"path": str(vs_path), "embedding_model": "all-MiniLM-L6-v2"},
-        "world_seed": "examples/world_seed.yaml",
     }
 
     with config_path.open("w", encoding="utf-8") as fh:

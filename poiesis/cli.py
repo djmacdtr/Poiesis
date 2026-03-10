@@ -30,19 +30,13 @@ def main() -> None:
     help="Override max chapters from config.",
 )
 @click.option(
-    "--seed",
-    default=None,
-    type=click.Path(exists=True),
-    help="Path to world_seed.yaml (overrides config).",
-)
-@click.option(
     "--book-id",
     default=1,
     type=click.IntRange(1),
     show_default=True,
     help="目标书籍 ID。",
 )
-def run(config: str, max_chapters: int | None, seed: str | None, book_id: int) -> None:
+def run(config: str, max_chapters: int | None, book_id: int) -> None:
     """运行新的 scene 驱动主链。"""
     from poiesis.api.services.scene_run_service import run_sync
     from poiesis.config import load_config
@@ -52,45 +46,9 @@ def run(config: str, max_chapters: int | None, seed: str | None, book_id: int) -
         config_path=config,
         chapter_count=chapter_count,
         book_id=book_id,
-        seed_path=seed,
         log=lambda message: console.print(f"[cyan]{message}[/cyan]"),
     )
     console.print(f"[green]同步运行完成，run_id={run_id}[/green]")
-
-
-@main.command()
-@click.option(
-    "--config",
-    default="config.yaml",
-    show_default=True,
-    help="Path to config.yaml.",
-)
-@click.option(
-    "--seed",
-    default=None,
-    type=click.Path(exists=True),
-    help="Path to world_seed.yaml.",
-)
-@click.option(
-    "--book-id",
-    default=1,
-    type=click.IntRange(1),
-    show_default=True,
-    help="目标书籍 ID。",
-)
-def init(config: str, seed: str | None, book_id: int) -> None:
-    """Initialize a new world database from a seed file."""
-    from poiesis.api.services.scene_run_service import initialize_world
-    from poiesis.config import load_config
-    from poiesis.db.database import Database
-
-    cfg = load_config(config)
-    db = Database(cfg.database.path)
-    db.initialize_schema()
-    console.print(f"[green]Database initialized at {cfg.database.path}[/green]")
-    db.close()
-    initialize_world(config_path=config, book_id=book_id, seed_path=seed)
-    console.print("[bold green]World initialized successfully.[/bold green]")
 
 
 @main.command()

@@ -1,14 +1,15 @@
 /**
- * 系统设置页：配置模型密钥、嵌入方式，以及初始化世界。
+ * 系统设置页：配置模型密钥、嵌入方式，并提示用户前往蓝图工作台。
  */
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Settings, CheckCircle, XCircle, RefreshCw } from 'lucide-react'
+import { Settings, CheckCircle, XCircle, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
-import { getSystemConfig, saveSystemConfig, initWorld } from '@/services/systemConfig'
+import { getSystemConfig, saveSystemConfig } from '@/services/systemConfig'
 import type { SystemConfigRequest } from '@/services/systemConfig'
 import { LoadingSpinner, ErrorMessage } from '@/components/Feedback'
 import { ConfirmModal } from '@/components/ConfirmModal'
+import { Link } from 'react-router-dom'
 
 type LLMProvider = 'openai' | 'anthropic' | 'siliconflow'
 
@@ -46,8 +47,6 @@ export default function SettingsPage() {
   const [plannerLlmProvider, setPlannerLlmProvider] = useState<LLMProvider | ''>('')
   const [plannerLlmModel, setPlannerLlmModel] = useState('')
   const [confirmClearModelOpen, setConfirmClearModelOpen] = useState(false)
-  const [isInitializing, setIsInitializing] = useState(false)
-
   // 读取当前配置状态
   const {
     data: configStatus,
@@ -101,18 +100,6 @@ export default function SettingsPage() {
       planner_llm_model: '',
     })
     setConfirmClearModelOpen(false)
-  }
-
-  const handleInit = async () => {
-    setIsInitializing(true)
-    try {
-      const res = await initWorld()
-      toast.success(res.message ?? '世界初始化完成')
-    } catch (err) {
-      toast.error((err as Error).message)
-    } finally {
-      setIsInitializing(false)
-    }
   }
 
   if (isLoading) return <LoadingSpinner text="加载配置中…" />
@@ -436,25 +423,20 @@ export default function SettingsPage() {
         onCancel={() => setConfirmClearModelOpen(false)}
       />
 
-      {/* 初始化世界卡片 */}
+      {/* 蓝图工作台引导卡片 */}
       <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-3">
-        <h3 className="text-sm font-semibold text-gray-700">初始化世界</h3>
+        <h3 className="text-sm font-semibold text-gray-700">作品与蓝图工作台</h3>
         <p className="text-sm text-gray-500">
-          从默认 seed.yaml 初始化世界数据库（角色、规则、时间线）。
-          <span className="text-amber-600 ml-1">⚠️ 此操作会重新加载种子数据。</span>
+          新书的世界观、人物和章节路线都应通过蓝图工作台逐层生成并锁定。
+          <span className="text-amber-600 ml-1">请统一在作品与蓝图管理中完成作品初始化。</span>
         </p>
-        <button
-          onClick={handleInit}
-          disabled={isInitializing}
-          className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+        <Link
+          to="/books"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 transition-colors"
         >
-          {isInitializing ? (
-            <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-          ) : (
-            <RefreshCw className="w-4 h-4" />
-          )}
-          {isInitializing ? '初始化中…' : '初始化世界'}
-        </button>
+          <Sparkles className="w-4 h-4" />
+          前往作品与蓝图管理
+        </Link>
       </div>
     </div>
   )

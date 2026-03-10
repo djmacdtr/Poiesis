@@ -1,12 +1,10 @@
-"""系统配置路由：GET/POST /api/system/config，POST /api/system/init。"""
+"""系统配置路由：GET/POST /api/system/config。"""
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 
 from poiesis.api.deps import get_db, require_admin
 from poiesis.api.schemas.system_config import SystemConfigRequest, SystemConfigStatus
@@ -38,35 +36,3 @@ def save_system_config(
         raise HTTPException(status_code=422, detail=exc.to_detail()) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-class InitRequest(BaseModel):
-    """初始化世界请求体。"""
-
-    seed_path: str | None = None
-    """可选：seed.yaml 文件路径（留空则使用默认路径）。"""
-
-
-@router.post("/init")
-def init_world(
-    body: InitRequest | None = None,
-    db: Database = Depends(get_db),
-    _: Any = Depends(require_admin),
-) -> dict[str, str]:
-    """初始化世界数据库（仅 admin 可操作）。
-
-    使用指定的 seed.yaml 路径（或默认路径）加载世界种子数据。
-    """
-    from poiesis.api.services.scene_run_service import initialize_world
-
-    config_path = os.environ.get("POIESIS_CONFIG", "config.yaml")
-    seed_path = body.seed_path if body else None
-
-    try:
-        initialize_world(config_path=config_path, book_id=1, seed_path=seed_path)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=400, detail="世界种子文件不存在，请检查路径配置") from exc
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"初始化失败：{type(exc).__name__}") from exc
-
-    return {"status": "ok", "message": "世界初始化完成"}

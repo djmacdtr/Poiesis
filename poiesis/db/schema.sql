@@ -122,6 +122,134 @@ CREATE TABLE IF NOT EXISTS system_config (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS book_creation_intents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL UNIQUE,
+    genre TEXT DEFAULT '',
+    themes_json JSON DEFAULT '[]',
+    tone TEXT DEFAULT '',
+    protagonist_prompt TEXT DEFAULT '',
+    conflict_prompt TEXT DEFAULT '',
+    ending_preference TEXT DEFAULT '',
+    forbidden_elements_json JSON DEFAULT '[]',
+    length_preference TEXT DEFAULT '',
+    target_experience TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (book_id) REFERENCES books(id)
+);
+
+CREATE TABLE IF NOT EXISTS book_concept_variants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    variant_no INTEGER NOT NULL,
+    hook TEXT NOT NULL,
+    world_pitch TEXT NOT NULL,
+    main_arc_pitch TEXT NOT NULL,
+    ending_pitch TEXT NOT NULL,
+    differentiators_json JSON DEFAULT '[]',
+    selected INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(book_id, variant_no),
+    FOREIGN KEY (book_id) REFERENCES books(id)
+);
+
+CREATE TABLE IF NOT EXISTS book_blueprint_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    revision_number INTEGER NOT NULL,
+    selected_variant_id INTEGER,
+    change_reason TEXT DEFAULT '',
+    change_summary TEXT DEFAULT '',
+    affected_range_json JSON DEFAULT '[]',
+    world_blueprint_json JSON DEFAULT '{}',
+    character_blueprints_json JSON DEFAULT '[]',
+    roadmap_json JSON DEFAULT '[]',
+    blueprint_json JSON DEFAULT '{}',
+    is_active INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(book_id, revision_number),
+    FOREIGN KEY (book_id) REFERENCES books(id),
+    FOREIGN KEY (selected_variant_id) REFERENCES book_concept_variants(id)
+);
+
+CREATE TABLE IF NOT EXISTS book_blueprints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'intent_pending',
+    current_step TEXT NOT NULL DEFAULT 'intent',
+    selected_variant_id INTEGER,
+    active_revision_id INTEGER,
+    world_draft_json JSON DEFAULT '{}',
+    world_confirmed_json JSON DEFAULT '{}',
+    character_draft_json JSON DEFAULT '[]',
+    character_confirmed_json JSON DEFAULT '[]',
+    roadmap_draft_json JSON DEFAULT '[]',
+    roadmap_confirmed_json JSON DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (book_id) REFERENCES books(id),
+    FOREIGN KEY (selected_variant_id) REFERENCES book_concept_variants(id),
+    FOREIGN KEY (active_revision_id) REFERENCES book_blueprint_revisions(id)
+);
+
+CREATE TABLE IF NOT EXISTS blueprint_world_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id INTEGER NOT NULL,
+    rule_key TEXT NOT NULL,
+    description TEXT NOT NULL,
+    is_immutable INTEGER NOT NULL DEFAULT 1,
+    category TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(revision_id, rule_key),
+    FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
+);
+
+CREATE TABLE IF NOT EXISTS blueprint_characters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    role TEXT DEFAULT '',
+    public_persona TEXT DEFAULT '',
+    core_motivation TEXT DEFAULT '',
+    fatal_flaw TEXT DEFAULT '',
+    non_negotiable_traits_json JSON DEFAULT '[]',
+    relationship_constraints_json JSON DEFAULT '[]',
+    arc_outline_json JSON DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(revision_id, name),
+    FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
+);
+
+CREATE TABLE IF NOT EXISTS blueprint_chapter_roadmap (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id INTEGER NOT NULL,
+    chapter_number INTEGER NOT NULL,
+    title TEXT DEFAULT '',
+    goal TEXT DEFAULT '',
+    core_conflict TEXT DEFAULT '',
+    turning_point TEXT DEFAULT '',
+    character_progress_json JSON DEFAULT '[]',
+    planned_loops_json JSON DEFAULT '[]',
+    closure_function TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(revision_id, chapter_number),
+    FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
+);
+
+CREATE TABLE IF NOT EXISTS blueprint_revision_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id INTEGER NOT NULL,
+    change_reason TEXT DEFAULT '',
+    change_summary TEXT DEFAULT '',
+    affected_range_json JSON DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT NOT NULL UNIQUE,
@@ -183,10 +311,12 @@ CREATE TABLE IF NOT EXISTS story_state_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     book_id INTEGER NOT NULL,
     chapter_number INTEGER NOT NULL,
+    blueprint_revision_id INTEGER,
     snapshot_json JSON DEFAULT '{}',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(book_id, chapter_number),
-    FOREIGN KEY (book_id) REFERENCES books(id)
+    FOREIGN KEY (book_id) REFERENCES books(id),
+    FOREIGN KEY (blueprint_revision_id) REFERENCES book_blueprint_revisions(id)
 );
 
 CREATE TABLE IF NOT EXISTS loops (
@@ -269,6 +399,7 @@ CREATE TABLE IF NOT EXISTS chapter_outputs (
     book_id INTEGER NOT NULL,
     run_id INTEGER NOT NULL,
     chapter_number INTEGER NOT NULL,
+    blueprint_revision_id INTEGER,
     title TEXT NOT NULL,
     content TEXT NOT NULL,
     summary_json JSON DEFAULT '{}',
@@ -278,5 +409,6 @@ CREATE TABLE IF NOT EXISTS chapter_outputs (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(book_id, chapter_number),
     FOREIGN KEY (book_id) REFERENCES books(id),
-    FOREIGN KEY (run_id) REFERENCES runs(id)
+    FOREIGN KEY (run_id) REFERENCES runs(id),
+    FOREIGN KEY (blueprint_revision_id) REFERENCES book_blueprint_revisions(id)
 );

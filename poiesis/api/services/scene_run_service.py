@@ -1,6 +1,6 @@
 """Scene 驱动的运行服务。
 
-这里集中承接新的运行主链、LLM 构建和世界初始化逻辑，
+这里集中承接新的运行主链与 LLM 构建逻辑，
 用于替代旧的 RunLoop 入口。
 """
 
@@ -34,7 +34,7 @@ from poiesis.application.use_cases import (
     ReviewSceneUseCase,
     SceneGenerationContext,
 )
-from poiesis.config import Config, load_config, resolve_world_seed_path
+from poiesis.config import Config, load_config
 from poiesis.db.database import Database
 from poiesis.domain.world.model import WorldModel
 from poiesis.domain.world.repository import WorldRepository
@@ -117,75 +117,10 @@ def _apply_model_overrides(cfg: Config, db: Database) -> None:
         cfg.planner_llm.model = str(planner_model)
 
 
-def seed_world(
-    cfg: Config,
-    db: Database,
-    world: WorldModel,
-    book: dict[str, Any],
-    book_id: int,
-    seed_path: str | None = None,
-    skip_if_exists: bool = True,
-) -> None:
-    """把种子文件装入新架构的 canon 数据层。
-
-    `skip_if_exists=True` 用于运行时自动补种子；
-    `False` 用于显式初始化命令，允许重新灌入同一本书的数据。
-    """
-    if skip_if_exists and any(
-        [
-            db.list_world_rules(book_id=book_id),
-            db.list_characters(book_id=book_id),
-            db.list_timeline_events(book_id=book_id),
-            db.list_foreshadowing(book_id=book_id),
-        ]
-    ):
-        return
-
-    import yaml
-
-    selected_seed = seed_path or resolve_world_seed_path(str(book.get("language") or "zh-CN"), cfg.world_seed)
-    if not os.path.exists(selected_seed):
-        return
-    with open(selected_seed, encoding="utf-8") as fh:
-        seed = yaml.safe_load(fh) or {}
-
-    for rule in seed.get("immutable_rules", []):
-        db.upsert_world_rule(
-            book_id=book_id,
-            rule_key=rule["key"],
-            description=rule["description"],
-            is_immutable=rule.get("is_immutable", True),
-        )
-    for char in seed.get("characters", []):
-        db.upsert_character(
-            book_id=book_id,
-            name=char["name"],
-            description=char.get("description"),
-            core_motivation=char.get("core_motivation"),
-            attributes=char.get("attributes", {}),
-        )
-    for event in seed.get("timeline_events", []):
-        db.upsert_timeline_event(
-            book_id=book_id,
-            event_key=event["event_key"],
-            description=event["description"],
-            timestamp_in_world=event.get("timestamp_in_world"),
-        )
-    for hint in seed.get("foreshadowing", []):
-        db.upsert_foreshadowing(
-            book_id=book_id,
-            hint_key=hint["hint_key"],
-            description=hint["description"],
-            status=hint.get("status", "pending"),
-        )
-    world.load_from_db(db, book_id=book_id)
-
-
 def _build_context_from_db(
     config_path: str,
     db: Database,
     book_id: int,
-    auto_seed: bool = True,
 ) -> tuple[SceneGenerationContext, Config, dict[str, Any]]:
     """基于已有数据库连接构建运行上下文。"""
     cfg = load_config(config_path)
@@ -220,8 +155,6 @@ def _build_context_from_db(
     )
     world = WorldModel()
     world.load_from_db(db, book_id=book_id)
-    if auto_seed:
-        seed_world(cfg, db, world, book, book_id, skip_if_exists=True)
 
     context = SceneGenerationContext(
         db=db,
@@ -244,12 +177,11 @@ def _build_context_from_db(
 def _build_context(
     config_path: str,
     book_id: int,
-    auto_seed: bool = True,
 ) -> tuple[SceneGenerationContext, Config, dict[str, Any]]:
     """构建新架构所需的显式依赖。"""
     db = Database(load_config(config_path).database.path)
     db.initialize_schema()
-    return _build_context_from_db(config_path, db, book_id, auto_seed=auto_seed)
+    return _build_context_from_db(config_path, db, book_id)
 
 
 def _chapter_publish_blockers(chapter_row: dict[str, Any]) -> PublishBlockers:
@@ -545,6 +477,13 @@ def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int, boo
 
 def start_run(config_path: str, chapter_count: int, book_id: int = 1) -> dict[str, Any]:
     """创建新 run 任务。"""
+    db = Database(load_config(config_path).database.path)
+    try:
+        db.initialize_schema()
+        if db.get_active_blueprint_revision(book_id) is None:
+            raise ValueError("当前作品尚未锁定整书蓝图，请先在作品与蓝图管理页完成蓝图确认")
+    finally:
+        db.close()
     task = registry.create(total_chapters=chapter_count)
     thread = threading.Thread(
         target=_run_in_background,
@@ -556,27 +495,18 @@ def start_run(config_path: str, chapter_count: int, book_id: int = 1) -> dict[st
     return task.to_dict()
 
 
-def initialize_world(config_path: str, book_id: int = 1, seed_path: str | None = None) -> None:
-    """显式初始化一本书的世界种子。"""
-    context, cfg, book = _build_context(config_path, book_id, auto_seed=False)
-    try:
-        seed_world(cfg, context.db, context.world, book, book_id, seed_path=seed_path, skip_if_exists=False)
-    finally:
-        context.db.close()
-
-
 def run_sync(
     config_path: str,
     chapter_count: int,
     book_id: int = 1,
-    seed_path: str | None = None,
     log: Callable[[str], None] | None = None,
 ) -> int:
     """同步执行 scene 主链，供 CLI 使用。"""
-    context, cfg, book = _build_context(config_path, book_id, auto_seed=False)
+    context, cfg, _book = _build_context(config_path, book_id)
     logger = log or (lambda _msg: None)
     try:
-        seed_world(cfg, context.db, context.world, book, book_id, seed_path=seed_path, skip_if_exists=True)
+        if context.db.get_active_blueprint_revision(book_id) is None:
+            raise ValueError("当前作品尚未锁定整书蓝图，请先在作品与蓝图管理页完成蓝图确认")
         run_id = context.db.create_run_trace(
             task_id=f"cli-run-{threading.get_ident()}",
             book_id=book_id,
@@ -646,10 +576,12 @@ def get_run_detail(db: Database, run_id: int) -> dict[str, Any] | None:
     chapter_numbers = sorted(set(chapter_rows) | set(scenes_by_chapter))
     chapter_summaries = []
     for chapter_number in chapter_numbers:
-        item = chapter_rows.get(chapter_number)
+        chapter_row: dict[str, Any] | None = chapter_rows.get(chapter_number)
         scenes = scenes_by_chapter.get(chapter_number, [])
         pending_reviews = db.count_pending_scene_reviews(run_id, chapter_number)
-        if item is None:
+        summary: dict[str, Any]
+        metrics: dict[str, Any]
+        if chapter_row is None:
             publish = _compute_scene_only_publish_blockers(scenes, pending_reviews)
             summary = {}
             metrics = {
@@ -660,9 +592,9 @@ def get_run_detail(db: Database, run_id: int) -> dict[str, Any] | None:
                 "pending_review_count": pending_reviews,
             }
         else:
-            publish = _compute_publish_blockers(item, scenes, pending_reviews)
-            summary = item.get("summary_json") or {}
-            metrics = item.get("metrics_json") or {}
+            publish = _compute_publish_blockers(chapter_row, scenes, pending_reviews)
+            summary = chapter_row.get("summary_json") or {}
+            metrics = chapter_row.get("metrics_json") or {}
         chapter_summaries.append(
             {
                 "chapter_number": chapter_number,

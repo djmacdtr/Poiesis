@@ -55,7 +55,3 @@ export function saveSystemConfig(data: SystemConfigRequest): Promise<SystemConfi
   return post<SystemConfigStatus>('/api/system/config', data)
 }
 
-/** 初始化世界 */
-export function initWorld(seedPath?: string): Promise<{ status: string; message: string }> {
-  return post('/api/system/init', seedPath ? { seed_path: seedPath } : {})
-}

@@ -81,7 +81,6 @@ class TestBooksApi:
         assert any(item.get("id") == 1 for item in resp.json())
 
     def test_list_books_returns_503_when_db_unavailable(self, monkeypatch) -> None:
-        from poiesis.api import deps
 
         app.dependency_overrides.clear()
         original = Database.initialize_schema

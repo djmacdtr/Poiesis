@@ -29,7 +29,10 @@ def _config_path() -> str:
 @router.post("", response_model=StartRunResponse)
 def start_run(body: StartRunRequest, _: Any = Depends(require_admin)) -> StartRunResponse:
     """启动新的 scene 驱动 run。"""
-    result = scene_run_service.start_run(_config_path(), body.chapter_count, body.book_id)
+    try:
+        result = scene_run_service.start_run(_config_path(), body.chapter_count, body.book_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return StartRunResponse(task_id=result["task_id"], status=result["status"])
 
 

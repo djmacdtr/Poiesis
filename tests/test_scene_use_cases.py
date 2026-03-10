@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from poiesis.application.scene_contracts import ChangeSet, ChapterPlan, SceneDraft, ScenePlan, VerifierIssue
+from poiesis.application.scene_contracts import (
+    ChangeSet,
+    ChapterPlan,
+    SceneDraft,
+    ScenePlan,
+    VerifierIssue,
+)
 from poiesis.application.use_cases import (
     GenerateChapterUseCase,
     RefreshChapterAggregateUseCase,
@@ -144,8 +150,92 @@ def _make_context(tmp_db: Database, sample_world, verifier) -> SceneGenerationCo
     )
 
 
+def _seed_blueprint(tmp_db: Database) -> None:
+    """为生成用例补齐最小蓝图前置条件。"""
+    tmp_db.upsert_creation_intent(
+        1,
+        {
+            "genre": "奇幻",
+            "themes": ["成长"],
+            "tone": "压抑",
+            "protagonist_prompt": "主角背负秘密",
+            "conflict_prompt": "主线冲突不断升级",
+            "ending_preference": "高代价完成",
+            "forbidden_elements": [],
+            "length_preference": "12",
+            "target_experience": "起伏跌宕",
+        },
+    )
+    tmp_db.replace_concept_variants(
+        1,
+        [
+            {
+                "variant_no": 1,
+                "hook": "候选方向 1",
+                "world_pitch": "裂隙世界",
+                "main_arc_pitch": "主线推进",
+                "ending_pitch": "高代价完成",
+                "differentiators": ["主线明确"],
+                "selected": True,
+            }
+        ],
+    )
+    variant = tmp_db.list_concept_variants(1)[0]
+    revision_id = tmp_db.create_blueprint_revision(
+        1,
+        revision_number=1,
+        selected_variant_id=variant["id"],
+        change_reason="初始化蓝图",
+        change_summary="测试场景使用的最小蓝图",
+        affected_range=[1, 12],
+        world_blueprint={
+            "setting_summary": "裂隙世界",
+            "immutable_rules": [],
+            "power_system": "",
+            "factions": [],
+            "taboo_rules": [],
+        },
+        character_blueprints=[],
+        roadmap=[
+            {
+                "chapter_number": 1,
+                "title": "第 1 章",
+                "goal": "推进主线",
+                "core_conflict": "线索逼近",
+                "turning_point": "角色被迫表态",
+                "character_progress": [],
+                "planned_loops": [{"loop_id": "loop-1", "title": "主线悬念"}],
+                "closure_function": "抛出钩子",
+            }
+        ],
+        is_active=True,
+    )
+    tmp_db.upsert_book_blueprint_state(
+        1,
+        status="locked",
+        current_step="locked",
+        selected_variant_id=variant["id"],
+        active_revision_id=revision_id,
+        world_confirmed={"setting_summary": "裂隙世界", "immutable_rules": [], "power_system": "", "factions": [], "taboo_rules": []},
+        character_confirmed=[],
+        roadmap_confirmed=[
+            {
+                "chapter_number": 1,
+                "title": "第 1 章",
+                "goal": "推进主线",
+                "core_conflict": "线索逼近",
+                "turning_point": "角色被迫表态",
+                "character_progress": [],
+                "planned_loops": [{"loop_id": "loop-1", "title": "主线悬念"}],
+                "closure_function": "抛出钩子",
+            }
+        ],
+    )
+
+
 def test_generate_chapter_creates_initial_trace_before_first_refresh(tmp_db: Database, sample_world) -> None:
     """首次 scene 聚合前应先创建章节 trace，避免 refresh 因空记录失败。"""
+    _seed_blueprint(tmp_db)
     run_id = tmp_db.create_run_trace(
         task_id="scene-bootstrap-run",
         book_id=1,

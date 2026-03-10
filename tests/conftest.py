@@ -174,5 +174,4 @@ def sample_config() -> Config:
         vector_store=VectorStoreConfig(
             path="/tmp/test_vs", embedding_model="all-MiniLM-L6-v2"
         ),
-        world_seed="examples/world_seed.yaml",
     )

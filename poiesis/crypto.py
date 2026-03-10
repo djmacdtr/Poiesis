@@ -10,9 +10,7 @@ from __future__ import annotations
 import base64
 import os
 
-from cryptography.fernet import InvalidToken
-from cryptography.fernet import Fernet
-
+from cryptography.fernet import Fernet, InvalidToken
 
 _DEFAULT_SECRET_BYTES = b"poiesis-default-secret-key-00000"
 

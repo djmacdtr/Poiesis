@@ -119,6 +119,8 @@ class Database:
         self._ensure_column(conn, "scene_reviews", "closed_at", "TIMESTAMP")
         self._ensure_column(conn, "loops", "due_start_chapter", "INTEGER")
         self._ensure_column(conn, "loops", "due_end_chapter", "INTEGER")
+        self._ensure_column(conn, "story_state_snapshots", "blueprint_revision_id", "INTEGER")
+        self._ensure_column(conn, "chapter_outputs", "blueprint_revision_id", "INTEGER")
         self._ensure_column(conn, "scene_patches", "before_text", "TEXT DEFAULT ''")
         self._ensure_column(conn, "scene_patches", "after_text", "TEXT DEFAULT ''")
         self._ensure_column(
@@ -559,6 +561,484 @@ class Database:
             )
 
     # ------------------------------------------------------------------
+    # 创作蓝图
+    # ------------------------------------------------------------------
+
+    def upsert_creation_intent(self, book_id: int, payload: dict[str, Any]) -> int:
+        """保存作者给出的高层创作意图。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO book_creation_intents (
+                    book_id, genre, themes_json, tone, protagonist_prompt, conflict_prompt,
+                    ending_preference, forbidden_elements_json, length_preference, target_experience
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(book_id) DO UPDATE SET
+                    genre = excluded.genre,
+                    themes_json = excluded.themes_json,
+                    tone = excluded.tone,
+                    protagonist_prompt = excluded.protagonist_prompt,
+                    conflict_prompt = excluded.conflict_prompt,
+                    ending_preference = excluded.ending_preference,
+                    forbidden_elements_json = excluded.forbidden_elements_json,
+                    length_preference = excluded.length_preference,
+                    target_experience = excluded.target_experience,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    book_id,
+                    str(payload.get("genre") or ""),
+                    json.dumps(payload.get("themes") or []),
+                    str(payload.get("tone") or ""),
+                    str(payload.get("protagonist_prompt") or ""),
+                    str(payload.get("conflict_prompt") or ""),
+                    str(payload.get("ending_preference") or ""),
+                    json.dumps(payload.get("forbidden_elements") or []),
+                    str(payload.get("length_preference") or ""),
+                    str(payload.get("target_experience") or ""),
+                ),
+            )
+            return cur.lastrowid or 0
+
+    def get_creation_intent(self, book_id: int) -> dict[str, Any] | None:
+        """读取单本书的创作意图。"""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM book_creation_intents WHERE book_id = ?", (book_id,))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["themes"] = json.loads(item.pop("themes_json", "[]") or "[]")
+        item["forbidden_elements"] = json.loads(item.pop("forbidden_elements_json", "[]") or "[]")
+        return item
+
+    def replace_concept_variants(self, book_id: int, variants: list[dict[str, Any]]) -> None:
+        """重置某本书的候选方向。"""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM book_concept_variants WHERE book_id = ?", (book_id,))
+            for item in variants:
+                cur.execute(
+                    """
+                    INSERT INTO book_concept_variants (
+                        book_id, variant_no, hook, world_pitch, main_arc_pitch,
+                        ending_pitch, differentiators_json, selected
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        book_id,
+                        int(item.get("variant_no") or 0),
+                        str(item.get("hook") or ""),
+                        str(item.get("world_pitch") or ""),
+                        str(item.get("main_arc_pitch") or ""),
+                        str(item.get("ending_pitch") or ""),
+                        json.dumps(item.get("differentiators") or []),
+                        int(bool(item.get("selected"))),
+                    ),
+                )
+
+    def list_concept_variants(self, book_id: int) -> list[dict[str, Any]]:
+        """返回候选方向列表。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM book_concept_variants WHERE book_id = ? ORDER BY variant_no ASC",
+                (book_id,),
+            )
+            rows = cur.fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["differentiators"] = json.loads(item.pop("differentiators_json", "[]") or "[]")
+            item["selected"] = bool(item.get("selected"))
+            result.append(item)
+        return result
+
+    def get_concept_variant(self, variant_id: int) -> dict[str, Any] | None:
+        """按主键读取单条候选方向。"""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM book_concept_variants WHERE id = ?", (variant_id,))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["differentiators"] = json.loads(item.pop("differentiators_json", "[]") or "[]")
+        item["selected"] = bool(item.get("selected"))
+        return item
+
+    def select_concept_variant(self, book_id: int, variant_id: int) -> None:
+        """标记当前作品选择的候选方向。"""
+        with self._cursor() as cur:
+            cur.execute("UPDATE book_concept_variants SET selected = 0 WHERE book_id = ?", (book_id,))
+            cur.execute(
+                "UPDATE book_concept_variants SET selected = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND book_id = ?",
+                (variant_id, book_id),
+            )
+
+    def upsert_book_blueprint_state(
+        self,
+        book_id: int,
+        *,
+        status: str,
+        current_step: str,
+        selected_variant_id: int | None = None,
+        active_revision_id: int | None = None,
+        world_draft: dict[str, Any] | None = None,
+        world_confirmed: dict[str, Any] | None = None,
+        character_draft: list[dict[str, Any]] | None = None,
+        character_confirmed: list[dict[str, Any]] | None = None,
+        roadmap_draft: list[dict[str, Any]] | None = None,
+        roadmap_confirmed: list[dict[str, Any]] | None = None,
+    ) -> int:
+        """保存蓝图工作态，供控制台逐层确认。"""
+        existing = self.get_book_blueprint_state(book_id) or {}
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO book_blueprints (
+                    book_id, status, current_step, selected_variant_id, active_revision_id,
+                    world_draft_json, world_confirmed_json, character_draft_json, character_confirmed_json,
+                    roadmap_draft_json, roadmap_confirmed_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(book_id) DO UPDATE SET
+                    status = excluded.status,
+                    current_step = excluded.current_step,
+                    selected_variant_id = excluded.selected_variant_id,
+                    active_revision_id = excluded.active_revision_id,
+                    world_draft_json = excluded.world_draft_json,
+                    world_confirmed_json = excluded.world_confirmed_json,
+                    character_draft_json = excluded.character_draft_json,
+                    character_confirmed_json = excluded.character_confirmed_json,
+                    roadmap_draft_json = excluded.roadmap_draft_json,
+                    roadmap_confirmed_json = excluded.roadmap_confirmed_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    book_id,
+                    status,
+                    current_step,
+                    selected_variant_id if selected_variant_id is not None else existing.get("selected_variant_id"),
+                    active_revision_id if active_revision_id is not None else existing.get("active_revision_id"),
+                    json.dumps(world_draft if world_draft is not None else existing.get("world_draft") or {}),
+                    json.dumps(
+                        world_confirmed if world_confirmed is not None else existing.get("world_confirmed") or {}
+                    ),
+                    json.dumps(
+                        character_draft if character_draft is not None else existing.get("character_draft") or []
+                    ),
+                    json.dumps(
+                        character_confirmed
+                        if character_confirmed is not None
+                        else existing.get("character_confirmed") or []
+                    ),
+                    json.dumps(roadmap_draft if roadmap_draft is not None else existing.get("roadmap_draft") or []),
+                    json.dumps(
+                        roadmap_confirmed if roadmap_confirmed is not None else existing.get("roadmap_confirmed") or []
+                    ),
+                ),
+            )
+            return cur.lastrowid or 0
+
+    def get_book_blueprint_state(self, book_id: int) -> dict[str, Any] | None:
+        """读取当前蓝图工作态。"""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM book_blueprints WHERE book_id = ?", (book_id,))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["world_draft"] = json.loads(item.pop("world_draft_json", "{}") or "{}")
+        item["world_confirmed"] = json.loads(item.pop("world_confirmed_json", "{}") or "{}")
+        item["character_draft"] = json.loads(item.pop("character_draft_json", "[]") or "[]")
+        item["character_confirmed"] = json.loads(item.pop("character_confirmed_json", "[]") or "[]")
+        item["roadmap_draft"] = json.loads(item.pop("roadmap_draft_json", "[]") or "[]")
+        item["roadmap_confirmed"] = json.loads(item.pop("roadmap_confirmed_json", "[]") or "[]")
+        return item
+
+    def create_blueprint_revision(
+        self,
+        book_id: int,
+        *,
+        revision_number: int,
+        selected_variant_id: int | None,
+        change_reason: str,
+        change_summary: str,
+        affected_range: list[int],
+        world_blueprint: dict[str, Any],
+        character_blueprints: list[dict[str, Any]],
+        roadmap: list[dict[str, Any]],
+        is_active: bool,
+    ) -> int:
+        """创建新的蓝图版本快照。"""
+        blueprint_payload = {
+            "book_id": book_id,
+            "selected_variant_id": selected_variant_id,
+            "world": world_blueprint,
+            "characters": character_blueprints,
+            "roadmap": roadmap,
+        }
+        with self._cursor() as cur:
+            if is_active:
+                cur.execute("UPDATE book_blueprint_revisions SET is_active = 0 WHERE book_id = ?", (book_id,))
+            cur.execute(
+                """
+                INSERT INTO book_blueprint_revisions (
+                    book_id, revision_number, selected_variant_id, change_reason, change_summary,
+                    affected_range_json, world_blueprint_json, character_blueprints_json, roadmap_json,
+                    blueprint_json, is_active
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    book_id,
+                    revision_number,
+                    selected_variant_id,
+                    change_reason,
+                    change_summary,
+                    json.dumps(affected_range),
+                    json.dumps(world_blueprint),
+                    json.dumps(character_blueprints),
+                    json.dumps(roadmap),
+                    json.dumps(blueprint_payload),
+                    int(is_active),
+                ),
+            )
+            revision_id = cur.lastrowid or 0
+        self.replace_blueprint_world_rules(revision_id, world_blueprint)
+        self.replace_blueprint_characters(revision_id, character_blueprints)
+        self.replace_blueprint_chapter_roadmap(revision_id, roadmap)
+        if change_reason or change_summary:
+            self.add_blueprint_revision_change(revision_id, change_reason, change_summary, affected_range)
+        return revision_id
+
+    def list_blueprint_revisions(self, book_id: int) -> list[dict[str, Any]]:
+        """返回蓝图版本历史。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM book_blueprint_revisions WHERE book_id = ? ORDER BY revision_number DESC",
+                (book_id,),
+            )
+            rows = cur.fetchall()
+        return [self._decode_blueprint_revision(dict(row)) for row in rows]
+
+    def get_blueprint_revision(self, revision_id: int) -> dict[str, Any] | None:
+        """读取单个蓝图版本。"""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM book_blueprint_revisions WHERE id = ?", (revision_id,))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._decode_blueprint_revision(dict(row))
+
+    def get_active_blueprint_revision(self, book_id: int) -> dict[str, Any] | None:
+        """读取当前激活的蓝图版本。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM book_blueprint_revisions WHERE book_id = ? AND is_active = 1 ORDER BY revision_number DESC LIMIT 1",
+                (book_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._decode_blueprint_revision(dict(row))
+
+    def _decode_blueprint_revision(self, row: dict[str, Any]) -> dict[str, Any]:
+        row["affected_range"] = json.loads(row.pop("affected_range_json", "[]") or "[]")
+        row["world_blueprint"] = json.loads(row.pop("world_blueprint_json", "{}") or "{}")
+        row["character_blueprints"] = json.loads(row.pop("character_blueprints_json", "[]") or "[]")
+        row["roadmap"] = json.loads(row.pop("roadmap_json", "[]") or "[]")
+        row["blueprint"] = json.loads(row.pop("blueprint_json", "{}") or "{}")
+        row["is_active"] = bool(row.get("is_active"))
+        return row
+
+    def replace_blueprint_world_rules(self, revision_id: int, world_blueprint: dict[str, Any]) -> None:
+        """用当前世界观蓝图刷新版本下的规则快照。"""
+        rules = list(world_blueprint.get("immutable_rules") or [])
+        taboo_rules = list(world_blueprint.get("taboo_rules") or [])
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM blueprint_world_rules WHERE revision_id = ?", (revision_id,))
+            for rule in rules:
+                cur.execute(
+                    """
+                    INSERT INTO blueprint_world_rules (revision_id, rule_key, description, is_immutable, category)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        revision_id,
+                        str(rule.get("key") or ""),
+                        str(rule.get("description") or ""),
+                        int(bool(rule.get("is_immutable", True))),
+                        str(rule.get("category") or "world"),
+                    ),
+                )
+            if world_blueprint.get("setting_summary"):
+                cur.execute(
+                    """
+                    INSERT INTO blueprint_world_rules (revision_id, rule_key, description, is_immutable, category)
+                    VALUES (?, 'world_setting', ?, 1, 'setting')
+                    """,
+                    (revision_id, str(world_blueprint.get("setting_summary") or "")),
+                )
+            if world_blueprint.get("power_system"):
+                cur.execute(
+                    """
+                    INSERT INTO blueprint_world_rules (revision_id, rule_key, description, is_immutable, category)
+                    VALUES (?, 'power_system', ?, 1, 'power')
+                    """,
+                    (revision_id, str(world_blueprint.get("power_system") or "")),
+                )
+            for index, taboo in enumerate(taboo_rules, start=1):
+                cur.execute(
+                    """
+                    INSERT INTO blueprint_world_rules (revision_id, rule_key, description, is_immutable, category)
+                    VALUES (?, ?, ?, 1, 'taboo')
+                    """,
+                    (revision_id, f"taboo_rule_{index}", str(taboo)),
+                )
+
+    def list_blueprint_world_rules(self, revision_id: int) -> list[dict[str, Any]]:
+        """读取版本下的世界规则快照。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM blueprint_world_rules WHERE revision_id = ? ORDER BY id ASC",
+                (revision_id,),
+            )
+            rows = cur.fetchall()
+        return [dict(row) for row in rows]
+
+    def replace_blueprint_characters(self, revision_id: int, characters: list[dict[str, Any]]) -> None:
+        """刷新版本下的人物蓝图快照。"""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM blueprint_characters WHERE revision_id = ?", (revision_id,))
+            for item in characters:
+                cur.execute(
+                    """
+                    INSERT INTO blueprint_characters (
+                        revision_id, name, role, public_persona, core_motivation, fatal_flaw,
+                        non_negotiable_traits_json, relationship_constraints_json, arc_outline_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        revision_id,
+                        str(item.get("name") or ""),
+                        str(item.get("role") or ""),
+                        str(item.get("public_persona") or ""),
+                        str(item.get("core_motivation") or ""),
+                        str(item.get("fatal_flaw") or ""),
+                        json.dumps(item.get("non_negotiable_traits") or []),
+                        json.dumps(item.get("relationship_constraints") or []),
+                        json.dumps(item.get("arc_outline") or []),
+                    ),
+                )
+
+    def list_blueprint_characters(self, revision_id: int) -> list[dict[str, Any]]:
+        """读取版本下的人物蓝图快照。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM blueprint_characters WHERE revision_id = ? ORDER BY id ASC",
+                (revision_id,),
+            )
+            rows = cur.fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["non_negotiable_traits"] = json.loads(item.pop("non_negotiable_traits_json", "[]") or "[]")
+            item["relationship_constraints"] = json.loads(
+                item.pop("relationship_constraints_json", "[]") or "[]"
+            )
+            item["arc_outline"] = json.loads(item.pop("arc_outline_json", "[]") or "[]")
+            result.append(item)
+        return result
+
+    def replace_blueprint_chapter_roadmap(self, revision_id: int, roadmap: list[dict[str, Any]]) -> None:
+        """刷新版本下的章节路线快照。"""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM blueprint_chapter_roadmap WHERE revision_id = ?", (revision_id,))
+            for item in roadmap:
+                cur.execute(
+                    """
+                    INSERT INTO blueprint_chapter_roadmap (
+                        revision_id, chapter_number, title, goal, core_conflict, turning_point,
+                        character_progress_json, planned_loops_json, closure_function
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        revision_id,
+                        int(item.get("chapter_number") or 0),
+                        str(item.get("title") or ""),
+                        str(item.get("goal") or ""),
+                        str(item.get("core_conflict") or ""),
+                        str(item.get("turning_point") or ""),
+                        json.dumps(item.get("character_progress") or []),
+                        json.dumps(item.get("planned_loops") or []),
+                        str(item.get("closure_function") or ""),
+                    ),
+                )
+
+    def list_blueprint_chapter_roadmap(self, revision_id: int) -> list[dict[str, Any]]:
+        """返回版本下全部章节路线项。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM blueprint_chapter_roadmap WHERE revision_id = ? ORDER BY chapter_number ASC",
+                (revision_id,),
+            )
+            rows = cur.fetchall()
+        return [self._decode_blueprint_roadmap_row(dict(row)) for row in rows]
+
+    def get_blueprint_chapter_roadmap_item(self, revision_id: int, chapter_number: int) -> dict[str, Any] | None:
+        """读取单章路线项。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM blueprint_chapter_roadmap WHERE revision_id = ? AND chapter_number = ?",
+                (revision_id, chapter_number),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._decode_blueprint_roadmap_row(dict(row))
+
+    def _decode_blueprint_roadmap_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        row["character_progress"] = json.loads(row.pop("character_progress_json", "[]") or "[]")
+        row["planned_loops"] = json.loads(row.pop("planned_loops_json", "[]") or "[]")
+        return row
+
+    def add_blueprint_revision_change(
+        self,
+        revision_id: int,
+        change_reason: str,
+        change_summary: str,
+        affected_range: list[int],
+    ) -> int:
+        """记录蓝图版本变更摘要。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO blueprint_revision_changes (revision_id, change_reason, change_summary, affected_range_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (revision_id, change_reason, change_summary, json.dumps(affected_range)),
+            )
+            return cur.lastrowid or 0
+
+    def list_blueprint_revision_changes(self, revision_id: int) -> list[dict[str, Any]]:
+        """读取某个蓝图版本的变更说明。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM blueprint_revision_changes WHERE revision_id = ? ORDER BY id ASC",
+                (revision_id,),
+            )
+            rows = cur.fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["affected_range"] = json.loads(item.pop("affected_range_json", "[]") or "[]")
+            result.append(item)
+        return result
+
+    # ------------------------------------------------------------------
     # Characters
     # ------------------------------------------------------------------
 
@@ -635,6 +1115,11 @@ class Database:
             rows = cur.fetchall()
         return [{**dict(r), "attributes": json.loads(r["attributes"] or "{}")} for r in rows]
 
+    def delete_characters(self, book_id: int) -> None:
+        """删除某本书当前角色 canon，供蓝图确认后整体重建。"""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM characters WHERE book_id = ?", (book_id,))
+
     # ------------------------------------------------------------------
     # World rules
     # ------------------------------------------------------------------
@@ -695,6 +1180,11 @@ class Database:
                 cur.execute("SELECT * FROM world_rules")
             rows = cur.fetchall()
         return [dict(r) for r in rows]
+
+    def delete_world_rules(self, book_id: int) -> None:
+        """删除某本书当前世界规则 canon。"""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM world_rules WHERE book_id = ?", (book_id,))
 
     # ------------------------------------------------------------------
     # Timeline
@@ -1406,17 +1896,19 @@ class Database:
         book_id: int,
         chapter_number: int,
         snapshot: dict[str, Any],
+        blueprint_revision_id: int | None = None,
     ) -> int:
         """保存章节后的故事状态快照。"""
         with self._cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO story_state_snapshots (book_id, chapter_number, snapshot_json)
-                VALUES (?, ?, ?)
+                INSERT INTO story_state_snapshots (book_id, chapter_number, blueprint_revision_id, snapshot_json)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(book_id, chapter_number) DO UPDATE SET
+                    blueprint_revision_id = excluded.blueprint_revision_id,
                     snapshot_json = excluded.snapshot_json
                 """,
-                (book_id, chapter_number, json.dumps(snapshot)),
+                (book_id, chapter_number, blueprint_revision_id, json.dumps(snapshot)),
             )
             return cur.lastrowid or 0
 
@@ -1873,11 +2365,12 @@ class Database:
             cur.execute(
                 """
                 INSERT INTO chapter_outputs (
-                    book_id, run_id, chapter_number, title, content, summary_json, scene_count, status
+                    book_id, run_id, chapter_number, blueprint_revision_id, title, content, summary_json, scene_count, status
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(book_id, chapter_number) DO UPDATE SET
                     run_id = excluded.run_id,
+                    blueprint_revision_id = excluded.blueprint_revision_id,
                     title = excluded.title,
                     content = excluded.content,
                     summary_json = excluded.summary_json,
@@ -1889,6 +2382,7 @@ class Database:
                     book_id,
                     payload["run_id"],
                     payload["chapter_number"],
+                    payload.get("blueprint_revision_id"),
                     payload["title"],
                     payload["content"],
                     json.dumps(payload.get("summary") or {}),

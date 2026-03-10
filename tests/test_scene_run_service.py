@@ -25,6 +25,18 @@ def test_start_run_passes_book_id_to_background_thread(monkeypatch) -> None:
     monkeypatch.setattr(scene_run_service.threading, "Thread", _DummyThread)
     monkeypatch.setattr(scene_run_service.registry, "create", _fake_create)
 
+    class _DummyDb:
+        def initialize_schema(self) -> None:
+            return None
+
+        def get_active_blueprint_revision(self, book_id: int) -> dict[str, int]:
+            return {"id": 1, "book_id": book_id}
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(scene_run_service, "Database", lambda _path: _DummyDb())
+
     result = scene_run_service.start_run(config_path="config.yaml", chapter_count=2, book_id=7)
 
     assert result["task_id"] == "t-book"

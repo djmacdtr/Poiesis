@@ -32,5 +32,3 @@ database:
 vector_store:
   path: "/app/data/vector_store"
   embedding_model: "all-MiniLM-L6-v2"
-
-world_seed: "/app/examples/world_seed.yaml"

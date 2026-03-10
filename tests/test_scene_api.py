@@ -229,7 +229,7 @@ def test_scene_run_detail_and_publish_flow(tmp_db: Database, sample_world, monke
     monkeypatch.setattr(
         scene_run_service,
         "_build_context_from_db",
-        lambda config_path, db, book_id, auto_seed=True: (context, object(), {"id": book_id}),
+        lambda config_path, db, book_id: (context, object(), {"id": book_id}),
     )
 
     client = _make_client(tmp_db)
@@ -304,7 +304,7 @@ def test_retry_and_patch_actions_update_trace_and_history(tmp_db: Database, samp
     monkeypatch.setattr(
         scene_run_service,
         "_build_context_from_db",
-        lambda config_path, db, book_id, auto_seed=True: (context, object(), {"id": book_id}),
+        lambda config_path, db, book_id: (context, object(), {"id": book_id}),
     )
 
     client = _make_client(tmp_db)
@@ -386,7 +386,7 @@ def test_chapter_publish_blocked_when_required_loop_not_progressed(tmp_db: Datab
     monkeypatch.setattr(
         scene_run_service,
         "_build_context_from_db",
-        lambda config_path, db, book_id, auto_seed=True: (context, object(), {"id": book_id}),
+        lambda config_path, db, book_id: (context, object(), {"id": book_id}),
     )
     client = _make_client(tmp_db)
 
@@ -453,7 +453,7 @@ def test_approve_review_can_recover_when_chapter_trace_was_missing(tmp_db: Datab
     monkeypatch.setattr(
         scene_run_service,
         "_build_context_from_db",
-        lambda config_path, db, book_id, auto_seed=True: (context, object(), {"id": book_id}),
+        lambda config_path, db, book_id: (context, object(), {"id": book_id}),
     )
     client = _make_client(tmp_db)
 

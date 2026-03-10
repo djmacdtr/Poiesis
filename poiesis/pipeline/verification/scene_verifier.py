@@ -24,10 +24,21 @@ class SceneVerifier:
         llm: LLMClient,
     ) -> list[VerifierIssue]:
         chapter_required_loops = chapter_plan.get("must_progress_loops")
+        source_plan = chapter_plan.get("source_plan")
+        blueprint_roadmap = {}
+        if isinstance(source_plan, dict):
+            raw_roadmap = source_plan.get("blueprint_roadmap")
+            if isinstance(raw_roadmap, dict):
+                blueprint_roadmap = raw_roadmap
         result = self._verifier_hub.verify(
             chapter_number=scene_plan.chapter_number,
             content=content,
-            plan={**chapter_plan, "scene_goal": scene_plan.goal, "scene_title": scene_plan.title},
+            plan={
+                **chapter_plan,
+                "scene_goal": scene_plan.goal,
+                "scene_title": scene_plan.title,
+                "blueprint_roadmap": blueprint_roadmap,
+            },
             world=world,
             proposed_changes=changeset.raw_changes,
             llm=llm,

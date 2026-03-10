@@ -8,28 +8,6 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
-LANGUAGE_WORLD_SEED_MAP: dict[str, str] = {
-    "zh": "examples/world_seed_zh.yaml",
-    "zh-cn": "examples/world_seed_zh.yaml",
-    "en": "examples/world_seed.yaml",
-    "en-us": "examples/world_seed.yaml",
-}
-
-
-def resolve_world_seed_path(language: str, default_seed: str) -> str:
-    """Resolve seed path by language, falling back to config default path."""
-    key = (language or "").strip().lower()
-    if not key:
-        return default_seed
-    exact = LANGUAGE_WORLD_SEED_MAP.get(key)
-    if exact:
-        return exact
-    if key.startswith("zh"):
-        return LANGUAGE_WORLD_SEED_MAP["zh"]
-    if key.startswith("en"):
-        return LANGUAGE_WORLD_SEED_MAP["en"]
-    return default_seed
-
 
 class ModelConfig(BaseModel):
     """Configuration for an LLM model."""
@@ -82,7 +60,6 @@ class Config(BaseModel):
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     vector_store: VectorStoreConfig = Field(default_factory=VectorStoreConfig)
-    world_seed: str = "examples/world_seed.yaml"
 
     model_config = {"extra": "allow"}
 

@@ -71,10 +71,9 @@ def test_status_uses_book_id_scope(tmp_path: Path, monkeypatch) -> None:
 def test_run_passes_book_id_to_scene_run_sync(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def _fake_run_sync(config_path: str, chapter_count: int, book_id: int, seed_path=None, log=None) -> int:
+    def _fake_run_sync(config_path: str, chapter_count: int, book_id: int, log=None) -> int:
         captured["config_path"] = config_path
         captured["book_id"] = book_id
-        captured["seed_path"] = seed_path
         captured["chapter_count"] = chapter_count
         assert callable(log)
         return 99
@@ -90,5 +89,4 @@ def test_run_passes_book_id_to_scene_run_sync(monkeypatch) -> None:
     assert result.exit_code == 0
     assert captured["config_path"] == "config.yaml"
     assert captured["book_id"] == 7
-    assert captured["seed_path"] is None
     assert captured["chapter_count"] == 3

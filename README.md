@@ -158,7 +158,7 @@ curl -f http://127.0.0.1:18000/openapi.json > /dev/null
 
 1. 登录（默认用户名 `admin`，密码见 `.env` 中 `POIESIS_ADMIN_PASS`）
 2. 在系统设置配置 `OpenAI / Anthropic / SiliconFlow` Key
-3. 初始化世界
+3. 在“作品与蓝图管理”中创建作品，并锁定世界观 / 人物 / 章节路线蓝图
 4. 在 `Run Board` 选择书籍与章节数，启动新的 scene run
 5. 如有 fatal scene，转到 `Review Queue` 处理
 

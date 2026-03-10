@@ -243,4 +243,3 @@ docker compose up -d
 | `database.path` | string | `"poiesis.db"` | SQLite 文件路径 |
 | `vector_store.path` | string | `"vector_store"` | 向量索引目录 |
 | `vector_store.embedding_model` | string | `"all-MiniLM-L6-v2"` | embedding model |
-| `world_seed` | string | `"examples/world_seed.yaml"` | 默认 seed 文件 |

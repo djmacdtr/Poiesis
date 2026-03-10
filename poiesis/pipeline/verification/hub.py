@@ -6,6 +6,7 @@ from typing import Any
 
 from poiesis.domain.world.model import WorldModel
 from poiesis.llm.base import LLMClient
+from poiesis.pipeline.verification.blueprint_verifier import BlueprintVerifier
 from poiesis.pipeline.verification.budget_verifier import BudgetVerifier
 from poiesis.pipeline.verification.canon_verifier import CanonVerifier
 from poiesis.pipeline.verification.loop_verifier import LoopVerifier
@@ -25,6 +26,7 @@ class VerifierHub:
         self._new_rule_budget = new_rule_budget
         self._budget_verifier = BudgetVerifier(new_rule_budget)
         self._canon_verifier = CanonVerifier()
+        self._blueprint_verifier = BlueprintVerifier()
         self._loop_verifier = LoopVerifier()
         self._llm_verifier = LLMSemanticVerifier(prompt_path=prompt_path, language=language)
 
@@ -43,6 +45,12 @@ class VerifierHub:
         issues = [
             *self._budget_verifier.verify(proposed_changes),
             *self._canon_verifier.verify(world, proposed_changes),
+            *self._blueprint_verifier.verify(
+                chapter_number=chapter_number,
+                plan=plan,
+                world=world,
+                loop_updates=loop_updates or [],
+            ),
             *self._loop_verifier.verify(
                 chapter_number=chapter_number,
                 world=world,

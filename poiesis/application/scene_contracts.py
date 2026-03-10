@@ -18,6 +18,7 @@ class StoryPlan(BaseModel):
     """整本书级的当前推进意图。"""
 
     book_id: int
+    blueprint_revision_id: int | None = None
     focus: str = ""
     active_themes: list[str] = Field(default_factory=list)
     active_loops: list[str] = Field(default_factory=list)
@@ -124,6 +125,7 @@ class ChapterOutput(BaseModel):
 
     run_id: int
     chapter_number: int
+    blueprint_revision_id: int | None = None
     title: str
     content: str
     summary: dict[str, Any] = Field(default_factory=dict)
