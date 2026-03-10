@@ -3,7 +3,21 @@
  * baseURL 来自环境变量 VITE_API_BASE_URL
  */
 
-const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
+function resolveBaseUrl(): string {
+  const envBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim()
+  if (envBase) {
+    return envBase.replace(/\/$/, '')
+  }
+
+  // Fallback for local Vite dev when env is not injected.
+  if (typeof window !== 'undefined' && window.location.port === '5173') {
+    return `http://${window.location.hostname}:18000`
+  }
+
+  return ''
+}
+
+const BASE_URL = resolveBaseUrl()
 
 /** 通用请求函数，自动处理 JSON 序列化与错误提示 */
 export async function request<T>(

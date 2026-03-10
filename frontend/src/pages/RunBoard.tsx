@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { formatDateTime } from '@/lib/utils'
 import { fetchBooks } from '@/services/books'
 import { fetchSceneRuns, startSceneRun } from '@/services/run'
 import type { BookItem, SceneRunSummary } from '@/types'
@@ -114,7 +115,7 @@ export default function RunBoard() {
                 <span>
                   进度：{run.current_chapter}/{run.total_chapters}
                 </span>
-                <span>更新时间：{run.updated_at || '-'}</span>
+                <span>更新时间：{formatDateTime(run.updated_at)}</span>
               </div>
               {run.error_message && (
                 <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{run.error_message}</p>

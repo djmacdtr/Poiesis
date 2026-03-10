@@ -170,6 +170,56 @@ def _seed_review_scene(tmp_db: Database, scene_number: int = 1) -> tuple[int, in
     return run_id, review_id
 
 
+def _seed_review_scene_without_chapter_trace(tmp_db: Database) -> tuple[int, int]:
+    """插入只有 scene/review、没有 chapter trace 的历史残缺数据。"""
+    run_id = tmp_db.create_run_trace(
+        task_id="scene-missing-chapter-trace",
+        book_id=1,
+        status="running",
+        config_snapshot={"mode": "scene"},
+        llm_snapshot={"writer": "mock"},
+    )
+    tmp_db.upsert_run_scene_trace(
+        run_id,
+        {
+            "chapter_number": 1,
+            "scene_number": 1,
+            "status": "needs_review",
+            "scene_plan": {
+                "chapter_number": 1,
+                "scene_number": 1,
+                "title": "场景1",
+                "goal": "建立冲突",
+                "conflict": "压力来袭",
+                "turning_point": "角色做决定",
+            },
+            "draft": {
+                "chapter_number": 1,
+                "scene_number": 1,
+                "title": "场景1",
+                "content": "旧正文",
+            },
+            "final_text": "旧正文",
+            "changeset": {"loop_updates": []},
+            "verifier_issues": [
+                {
+                    "severity": "fatal",
+                    "type": "semantic",
+                    "reason": "存在设定冲突",
+                    "repair_hint": "修正冲突",
+                    "location": "scene",
+                }
+            ],
+            "review_required": True,
+            "review_reason": "存在设定冲突",
+            "review_status": "pending",
+            "metrics": {"issue_count": 1},
+        },
+    )
+    review_id = tmp_db.create_scene_review(run_id, 1, 1, "存在设定冲突")
+    return run_id, review_id
+
+
 def test_scene_run_detail_and_publish_flow(tmp_db: Database, sample_world, monkeypatch) -> None:
     """approve 后应刷新 chapter 门禁，并允许人工发布。"""
     from poiesis.api.services import scene_run_service
@@ -392,3 +442,30 @@ def test_loops_and_canon_api_return_story_state(tmp_db: Database, sample_world) 
     assert canon_resp.status_code == 200
     assert canon_resp.json()["story_state"]["last_published_chapter"] == 2
     assert canon_resp.json()["story_state"]["overdue_loop_count"] == 1
+
+
+def test_approve_review_can_recover_when_chapter_trace_was_missing(tmp_db: Database, sample_world, monkeypatch) -> None:
+    """历史缺少 chapter trace 时，approve 也应能自愈并完成章节聚合。"""
+    from poiesis.api.services import scene_run_service
+
+    run_id, review_id = _seed_review_scene_without_chapter_trace(tmp_db)
+    context = _make_context(tmp_db, sample_world)
+    monkeypatch.setattr(
+        scene_run_service,
+        "_build_context_from_db",
+        lambda config_path, db, book_id, auto_seed=True: (context, object(), {"id": book_id}),
+    )
+    client = _make_client(tmp_db)
+
+    approve_resp = client.post(f"/api/reviews/{review_id}/approve", json={})
+    assert approve_resp.status_code == 200
+    assert approve_resp.json()["status"] == "completed"
+
+    chapter_resp = client.get(f"/api/runs/{run_id}/chapters/1")
+    assert chapter_resp.status_code == 200
+    assert chapter_resp.json()["trace"]["status"] == "ready_to_publish"
+    assert chapter_resp.json()["publish"]["can_publish"] is True
+
+    scene_resp = client.get(f"/api/runs/{run_id}/chapters/1/scenes/1")
+    assert scene_resp.status_code == 200
+    assert scene_resp.json()["publish_blockers"]["chapter_status"] == "ready_to_publish"

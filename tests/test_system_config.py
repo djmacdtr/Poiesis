@@ -342,3 +342,17 @@ class TestCrypto:
         original = "test-key-with-env"
         ciphertext = encrypt(original)
         assert decrypt(ciphertext) == original
+
+    def test_decrypt_legacy_default_ciphertext_with_env_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """启用自定义密钥后，仍应兼容解密历史默认密钥加密的数据。"""
+        from cryptography.fernet import Fernet
+
+        from poiesis.crypto import decrypt, encrypt
+
+        monkeypatch.delenv("POIESIS_SECRET_KEY", raising=False)
+        ciphertext = encrypt("legacy-dev-secret")
+
+        monkeypatch.setenv("POIESIS_SECRET_KEY", Fernet.generate_key().decode())
+        assert decrypt(ciphertext) == "legacy-dev-secret"

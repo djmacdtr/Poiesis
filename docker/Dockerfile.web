@@ -4,7 +4,11 @@
 # 阶段二：nginx:alpine 托管静态文件并反代 /api 到后端
 
 # ── 阶段一：构建前端 ──────────────────────────────────────────
+ARG VITE_API_BASE_URL=/api
+
 FROM node:20-alpine AS builder
+
+ARG VITE_API_BASE_URL
 
 WORKDIR /app/frontend
 
@@ -17,7 +21,7 @@ RUN --mount=type=cache,target=/root/.npm \
 
 # 复制源码并构建
 COPY frontend/ ./
-RUN npm run build
+RUN VITE_API_BASE_URL=${VITE_API_BASE_URL} npm run build
 
 # ── 阶段二：Nginx 静态托管 ────────────────────────────────────
 FROM nginx:alpine

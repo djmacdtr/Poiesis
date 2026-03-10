@@ -147,8 +147,6 @@ docker compose up -d
 docker compose ps
 curl -f http://127.0.0.1:18000/health
 curl -f http://127.0.0.1:18000/openapi.json > /dev/null
-curl -f http://127.0.0.1:18080/health
-curl -f http://127.0.0.1:18080/openapi.json > /dev/null
 ```
 
 ### 4. 🌐 打开系统
@@ -163,6 +161,8 @@ curl -f http://127.0.0.1:18080/openapi.json > /dev/null
 3. 初始化世界
 4. 在 `Run Board` 选择书籍与章节数，启动新的 scene run
 5. 如有 fatal scene，转到 `Review Queue` 处理
+
+开发热更新模式请改用 `http://127.0.0.1:5173`，该模式下 SQLite 数据会存放在 Docker named volume 中，首次启动时从宿主机 `./data` 导入。
 
 ---
 

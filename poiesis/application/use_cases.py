@@ -120,6 +120,56 @@ def _build_chapter_plan(chapter_number: int, payload: dict[str, Any]) -> Chapter
     return ChapterPlan.model_validate(merged)
 
 
+def _build_default_story_plan(book_id: int, chapter_number: int, world: WorldModel) -> StoryPlan:
+    """为缺少持久化章节 trace 的场景补齐最小 story plan。"""
+    return StoryPlan(
+        book_id=book_id,
+        focus=f"第 {chapter_number} 章",
+        active_loops=world.active_loop_ids(),
+        narrative_pressure="持续升级",
+    )
+
+
+def _build_chapter_plan_from_scene_rows(
+    chapter_number: int,
+    scene_rows: list[dict[str, Any]],
+) -> ChapterPlan:
+    """当 chapter trace 缺失时，根据 scene trace 反推最小章节规划。"""
+    if not scene_rows:
+        raise ValueError("章节 trace 不存在，且尚无 scene trace 可用于补建")
+
+    first_plan = dict(scene_rows[0].get("scene_plan_json") or {})
+    must_progress_loops: list[str] = []
+    must_preserve: list[str] = []
+    scene_stubs: list[dict[str, Any]] = []
+    for row in scene_rows:
+        scene_plan = dict(row.get("scene_plan_json") or {})
+        scene_stubs.append(
+            {
+                "title": str(scene_plan.get("title") or ""),
+                "goal": str(scene_plan.get("goal") or ""),
+                "conflict": str(scene_plan.get("conflict") or ""),
+                "turning_point": str(scene_plan.get("turning_point") or ""),
+            }
+        )
+        for loop_id in scene_plan.get("required_loops") or []:
+            if loop_id not in must_progress_loops:
+                must_progress_loops.append(str(loop_id))
+        for item in scene_plan.get("continuity_requirements") or []:
+            if item not in must_preserve:
+                must_preserve.append(str(item))
+
+    return ChapterPlan(
+        chapter_number=chapter_number,
+        title=f"第 {chapter_number} 章",
+        goal=str(first_plan.get("goal") or ""),
+        must_preserve=must_preserve,
+        must_progress_loops=must_progress_loops,
+        scene_count_target=max(len(scene_rows), 1),
+        source_plan={"scene_stubs": scene_stubs},
+    )
+
+
 def _parse_scene_ref(scene_ref: str) -> tuple[int | None, int | None]:
     """把形如 3-2 的 scene 引用解析为章号和 scene 号。"""
     if "-" not in scene_ref:
@@ -439,21 +489,35 @@ class RefreshChapterAggregateUseCase:
             blockers=blockers,
         )
 
-    def execute(self, run_id: int, chapter_number: int) -> tuple[ChapterTrace, ChapterOutput, PublishBlockers]:
+    def execute(
+        self,
+        run_id: int,
+        chapter_number: int,
+        story_plan: StoryPlan | None = None,
+        chapter_plan: ChapterPlan | None = None,
+    ) -> tuple[ChapterTrace, ChapterOutput, PublishBlockers]:
         """重组 chapter，并把最新草稿态写回数据库。"""
         row = self._context.db.get_run_chapter_trace(run_id, chapter_number)
-        if row is None:
-            raise ValueError("章节 trace 不存在")
-
         scene_rows = self._context.db.list_run_scene_traces(run_id, chapter_number)
         scenes = [_build_scene_trace_from_row(run_id, item) for item in scene_rows]
-        story_plan = _build_story_plan(
-            self._context.book_id,
-            dict((row.get("retrieval_pack_json") or {}).get("story_plan") or {}),
-        )
-        chapter_plan = _build_chapter_plan(chapter_number, dict(row.get("planner_output_json") or {}))
+        if row is None:
+            effective_story_plan = story_plan or _build_default_story_plan(
+                self._context.book_id,
+                chapter_number,
+                self._context.world,
+            )
+            effective_chapter_plan = chapter_plan or _build_chapter_plan_from_scene_rows(chapter_number, scene_rows)
+        else:
+            effective_story_plan = story_plan or _build_story_plan(
+                self._context.book_id,
+                dict((row.get("retrieval_pack_json") or {}).get("story_plan") or {}),
+            )
+            effective_chapter_plan = chapter_plan or _build_chapter_plan(
+                chapter_number,
+                dict(row.get("planner_output_json") or {}),
+            )
         pending_reviews = self._context.db.count_pending_scene_reviews(run_id, chapter_number)
-        blockers = self._build_blockers(scenes, pending_reviews, chapter_plan)
+        blockers = self._build_blockers(scenes, pending_reviews, effective_chapter_plan)
         assembled_text = "\n\n".join(scene.final_text.strip() for scene in scenes if scene.final_text.strip())
 
         summary: dict[str, Any]
@@ -461,7 +525,7 @@ class RefreshChapterAggregateUseCase:
             summary = self._context.summarizer.summarize(
                 chapter_number=chapter_number,
                 content=assembled_text,
-                plan=chapter_plan.model_dump(mode="json"),
+                plan=effective_chapter_plan.model_dump(mode="json"),
                 world=self._context.world,
                 llm=self._context.planner_llm,
             )
@@ -475,7 +539,7 @@ class RefreshChapterAggregateUseCase:
 
         chapter_output = self._context.chapter_assembler.assemble(
             run_id=run_id,
-            chapter_plan=chapter_plan,
+            chapter_plan=effective_chapter_plan,
             scenes=scenes,
             summary=summary,
         )
@@ -485,8 +549,8 @@ class RefreshChapterAggregateUseCase:
             run_id=run_id,
             chapter_number=chapter_number,
             status=blockers.chapter_status,
-            story_plan=story_plan,
-            chapter_plan=chapter_plan,
+            story_plan=effective_story_plan,
+            chapter_plan=effective_chapter_plan,
             scenes=scenes,
             assembled_text=chapter_output.content,
             summary=summary,
@@ -502,8 +566,8 @@ class RefreshChapterAggregateUseCase:
             run_id=run_id,
             chapter_number=chapter_number,
             status=blockers.chapter_status,
-            planner_output=chapter_plan.model_dump(mode="json"),
-            retrieval_pack={"story_plan": story_plan.model_dump(mode="json")},
+            planner_output=effective_chapter_plan.model_dump(mode="json"),
+            retrieval_pack={"story_plan": effective_story_plan.model_dump(mode="json")},
             draft_text="",
             final_content=chapter_output.content,
             changeset={"scene_count": len(scenes)},
@@ -529,7 +593,7 @@ class RefreshChapterAggregateUseCase:
             chapter_number=chapter_number,
             title=chapter_output.title,
             content=chapter_output.content,
-            plan=chapter_plan.model_dump(mode="json"),
+            plan=effective_chapter_plan.model_dump(mode="json"),
             book_id=self._context.book_id,
             word_count=len(chapter_output.content),
             status=blockers.chapter_status,
@@ -563,15 +627,38 @@ class GenerateChapterUseCase:
         self._scene_use_case = GenerateSceneUseCase(context)
         self._loop_use_case = AdvanceLoopStateUseCase(context.db, context.world)
 
+    def _initialize_chapter_trace(
+        self,
+        run_id: int,
+        story_plan: StoryPlan,
+        chapter_plan: ChapterPlan,
+    ) -> None:
+        """在首次 scene 聚合前写入最小章节 trace，避免 refresh 依赖空记录。"""
+        self._context.db.upsert_run_chapter_trace(
+            run_id=run_id,
+            chapter_number=chapter_plan.chapter_number,
+            status="draft",
+            planner_output=chapter_plan.model_dump(mode="json"),
+            retrieval_pack={"story_plan": story_plan.model_dump(mode="json")},
+            draft_text="",
+            final_content="",
+            changeset={"scene_count": 0},
+            verifier_issues=[],
+            editor_rewrites=[],
+            merge_result={"review_required": False, "can_publish": False, "blockers": []},
+            summary_result={
+                "summary": "",
+                "key_events": [],
+                "characters_featured": [],
+                "new_facts_introduced": [],
+            },
+            metrics={"scene_count": 0, "review_scene_count": 0, "pending_review_count": 0},
+        )
+
     def execute(self, run_id: int, chapter_number: int) -> tuple[ChapterTrace, ChapterOutput]:
         """完整执行 chapter -> scenes，并把 scene trace 写入数据库。"""
         previous = self._context.db.list_chapter_outputs(book_id=self._context.book_id)
-        story_plan = StoryPlan(
-            book_id=self._context.book_id,
-            focus=f"第 {chapter_number} 章",
-            active_loops=self._context.world.active_loop_ids(),
-            narrative_pressure="持续升级",
-        )
+        story_plan = _build_default_story_plan(self._context.book_id, chapter_number, self._context.world)
         chapter_plan = self._context.chapter_planner.plan(
             chapter_number=chapter_number,
             story_plan=story_plan,
@@ -580,6 +667,7 @@ class GenerateChapterUseCase:
             llm=self._context.planner_llm,
         )
         scene_plans = self._context.scene_planner.plan(chapter_plan)
+        self._initialize_chapter_trace(run_id, story_plan, chapter_plan)
 
         for scene_plan in scene_plans:
             scene = self._scene_use_case.execute(run_id=run_id, chapter_plan=chapter_plan, scene_plan=scene_plan)
@@ -595,7 +683,12 @@ class GenerateChapterUseCase:
                 self._loop_use_case.execute(self._context.book_id, scene)
 
         refresh = RefreshChapterAggregateUseCase(self._context)
-        chapter_trace, chapter_output, _ = refresh.execute(run_id, chapter_number)
+        chapter_trace, chapter_output, _ = refresh.execute(
+            run_id,
+            chapter_number,
+            story_plan=story_plan,
+            chapter_plan=chapter_plan,
+        )
         return chapter_trace, chapter_output
 
 
@@ -710,9 +803,6 @@ class _ReviewActionBase:
         if review["status"] != "pending":
             raise ValueError("review 已完成，不可重复执行")
 
-        chapter_row = self._context.db.get_run_chapter_trace(review["run_id"], review["chapter_number"])
-        if chapter_row is None:
-            raise ValueError("章节 trace 不存在")
         scene_row = self._context.db.get_run_scene_trace(
             review["run_id"],
             review["chapter_number"],
@@ -721,7 +811,11 @@ class _ReviewActionBase:
         if scene_row is None:
             raise ValueError("scene trace 不存在")
 
-        chapter_plan = _build_chapter_plan(review["chapter_number"], chapter_row.get("planner_output_json") or {})
+        chapter_row = self._context.db.get_run_chapter_trace(review["run_id"], review["chapter_number"])
+        if chapter_row is None:
+            chapter_plan = _build_chapter_plan_from_scene_rows(review["chapter_number"], [scene_row])
+        else:
+            chapter_plan = _build_chapter_plan(review["chapter_number"], chapter_row.get("planner_output_json") or {})
         scene_trace = _build_scene_trace_from_row(review["run_id"], scene_row)
         return review, chapter_plan, scene_trace
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -28,9 +29,17 @@ class Database:
 
     def _get_connection(self) -> sqlite3.Connection:
         if self._conn is None:
+            db_path = Path(self.db_path)
+            if db_path.parent != Path(""):
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+
             self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
+            try:
+                # WAL can fail on some mounted filesystems (for example Docker on Windows).
+                self._conn.execute("PRAGMA journal_mode=WAL")
+            except sqlite3.OperationalError:
+                self._conn.execute("PRAGMA journal_mode=DELETE")
             self._conn.execute("PRAGMA foreign_keys=ON")
         return self._conn
 
@@ -52,6 +61,21 @@ class Database:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+
+    def ping(self) -> None:
+        """Open the configured SQLite file and execute a trivial query."""
+        conn = self._get_connection()
+        conn.execute("SELECT 1")
+
+    def debug_info(self) -> dict[str, Any]:
+        """Return a compact snapshot to aid DB mount diagnostics."""
+        db_path = Path(self.db_path)
+        return {
+            "db_path": self.db_path,
+            "cwd": os.getcwd(),
+            "exists": db_path.exists(),
+            "parent_exists": db_path.parent.exists() if db_path.parent != Path("") else True,
+        }
 
     # ------------------------------------------------------------------
     # Schema

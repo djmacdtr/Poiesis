@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 from fastapi.testclient import TestClient
 
 from poiesis.api.main import app
@@ -77,6 +79,26 @@ class TestBooksApi:
         resp = client.get("/api/books")
         assert resp.status_code == 200
         assert any(item.get("id") == 1 for item in resp.json())
+
+    def test_list_books_returns_503_when_db_unavailable(self, monkeypatch) -> None:
+        from poiesis.api import deps
+
+        app.dependency_overrides.clear()
+        original = Database.initialize_schema
+
+        def _boom(self: Database, schema_path: str | None = None) -> None:
+            raise sqlite3.OperationalError("unable to open database file")
+
+        monkeypatch.setattr(Database, "initialize_schema", _boom)
+        client = TestClient(app, raise_server_exceptions=False)
+        try:
+            resp = client.get("/api/books")
+        finally:
+            monkeypatch.setattr(Database, "initialize_schema", original)
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 503
+        assert "数据库不可用" in resp.text
 
     def test_create_book_success(self, tmp_db: Database) -> None:
         client = _make_client(tmp_db)
@@ -165,3 +187,37 @@ class TestCanonBookScopedQueries:
         assert resp_second.status_code == 200
         assert resp_default.json()["timeline"][0]["event_key"] == "ev-book-1"
         assert resp_second.json()["timeline"][0]["event_key"] == "ev-book-2"
+
+
+class TestHealthApi:
+    """健康检查测试。"""
+
+    def test_health_returns_database_status(self, tmp_db: Database) -> None:
+        from poiesis.api import deps
+
+        app.dependency_overrides[deps.get_db] = lambda: tmp_db
+        client = TestClient(app, raise_server_exceptions=True)
+        try:
+            resp = client.get("/health")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        assert resp.json()["database"] == "ok"
+
+    def test_health_returns_503_when_db_unavailable(self, monkeypatch) -> None:
+        original = Database.initialize_schema
+
+        def _boom(self: Database, schema_path: str | None = None) -> None:
+            raise sqlite3.OperationalError("unable to open database file")
+
+        monkeypatch.setattr(Database, "initialize_schema", _boom)
+        client = TestClient(app, raise_server_exceptions=False)
+        try:
+            resp = client.get("/health")
+        finally:
+            monkeypatch.setattr(Database, "initialize_schema", original)
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 503
+        assert "数据库不可用" in resp.text

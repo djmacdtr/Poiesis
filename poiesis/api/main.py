@@ -20,7 +20,7 @@ import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from poiesis.api.routers import (
@@ -87,8 +87,17 @@ app.include_router(system_config.router)
 
 @app.get("/health", tags=["健康检查"])
 def health_check() -> dict[str, str]:
-    """健康检查端点，返回服务状态。"""
-    return {"status": "ok", "service": "Poiesis API"}
+    """健康检查端点，返回服务与数据库状态。"""
+    from poiesis.api.deps import get_db
+
+    db = get_db()
+    try:
+        db.ping()
+    except HTTPException:
+        raise
+    finally:
+        db.close()
+    return {"status": "ok", "service": "Poiesis API", "database": "ok"}
 
 
 # ──────────────────────────────────────────────

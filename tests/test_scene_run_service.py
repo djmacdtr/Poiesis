@@ -31,3 +31,47 @@ def test_start_run_passes_book_id_to_background_thread(monkeypatch) -> None:
     assert captured.get("started") is True
     assert captured.get("daemon") is True
     assert captured["args"][1:] == ("config.yaml", 2, 7)
+
+
+def test_get_run_detail_falls_back_to_scene_traces_when_chapter_trace_missing(tmp_db) -> None:
+    """历史 run 若只有 scene trace，详情接口也应展示章节摘要。"""
+    run_id = tmp_db.create_run_trace(
+        task_id="fallback-task",
+        book_id=1,
+        status="running",
+        config_snapshot={"mode": "scene"},
+        llm_snapshot={"writer": "mock"},
+    )
+    tmp_db.upsert_run_scene_trace(
+        run_id,
+        {
+            "chapter_number": 1,
+            "scene_number": 1,
+            "status": "needs_review",
+            "scene_plan": {
+                "chapter_number": 1,
+                "scene_number": 1,
+                "title": "场景1",
+                "goal": "建立冲突",
+            },
+            "draft": None,
+            "final_text": "旧正文",
+            "changeset": {"loop_updates": []},
+            "verifier_issues": [],
+            "review_required": True,
+            "review_reason": "仍需人工审核",
+            "review_status": "pending",
+            "metrics": {"issue_count": 1},
+        },
+    )
+    tmp_db.create_scene_review(run_id, 1, 1, "仍需人工审核")
+    tmp_db.update_run_trace_status(run_id, "failed", error_message="章节 trace 不存在", finished=True)
+
+    payload = scene_run_service.get_run_detail(tmp_db, run_id)
+
+    assert payload is not None
+    assert payload["run"].current_chapter == 1
+    assert payload["run"].status == "failed"
+    assert payload["chapters"][0]["chapter_number"] == 1
+    assert payload["chapters"][0]["status"] == "needs_review"
+    assert payload["chapters"][0]["review_required"] is True

@@ -305,6 +305,100 @@ def _compute_publish_blockers(
     )
 
 
+def _compute_scene_only_publish_blockers(
+    scene_rows: list[dict[str, Any]],
+    pending_reviews: int,
+) -> PublishBlockers:
+    """当章节 trace 缺失时，仅依据 scene/review 状态推导最小门禁结果。"""
+    blockers: list[str] = []
+    if any(str(item.get("status") or "") == "needs_review" for item in scene_rows):
+        blockers.append("仍有待审阅场景。")
+    if pending_reviews > 0:
+        blockers.append(f"仍有 {pending_reviews} 条待处理审阅记录。")
+
+    status: ChapterStatus
+    if blockers:
+        status = "needs_review"
+    elif scene_rows:
+        status = "ready_to_publish"
+    else:
+        status = "draft"
+    return PublishBlockers(
+        chapter_status=status,
+        can_publish=status == "ready_to_publish",
+        blockers=blockers,
+    )
+
+
+def _build_fallback_chapter_plan(chapter_number: int, scene_rows: list[dict[str, Any]]) -> ChapterPlan:
+    """针对历史残缺 run，使用 scene trace 反推出最小章节规划。"""
+    first_plan = dict((scene_rows[0] if scene_rows else {}).get("scene_plan_json") or {})
+    must_progress_loops: list[str] = []
+    must_preserve: list[str] = []
+    source_stubs: list[dict[str, Any]] = []
+    for row in scene_rows:
+        scene_plan = dict(row.get("scene_plan_json") or {})
+        source_stubs.append(
+            {
+                "title": str(scene_plan.get("title") or ""),
+                "goal": str(scene_plan.get("goal") or ""),
+                "conflict": str(scene_plan.get("conflict") or ""),
+                "turning_point": str(scene_plan.get("turning_point") or ""),
+            }
+        )
+        for loop_id in scene_plan.get("required_loops") or []:
+            if loop_id not in must_progress_loops:
+                must_progress_loops.append(str(loop_id))
+        for item in scene_plan.get("continuity_requirements") or []:
+            if item not in must_preserve:
+                must_preserve.append(str(item))
+
+    return ChapterPlan(
+        chapter_number=chapter_number,
+        title=f"第 {chapter_number} 章",
+        goal=str(first_plan.get("goal") or ""),
+        must_preserve=must_preserve,
+        must_progress_loops=must_progress_loops,
+        scene_count_target=max(len(scene_rows), 1),
+        source_plan={"scene_stubs": source_stubs},
+    )
+
+
+def _build_fallback_chapter_trace(
+    db: Database,
+    run_id: int,
+    book_id: int,
+    chapter_number: int,
+    scene_rows: list[dict[str, Any]],
+) -> tuple[ChapterTrace, PublishBlockers]:
+    """为缺少 run_chapters 记录的历史任务构造只读章节视图。"""
+    pending_reviews = db.count_pending_scene_reviews(run_id, chapter_number)
+    publish = _compute_scene_only_publish_blockers(scene_rows, pending_reviews)
+    scenes = [_build_scene_trace(run_id, scene) for scene in scene_rows]
+    return (
+        ChapterTrace(
+            run_id=run_id,
+            chapter_number=chapter_number,
+            status=publish.chapter_status,
+            story_plan=StoryPlan(book_id=book_id, focus=f"第 {chapter_number} 章"),
+            chapter_plan=_build_fallback_chapter_plan(chapter_number, scene_rows),
+            scenes=scenes,
+            assembled_text="\n\n".join(scene.final_text.strip() for scene in scenes if scene.final_text.strip()),
+            summary={},
+            metrics={
+                "scene_count": len(scene_rows),
+                "review_scene_count": len(
+                    [scene for scene in scene_rows if str(scene.get("status") or "") == "needs_review"]
+                ),
+                "pending_review_count": pending_reviews,
+            },
+            review_required=publish.chapter_status == "needs_review",
+            error_message="章节 trace 缺失，当前视图由 scene trace 自动补建。",
+        ),
+        publish,
+    )
+
+
 def _build_scene_trace(run_id: int, scene_row: dict[str, Any]) -> SceneTrace:
     """把数据库记录映射为正式 SceneTrace。"""
     return SceneTrace.model_validate(
@@ -432,6 +526,21 @@ def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int, boo
         task.status = "failed"
         task.error = str(exc)
         task.add_log(f"生成失败：{exc}")
+        if "run_id" in locals():
+            try:
+                context.db.update_run_trace_status(
+                    run_id,
+                    "failed",
+                    error_message=str(exc),
+                    finished=True,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        if "context" in locals():
+            try:
+                context.db.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def start_run(config_path: str, chapter_count: int, book_id: int = 1) -> dict[str, Any]:
@@ -526,21 +635,40 @@ def get_run_detail(db: Database, run_id: int) -> dict[str, Any] | None:
     run_item = db.get_run_trace(run_id)
     if run_item is None:
         return None
-    chapters = db.list_run_chapter_traces(run_id)
+    chapter_rows = {
+        int(item["chapter_number"]): item for item in db.list_run_chapter_traces(run_id)
+    }
+    scene_rows = db.list_run_scene_traces(run_id)
+    scenes_by_chapter: dict[int, list[dict[str, Any]]] = {}
+    for item in scene_rows:
+        scenes_by_chapter.setdefault(int(item["chapter_number"]), []).append(item)
+
+    chapter_numbers = sorted(set(chapter_rows) | set(scenes_by_chapter))
     chapter_summaries = []
-    for item in chapters:
-        scenes = db.list_run_scene_traces(run_id, int(item["chapter_number"]))
-        publish = _compute_publish_blockers(
-            item,
-            scenes,
-            db.count_pending_scene_reviews(run_id, int(item["chapter_number"])),
-        )
+    for chapter_number in chapter_numbers:
+        item = chapter_rows.get(chapter_number)
+        scenes = scenes_by_chapter.get(chapter_number, [])
+        pending_reviews = db.count_pending_scene_reviews(run_id, chapter_number)
+        if item is None:
+            publish = _compute_scene_only_publish_blockers(scenes, pending_reviews)
+            summary = {}
+            metrics = {
+                "scene_count": len(scenes),
+                "review_scene_count": len(
+                    [scene for scene in scenes if str(scene.get("status") or "") == "needs_review"]
+                ),
+                "pending_review_count": pending_reviews,
+            }
+        else:
+            publish = _compute_publish_blockers(item, scenes, pending_reviews)
+            summary = item.get("summary_json") or {}
+            metrics = item.get("metrics_json") or {}
         chapter_summaries.append(
             {
-                "chapter_number": int(item["chapter_number"]),
+                "chapter_number": chapter_number,
                 "status": publish.chapter_status,
-                "summary": item.get("summary_json") or {},
-                "metrics": item.get("metrics_json") or {},
+                "summary": summary,
+                "metrics": metrics,
                 "review_required": publish.chapter_status == "needs_review",
                 "can_publish": publish.can_publish,
                 "blockers": publish.blockers,
@@ -552,8 +680,8 @@ def get_run_detail(db: Database, run_id: int) -> dict[str, Any] | None:
             task_id=str(run_item["task_id"]),
             book_id=int(run_item["book_id"]),
             status=str(run_item["status"]),
-            current_chapter=len(chapters),
-            total_chapters=len(chapters),
+            current_chapter=len(chapter_numbers),
+            total_chapters=len(chapter_numbers),
             created_at=str(run_item.get("started_at") or ""),
             updated_at=str(run_item.get("finished_at") or run_item.get("started_at") or ""),
             error_message=run_item.get("error_message"),
@@ -565,15 +693,27 @@ def get_run_detail(db: Database, run_id: int) -> dict[str, Any] | None:
 def get_chapter_detail(db: Database, run_id: int, chapter_number: int) -> dict[str, Any] | None:
     """读取单章和其 scenes。"""
     row = db.get_run_chapter_trace(run_id, chapter_number)
-    if row is None:
-        return None
     scenes = db.list_run_scene_traces(run_id, chapter_number)
-    publish = _compute_publish_blockers(
-        row,
-        scenes,
-        db.count_pending_scene_reviews(run_id, chapter_number),
-    )
-    trace = _build_chapter_trace(run_id, row, scenes)
+    if row is None:
+        if not scenes:
+            return None
+        run_item = db.get_run_trace(run_id)
+        if run_item is None:
+            return None
+        trace, publish = _build_fallback_chapter_trace(
+            db,
+            run_id,
+            int(run_item["book_id"]),
+            chapter_number,
+            scenes,
+        )
+    else:
+        publish = _compute_publish_blockers(
+            row,
+            scenes,
+            db.count_pending_scene_reviews(run_id, chapter_number),
+        )
+        trace = _build_chapter_trace(run_id, row, scenes)
     output_row = db.get_chapter_output(trace.story_plan.book_id, chapter_number)
     output: ChapterOutput | None = None
     if output_row:
@@ -602,20 +742,17 @@ def get_scene_detail(db: Database, run_id: int, chapter_number: int, scene_numbe
         return None
     review = db.get_scene_review_by_scene(run_id, chapter_number, scene_number)
     chapter = db.get_run_chapter_trace(run_id, chapter_number)
-    chapter_scenes = db.list_run_scene_traces(run_id, chapter_number) if chapter else []
+    chapter_scenes = db.list_run_scene_traces(run_id, chapter_number)
+    pending_reviews = db.count_pending_scene_reviews(run_id, chapter_number)
     return {
         "scene": _build_scene_trace(run_id, scene),
         "review": review,
         "review_events": _build_review_events(db.list_scene_review_events(int(review["id"]))) if review else [],
         "patches": _build_patch_records(db.list_scene_patches(run_id, chapter_number, scene_number)),
         "publish_blockers": (
-            _compute_publish_blockers(
-                chapter,
-                chapter_scenes,
-                db.count_pending_scene_reviews(run_id, chapter_number),
-            )
+            _compute_publish_blockers(chapter, chapter_scenes, pending_reviews)
             if chapter
-            else PublishBlockers()
+            else _compute_scene_only_publish_blockers(chapter_scenes, pending_reviews)
         ),
     }
 

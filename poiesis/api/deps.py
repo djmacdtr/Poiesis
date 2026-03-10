@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import logging
+import sqlite3
 from functools import lru_cache
 from typing import Any
 
@@ -10,6 +12,8 @@ from fastapi import Cookie, Depends, HTTPException
 
 from poiesis.config import Config, load_config
 from poiesis.db.database import Database
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -27,7 +31,24 @@ def get_db() -> Database:
     """
     cfg = get_config()
     db = Database(cfg.database.path)
-    db.initialize_schema()
+    try:
+        db.initialize_schema()
+    except sqlite3.OperationalError as exc:
+        details = db.debug_info()
+        logger.exception(
+            "Database initialization failed: path=%s exists=%s parent_exists=%s cwd=%s",
+            details["db_path"],
+            details["exists"],
+            details["parent_exists"],
+            details["cwd"],
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "数据库不可用：无法打开 SQLite 文件。"
+                f" path={details['db_path']} exists={details['exists']}"
+            ),
+        ) from exc
     return db
 
 

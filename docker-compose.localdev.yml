@@ -15,19 +15,19 @@ services:
     image: ghcr.io/djmacdtr/poiesis-api:${POIESIS_IMAGE_TAG:-latest}
     working_dir: /app
     command:
-      - python
-      - -m
-      - uvicorn
-      - poiesis.api.main:app
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8000"
-      - --reload
-      - --reload-dir
-      - /app/poiesis
-      - --reload-dir
-      - /app/prompts
+      - sh
+      - -lc
+      - >-
+        mkdir -p /app/data &&
+        if [ ! -f /app/data/poiesis.db ] && [ -f /seed-data/poiesis.db ]; then
+          cp -a /seed-data/. /app/data/;
+        fi &&
+        exec python -m uvicorn poiesis.api.main:app
+        --host 0.0.0.0
+        --port 8000
+        --reload
+        --reload-dir /app/poiesis
+        --reload-dir /app/prompts
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -38,10 +38,15 @@ services:
       - POIESIS_SECRET_KEY=${POIESIS_SECRET_KEY:-}
       - POIESIS_ADMIN_USER=${POIESIS_ADMIN_USER:-admin}
       - POIESIS_ADMIN_PASS=${POIESIS_ADMIN_PASS:-admin}
-    volumes:
-      - ./:/app
+    volumes: !override
+      # localdev 使用 named volume 承载 SQLite，避免 Windows bind mount 抖动。
+      - localdev_app_data:/app/data
+      # 首次启动时从宿主机 data 导入现有数据库与任务状态。
+      - ./data:/seed-data:ro
       - ./docker/config.yaml:/app/config.yaml:ro
       - ./examples:/app/examples:ro
+      - ./poiesis:/app/poiesis
+      - ./prompts:/app/prompts
     ports:
       - "127.0.0.1:18000:8000"
 
@@ -56,12 +61,13 @@ services:
         npm run dev -- --host 0.0.0.0 --port 5173
     environment:
       - VITE_API_BASE_URL=http://127.0.0.1:18000
+      - VITE_API_PROXY_TARGET=http://api:8000
       - CHOKIDAR_USEPOLLING=true
       - WATCHPACK_POLLING=true
     volumes:
       - ./frontend:/app/frontend
       - frontend_node_modules:/app/frontend/node_modules
-    ports:
+    ports: !override
       - "127.0.0.1:5173:5173"
     depends_on:
       api:
@@ -69,3 +75,4 @@ services:
 
 volumes:
   frontend_node_modules:
+  localdev_app_data:

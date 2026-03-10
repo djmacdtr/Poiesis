@@ -10,7 +10,16 @@ from __future__ import annotations
 import base64
 import os
 
+from cryptography.fernet import InvalidToken
 from cryptography.fernet import Fernet
+
+
+_DEFAULT_SECRET_BYTES = b"poiesis-default-secret-key-00000"
+
+
+def _default_fernet() -> Fernet:
+    """Return the deterministic fallback key used in local development."""
+    return Fernet(base64.urlsafe_b64encode(_DEFAULT_SECRET_BYTES))
 
 
 def _get_fernet() -> Fernet:
@@ -36,8 +45,7 @@ def _get_fernet() -> Fernet:
         "POIESIS_SECRET_KEY 未设置，使用内置默认密钥。生产环境请务必配置该环境变量！",
         stacklevel=3,
     )
-    default_key = base64.urlsafe_b64encode(b"poiesis-default-secret-key-00000")
-    return Fernet(default_key)
+    return _default_fernet()
 
 
 def encrypt(plaintext: str) -> str:
@@ -66,4 +74,12 @@ def decrypt(ciphertext: str) -> str:
         cryptography.fernet.InvalidToken: 若密文无效或密钥不匹配。
     """
     fernet = _get_fernet()
-    return fernet.decrypt(ciphertext.encode()).decode()
+    token = ciphertext.encode()
+    try:
+        return fernet.decrypt(token).decode()
+    except InvalidToken:
+        # Backward compatibility for localdev data encrypted before a project-specific
+        # POIESIS_SECRET_KEY was introduced.
+        if os.environ.get("POIESIS_SECRET_KEY"):
+            return _default_fernet().decrypt(token).decode()
+        raise
