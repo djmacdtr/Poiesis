@@ -11,6 +11,8 @@ _STATUS_MAP: dict[str, str] = {
     "final": "completed",
     "flagged": "draft",
     "draft": "draft",
+    "needs_review": "needs_review",
+    "ready_to_publish": "ready_to_publish",
     "published": "published",
 }
 

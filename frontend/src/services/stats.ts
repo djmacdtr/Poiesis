@@ -17,11 +17,12 @@ export async function fetchDashboardStats(bookId: number = 1): Promise<Dashboard
 
   return {
     totalChapters: chapters.length,
-    completedChapters: chapters.filter((c) => c.status === 'completed' || c.status === 'published').length,
+    completedChapters: chapters.filter((c) => c.status === 'ready_to_publish' || c.status === 'published').length,
     totalWords: chapters.reduce((sum, c) => sum + c.word_count, 0),
     pendingReviewCount: reviews.items.filter((item) => item.status === 'pending').length,
     characterCount: canon.characters.length,
     activeLoopCount: loops.items.filter((item) => item.status !== 'resolved' && item.status !== 'dropped').length,
+    readyToPublishCount: chapters.filter((c) => c.status === 'ready_to_publish').length,
   }
 }
 

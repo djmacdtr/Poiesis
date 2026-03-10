@@ -90,6 +90,38 @@ class Database:
             "book_id",
             "INTEGER NOT NULL DEFAULT 1",
         )
+        self._ensure_column(conn, "scene_reviews", "resolved_scene_status", "TEXT DEFAULT ''")
+        self._ensure_column(conn, "scene_reviews", "result_summary", "TEXT DEFAULT ''")
+        self._ensure_column(conn, "scene_reviews", "closed_at", "TIMESTAMP")
+        self._ensure_column(conn, "scene_patches", "before_text", "TEXT DEFAULT ''")
+        self._ensure_column(conn, "scene_patches", "after_text", "TEXT DEFAULT ''")
+        self._ensure_column(
+            conn,
+            "scene_patches",
+            "verifier_issues_json",
+            "JSON DEFAULT '[]'",
+        )
+        self._ensure_column(
+            conn,
+            "scene_patches",
+            "applied_successfully",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scene_review_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                review_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL,
+                operator TEXT DEFAULT '',
+                input_payload_json JSON DEFAULT '{}',
+                result_payload_json JSON DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (review_id) REFERENCES scene_reviews(id)
+            )
+            """
+        )
 
         # Rebuild migrations replace tables in-place; temporarily disable FK checks
         # to avoid transient parent/child dependency failures during swap.
@@ -135,6 +167,12 @@ class Database:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_book_id ON runs(book_id)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_run_chapters_run_id ON run_chapters(run_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scene_reviews_run_scene ON scene_reviews(run_id, chapter_number, scene_number)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scene_review_events_review_id ON scene_review_events(review_id)"
         )
 
     def _ensure_default_book(self, conn: sqlite3.Connection) -> None:
@@ -1123,6 +1161,18 @@ class Database:
         result["llm_snapshot"] = json.loads(result.get("llm_snapshot") or "{}")
         return result
 
+    def get_run_trace(self, run_id: int) -> dict[str, Any] | None:
+        """按 run_id 读取单条 run trace。"""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["config_snapshot"] = json.loads(result.get("config_snapshot") or "{}")
+        result["llm_snapshot"] = json.loads(result.get("llm_snapshot") or "{}")
+        return result
+
     def upsert_run_chapter_trace(
         self,
         run_id: int,
@@ -1456,12 +1506,43 @@ class Database:
         """返回审阅队列。"""
         with self._cursor() as cur:
             if book_id is None:
-                cur.execute("SELECT * FROM scene_reviews ORDER BY created_at DESC, id DESC")
+                cur.execute(
+                    """
+                    SELECT
+                        sr.*,
+                        rs.status AS scene_status,
+                        COALESCE(event_stats.event_count, 0) AS event_count
+                    FROM scene_reviews sr
+                    LEFT JOIN run_scenes rs
+                        ON rs.run_id = sr.run_id
+                        AND rs.chapter_number = sr.chapter_number
+                        AND rs.scene_number = sr.scene_number
+                    LEFT JOIN (
+                        SELECT review_id, COUNT(*) AS event_count
+                        FROM scene_review_events
+                        GROUP BY review_id
+                    ) AS event_stats ON event_stats.review_id = sr.id
+                    ORDER BY sr.created_at DESC, sr.id DESC
+                    """
+                )
             else:
                 cur.execute(
                     """
-                    SELECT sr.* FROM scene_reviews sr
+                    SELECT
+                        sr.*,
+                        rs.status AS scene_status,
+                        COALESCE(event_stats.event_count, 0) AS event_count
+                    FROM scene_reviews sr
                     JOIN runs r ON r.id = sr.run_id
+                    LEFT JOIN run_scenes rs
+                        ON rs.run_id = sr.run_id
+                        AND rs.chapter_number = sr.chapter_number
+                        AND rs.scene_number = sr.scene_number
+                    LEFT JOIN (
+                        SELECT review_id, COUNT(*) AS event_count
+                        FROM scene_review_events
+                        GROUP BY review_id
+                    ) AS event_stats ON event_stats.review_id = sr.id
                     WHERE r.book_id = ?
                     ORDER BY sr.created_at DESC, sr.id DESC
                     """,
@@ -1473,7 +1554,58 @@ class Database:
     def get_scene_review(self, review_id: int) -> dict[str, Any] | None:
         """读取单条审阅记录。"""
         with self._cursor() as cur:
-            cur.execute("SELECT * FROM scene_reviews WHERE id = ?", (review_id,))
+            cur.execute(
+                """
+                SELECT
+                    sr.*,
+                    rs.status AS scene_status,
+                    COALESCE(event_stats.event_count, 0) AS event_count
+                FROM scene_reviews sr
+                LEFT JOIN run_scenes rs
+                    ON rs.run_id = sr.run_id
+                    AND rs.chapter_number = sr.chapter_number
+                    AND rs.scene_number = sr.scene_number
+                LEFT JOIN (
+                    SELECT review_id, COUNT(*) AS event_count
+                    FROM scene_review_events
+                    GROUP BY review_id
+                ) AS event_stats ON event_stats.review_id = sr.id
+                WHERE sr.id = ?
+                """,
+                (review_id,),
+            )
+            row = cur.fetchone()
+        return dict(row) if row else None
+
+    def get_scene_review_by_scene(
+        self,
+        run_id: int,
+        chapter_number: int,
+        scene_number: int,
+        status: str | None = None,
+    ) -> dict[str, Any] | None:
+        """按 scene 定位对应 review，可选过滤状态。"""
+        with self._cursor() as cur:
+            if status is None:
+                cur.execute(
+                    """
+                    SELECT * FROM scene_reviews
+                    WHERE run_id = ? AND chapter_number = ? AND scene_number = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (run_id, chapter_number, scene_number),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT * FROM scene_reviews
+                    WHERE run_id = ? AND chapter_number = ? AND scene_number = ? AND status = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (run_id, chapter_number, scene_number, status),
+                )
             row = cur.fetchone()
         return dict(row) if row else None
 
@@ -1483,28 +1615,140 @@ class Database:
         action: str,
         status: str,
         patch_text: str | None = None,
+        reason: str | None = None,
+        result_summary: str | None = None,
+        resolved_scene_status: str | None = None,
+        close_review: bool = False,
     ) -> dict[str, Any] | None:
         """更新审阅动作。"""
         with self._cursor() as cur:
             cur.execute(
                 """
                 UPDATE scene_reviews
-                SET action = ?, status = ?, patch_text = COALESCE(?, patch_text), updated_at = CURRENT_TIMESTAMP
+                SET
+                    action = ?,
+                    status = ?,
+                    reason = COALESCE(?, reason),
+                    patch_text = COALESCE(?, patch_text),
+                    result_summary = COALESCE(?, result_summary),
+                    resolved_scene_status = COALESCE(?, resolved_scene_status),
+                    closed_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE closed_at END,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (action, status, patch_text, review_id),
+                (
+                    action,
+                    status,
+                    reason,
+                    patch_text,
+                    result_summary,
+                    resolved_scene_status,
+                    int(close_review),
+                    review_id,
+                ),
             )
         return self.get_scene_review(review_id)
 
-    def add_scene_patch(self, run_id: int, chapter_number: int, scene_number: int, patch_text: str) -> int:
+    def close_scene_review(
+        self,
+        review_id: int,
+        action: str,
+        status: str,
+        resolved_scene_status: str,
+        result_summary: str,
+        patch_text: str | None = None,
+    ) -> dict[str, Any] | None:
+        """关闭一条 review。"""
+        return self.update_scene_review(
+            review_id=review_id,
+            action=action,
+            status=status,
+            patch_text=patch_text,
+            result_summary=result_summary,
+            resolved_scene_status=resolved_scene_status,
+            close_review=True,
+        )
+
+    def add_scene_review_event(
+        self,
+        review_id: int,
+        action: str,
+        status: str,
+        operator: str,
+        input_payload: dict[str, Any],
+        result_payload: dict[str, Any],
+    ) -> int:
+        """记录一次 review 动作。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO scene_review_events (
+                    review_id, action, status, operator, input_payload_json, result_payload_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    review_id,
+                    action,
+                    status,
+                    operator,
+                    json.dumps(input_payload),
+                    json.dumps(result_payload),
+                ),
+            )
+            return cur.lastrowid or 0
+
+    def list_scene_review_events(self, review_id: int) -> list[dict[str, Any]]:
+        """读取某条 review 的动作历史。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM scene_review_events
+                WHERE review_id = ?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (review_id,),
+            )
+            rows = cur.fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["input_payload_json"] = json.loads(item.get("input_payload_json") or "{}")
+            item["result_payload_json"] = json.loads(item.get("result_payload_json") or "{}")
+            result.append(item)
+        return result
+
+    def add_scene_patch(
+        self,
+        run_id: int,
+        chapter_number: int,
+        scene_number: int,
+        patch_text: str,
+        before_text: str = "",
+        after_text: str = "",
+        verifier_issues: list[dict[str, Any]] | None = None,
+        applied_successfully: bool = False,
+    ) -> int:
         """记录 patch 文本。"""
         with self._cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO scene_patches (run_id, chapter_number, scene_number, patch_text)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO scene_patches (
+                    run_id, chapter_number, scene_number, patch_text, before_text,
+                    after_text, verifier_issues_json, applied_successfully
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (run_id, chapter_number, scene_number, patch_text),
+                (
+                    run_id,
+                    chapter_number,
+                    scene_number,
+                    patch_text,
+                    before_text,
+                    after_text,
+                    json.dumps(verifier_issues or []),
+                    int(applied_successfully),
+                ),
             )
             return cur.lastrowid or 0
 
@@ -1520,7 +1764,37 @@ class Database:
                 (run_id, chapter_number, scene_number),
             )
             rows = cur.fetchall()
-        return [dict(row) for row in rows]
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["verifier_issues_json"] = json.loads(item.get("verifier_issues_json") or "[]")
+            item["applied_successfully"] = bool(item.get("applied_successfully"))
+            result.append(item)
+        return result
+
+    def count_pending_scene_reviews(
+        self,
+        run_id: int,
+        chapter_number: int | None = None,
+    ) -> int:
+        """统计待处理 review 数量。"""
+        with self._cursor() as cur:
+            if chapter_number is None:
+                cur.execute(
+                    "SELECT COUNT(*) AS cnt FROM scene_reviews WHERE run_id = ? AND status = 'pending'",
+                    (run_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS cnt
+                    FROM scene_reviews
+                    WHERE run_id = ? AND chapter_number = ? AND status = 'pending'
+                    """,
+                    (run_id, chapter_number),
+                )
+            row = cur.fetchone()
+        return int(row["cnt"]) if row else 0
 
     def upsert_chapter_output(self, book_id: int, payload: dict[str, Any]) -> int:
         """保存最终章节输出。"""
@@ -1569,6 +1843,24 @@ class Database:
         item = dict(row)
         item["summary_json"] = json.loads(item.get("summary_json") or "{}")
         return item
+
+    def update_chapter_output_status(
+        self,
+        book_id: int,
+        chapter_number: int,
+        status: str,
+    ) -> dict[str, Any] | None:
+        """只更新章节输出状态。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                UPDATE chapter_outputs
+                SET status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE book_id = ? AND chapter_number = ?
+                """,
+                (status, book_id, chapter_number),
+            )
+        return self.get_chapter_output(book_id, chapter_number)
 
     def list_chapter_outputs(self, book_id: int) -> list[dict[str, Any]]:
         """列出最终章节输出，供 runs/chapters 页面消费。"""

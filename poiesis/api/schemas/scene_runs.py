@@ -10,8 +10,11 @@ from poiesis.application.scene_contracts import (
     ChapterOutput,
     ChapterTrace,
     LoopState,
+    PublishBlockers,
+    ReviewEvent,
     ReviewQueueItem,
     RunSummary,
+    ScenePatchRecord,
     SceneTrace,
 )
 
@@ -43,13 +46,17 @@ class ChapterDetailResponse(BaseModel):
 
     trace: ChapterTrace
     output: ChapterOutput | None = None
+    publish: PublishBlockers = Field(default_factory=PublishBlockers)
 
 
 class SceneDetailResponse(BaseModel):
     """scene 详情。"""
 
     scene: SceneTrace
-    patches: list[dict[str, Any]] = Field(default_factory=list)
+    review: ReviewQueueItem | None = None
+    review_events: list[ReviewEvent] = Field(default_factory=list)
+    patches: list[ScenePatchRecord] = Field(default_factory=list)
+    publish_blockers: PublishBlockers = Field(default_factory=PublishBlockers)
 
 
 class ReviewListResponse(BaseModel):

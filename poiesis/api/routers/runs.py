@@ -16,6 +16,7 @@ from poiesis.api.schemas.scene_runs import (
     StartRunResponse,
 )
 from poiesis.api.services import scene_run_service
+from poiesis.application.scene_contracts import ChapterOutput
 from poiesis.db.database import Database
 
 router = APIRouter(prefix="/api/runs", tags=["Scene Runs"])
@@ -71,3 +72,18 @@ def get_scene_detail(
     if payload is None:
         raise HTTPException(status_code=404, detail="scene 不存在")
     return SceneDetailResponse(**payload)
+
+
+@router.post("/{run_id}/chapters/{chapter_number}/publish", response_model=ChapterOutput)
+def publish_chapter(
+    run_id: int,
+    chapter_number: int,
+    db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
+) -> ChapterOutput:
+    """人工确认发布章节。"""
+    try:
+        output = scene_run_service.publish_chapter(db, _config_path(), run_id, chapter_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return output

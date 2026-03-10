@@ -120,6 +120,12 @@ export default function Dashboard() {
           value={stats?.activeLoopCount ?? 0}
           icon={<Orbit className="w-5 h-5" />}
         />
+        <StatCard
+          title="可发布章节"
+          value={stats?.readyToPublishCount ?? 0}
+          description="已完成审阅，可手动发布"
+          icon={<BookOpen className="w-5 h-5" />}
+        />
       </div>
 
       {/* 字数趋势图 */}

@@ -3,6 +3,7 @@
  */
 import { get, post } from './http'
 import type {
+  ChapterOutput,
   ChapterDetailResponse,
   LoopState,
   ReviewQueueItem,
@@ -59,6 +60,11 @@ export function retryReview(reviewId: number): Promise<ReviewQueueItem> {
 /** 提交 patch */
 export function patchReview(reviewId: number, patchText: string): Promise<ReviewQueueItem> {
   return post<ReviewQueueItem>(`/api/reviews/${reviewId}/patch`, { patch_text: patchText })
+}
+
+/** 人工确认发布章节 */
+export function publishChapter(runId: number, chapterNumber: number): Promise<ChapterOutput> {
+  return post<ChapterOutput>(`/api/runs/${runId}/chapters/${chapterNumber}/publish`, {})
 }
 
 /** 获取 loop board */

@@ -228,9 +228,24 @@ CREATE TABLE IF NOT EXISTS scene_reviews (
     status TEXT NOT NULL DEFAULT 'pending',
     reason TEXT DEFAULT '',
     patch_text TEXT DEFAULT '',
+    resolved_scene_status TEXT DEFAULT '',
+    result_summary TEXT DEFAULT '',
+    closed_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (run_id) REFERENCES runs(id)
+);
+
+CREATE TABLE IF NOT EXISTS scene_review_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL,
+    operator TEXT DEFAULT '',
+    input_payload_json JSON DEFAULT '{}',
+    result_payload_json JSON DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (review_id) REFERENCES scene_reviews(id)
 );
 
 CREATE TABLE IF NOT EXISTS scene_patches (
@@ -239,6 +254,10 @@ CREATE TABLE IF NOT EXISTS scene_patches (
     chapter_number INTEGER NOT NULL,
     scene_number INTEGER NOT NULL,
     patch_text TEXT NOT NULL,
+    before_text TEXT DEFAULT '',
+    after_text TEXT DEFAULT '',
+    verifier_issues_json JSON DEFAULT '[]',
+    applied_successfully INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (run_id) REFERENCES runs(id)
 );

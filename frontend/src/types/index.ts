@@ -8,7 +8,7 @@
 // ──────────────────────────────────────────────
 
 /** 章节状态 */
-export type ChapterStatus = 'draft' | 'completed' | 'published'
+export type ChapterStatus = 'draft' | 'completed' | 'needs_review' | 'ready_to_publish' | 'published'
 
 /** 章节列表项（轻量版，不含正文） */
 export interface ChapterSummaryItem {
@@ -238,17 +238,53 @@ export interface SceneRunDetail {
     summary: Record<string, unknown>
     metrics: Record<string, unknown>
     review_required: boolean
+    can_publish: boolean
+    blockers: string[]
   }>
+}
+
+export interface PublishBlockers {
+  chapter_status: 'draft' | 'needs_review' | 'ready_to_publish' | 'published'
+  can_publish: boolean
+  blockers: string[]
 }
 
 export interface ChapterDetailResponse {
   trace: ChapterTraceDetail
   output?: ChapterOutput | null
+  publish: PublishBlockers
+}
+
+export interface ReviewEvent {
+  id: number
+  review_id: number
+  action: 'approve' | 'retry' | 'rewrite' | 'patch' | 'reject'
+  status: 'succeeded' | 'failed'
+  operator: string
+  input_payload: Record<string, unknown>
+  result_payload: Record<string, unknown>
+  created_at: string
+}
+
+export interface ScenePatchRecord {
+  id: number
+  run_id: number
+  chapter_number: number
+  scene_number: number
+  patch_text: string
+  before_text: string
+  after_text: string
+  verifier_issues: SceneIssue[]
+  applied_successfully: boolean
+  created_at: string
 }
 
 export interface SceneDetailResponse {
   scene: SceneTrace
-  patches: Array<Record<string, unknown>>
+  review?: ReviewQueueItem | null
+  review_events: ReviewEvent[]
+  patches: ScenePatchRecord[]
+  publish_blockers: PublishBlockers
 }
 
 export interface ReviewQueueItem {
@@ -260,6 +296,12 @@ export interface ReviewQueueItem {
   status: string
   reason: string
   patch_text: string
+  scene_status: string
+  latest_result_summary: string
+  event_count: number
+  resolved_scene_status: string
+  result_summary: string
+  closed_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -319,6 +361,8 @@ export interface DashboardStats {
   characterCount: number
   /** 活跃 loop 数 */
   activeLoopCount: number
+  /** 可发布章节数 */
+  readyToPublishCount: number
 }
 
 /** 字数趋势数据点 */

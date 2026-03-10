@@ -18,6 +18,7 @@ from poiesis.application.scene_contracts import (
     ChapterPlan,
     ChapterTrace,
     LoopState,
+    PublishBlockers,
     ReviewQueueItem,
     RunSummary,
     SceneTrace,
@@ -25,8 +26,10 @@ from poiesis.application.scene_contracts import (
 )
 from poiesis.application.use_cases import (
     ApplyPatchUseCase,
+    ApproveSceneReviewUseCase,
     GenerateChapterUseCase,
     PublishChapterUseCase,
+    RetrySceneUseCase,
     ReviewSceneUseCase,
     SceneGenerationContext,
 )
@@ -176,15 +179,14 @@ def seed_world(
     world.load_from_db(db, book_id=book_id)
 
 
-def _build_context(
+def _build_context_from_db(
     config_path: str,
+    db: Database,
     book_id: int,
     auto_seed: bool = True,
 ) -> tuple[SceneGenerationContext, Config, dict[str, Any]]:
-    """构建新架构所需的显式依赖。"""
+    """基于已有数据库连接构建运行上下文。"""
     cfg = load_config(config_path)
-    db = Database(cfg.database.path)
-    db.initialize_schema()
     _apply_model_overrides(cfg, db)
     book = db.get_book(book_id)
     if book is None:
@@ -237,6 +239,29 @@ def _build_context(
     return context, cfg, book
 
 
+def _build_context(
+    config_path: str,
+    book_id: int,
+    auto_seed: bool = True,
+) -> tuple[SceneGenerationContext, Config, dict[str, Any]]:
+    """构建新架构所需的显式依赖。"""
+    db = Database(load_config(config_path).database.path)
+    db.initialize_schema()
+    return _build_context_from_db(config_path, db, book_id, auto_seed=auto_seed)
+
+
+def _chapter_publish_blockers(chapter_row: dict[str, Any]) -> PublishBlockers:
+    """把 run_chapters 中的 merge_result 反序列化成正式门禁结构。"""
+    merge_result = chapter_row.get("merge_result_json") or {}
+    return PublishBlockers.model_validate(
+        {
+            "chapter_status": chapter_row.get("status") or "draft",
+            "can_publish": bool(merge_result.get("can_publish")),
+            "blockers": list(merge_result.get("blockers") or []),
+        }
+    )
+
+
 def _build_scene_trace(run_id: int, scene_row: dict[str, Any]) -> SceneTrace:
     """把数据库记录映射为正式 SceneTrace。"""
     return SceneTrace.model_validate(
@@ -252,7 +277,7 @@ def _build_scene_trace(run_id: int, scene_row: dict[str, Any]) -> SceneTrace:
             "verifier_issues": scene_row.get("verifier_issues_json") or [],
             "review_required": bool(scene_row.get("review_required")),
             "review_reason": str(scene_row.get("review_reason") or ""),
-            "review_status": str(scene_row.get("review_status") or "auto_approved"),
+            "review_status": str(scene_row.get("review_status") or "completed"),
             "metrics": scene_row.get("metrics_json") or {},
             "error_message": scene_row.get("error_message"),
         }
@@ -262,17 +287,26 @@ def _build_scene_trace(run_id: int, scene_row: dict[str, Any]) -> SceneTrace:
 def _build_chapter_trace(run_id: int, row: dict[str, Any], scenes: list[dict[str, Any]]) -> ChapterTrace:
     """把数据库记录映射为正式 ChapterTrace。"""
     planner_output = row.get("planner_output_json") or {}
+    story_plan = StoryPlan.model_validate(
+        {
+            "book_id": 1,
+            **dict((row.get("retrieval_pack_json") or {}).get("story_plan") or {}),
+        }
+    )
     return ChapterTrace(
         run_id=run_id,
         chapter_number=int(row["chapter_number"]),
         status=str(row["status"]),
-        story_plan=StoryPlan(book_id=1),
+        story_plan=story_plan,
         chapter_plan=ChapterPlan(
             chapter_number=int(row["chapter_number"]),
             title=str(planner_output.get("title") or ""),
             goal=str(planner_output.get("goal") or planner_output.get("chapter_goal") or ""),
+            hook=str(planner_output.get("hook") or ""),
             must_preserve=list(planner_output.get("must_preserve") or []),
             must_progress_loops=list(planner_output.get("must_progress_loops") or []),
+            scene_count_target=int(planner_output.get("scene_count_target") or 3),
+            notes=list(planner_output.get("notes") or []),
             source_plan=dict(planner_output),
         ),
         scenes=[_build_scene_trace(run_id, scene) for scene in scenes],
@@ -282,6 +316,42 @@ def _build_chapter_trace(run_id: int, row: dict[str, Any], scenes: list[dict[str
         review_required=bool((row.get("merge_result_json") or {}).get("review_required")),
         error_message=row.get("error_message"),
     )
+
+
+def _build_review_events(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把数据库 review 事件行映射成 API 响应结构。"""
+    return [
+        {
+            "id": int(item["id"]),
+            "review_id": int(item["review_id"]),
+            "action": str(item["action"]),
+            "status": str(item["status"]),
+            "operator": str(item.get("operator") or ""),
+            "input_payload": item.get("input_payload_json") or {},
+            "result_payload": item.get("result_payload_json") or {},
+            "created_at": str(item.get("created_at") or ""),
+        }
+        for item in rows
+    ]
+
+
+def _build_patch_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把 patch 留痕映射成正式响应结构。"""
+    return [
+        {
+            "id": int(item["id"]),
+            "run_id": int(item["run_id"]),
+            "chapter_number": int(item["chapter_number"]),
+            "scene_number": int(item["scene_number"]),
+            "patch_text": str(item.get("patch_text") or ""),
+            "before_text": str(item.get("before_text") or ""),
+            "after_text": str(item.get("after_text") or ""),
+            "verifier_issues": item.get("verifier_issues_json") or [],
+            "applied_successfully": bool(item.get("applied_successfully")),
+            "created_at": str(item.get("created_at") or ""),
+        }
+        for item in rows
+    ]
 
 
 def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int, book_id: int) -> None:
@@ -299,7 +369,6 @@ def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int, boo
             llm_snapshot={"writer": cfg.llm.model, "planner": cfg.planner_llm.model},
         )
         generator = GenerateChapterUseCase(context)
-        publisher = PublishChapterUseCase(context.db, context.world, book_id)
 
         existing = context.db.list_chapter_outputs(book_id)
         start_chapter = len(existing) + 1
@@ -309,28 +378,7 @@ def _run_in_background(task: TaskInfo, config_path: str, chapter_count: int, boo
         for i, chapter_number in enumerate(range(start_chapter, end_chapter + 1), start=1):
             task.current_chapter = i - 1
             task.add_log(f"第 {chapter_number} 章：开始规划和 scene 生成…")
-            chapter_trace, chapter_output = generator.execute(run_id=run_id, chapter_number=chapter_number)
-            context.db.upsert_run_chapter_trace(
-                run_id=run_id,
-                chapter_number=chapter_number,
-                status=chapter_trace.status,
-                planner_output=chapter_trace.chapter_plan.model_dump(mode="json"),
-                retrieval_pack={"story_plan": chapter_trace.story_plan.model_dump(mode="json")},
-                draft_text="",
-                final_content=chapter_trace.assembled_text,
-                changeset={"scene_count": len(chapter_trace.scenes)},
-                verifier_issues=[
-                    issue.model_dump(mode="json")
-                    for scene in chapter_trace.scenes
-                    for issue in scene.verifier_issues
-                ],
-                editor_rewrites=[],
-                merge_result={"review_required": chapter_trace.review_required},
-                summary_result=chapter_trace.summary,
-                metrics=chapter_trace.metrics,
-                error_message=chapter_trace.error_message,
-            )
-            publisher.execute(chapter_output, chapter_trace)
+            chapter_trace, _chapter_output = generator.execute(run_id=run_id, chapter_number=chapter_number)
             task.current_chapter = i
             task.add_log(f"第 {chapter_number} 章完成，包含 {len(chapter_trace.scenes)} 个 scene。")
 
@@ -385,35 +433,13 @@ def run_sync(
             llm_snapshot={"writer": cfg.llm.model, "planner": cfg.planner_llm.model},
         )
         generator = GenerateChapterUseCase(context)
-        publisher = PublishChapterUseCase(context.db, context.world, book_id)
         existing = context.db.list_chapter_outputs(book_id)
         start_chapter = len(existing) + 1
 
         for offset in range(chapter_count):
             chapter_number = start_chapter + offset
             logger(f"开始生成第 {chapter_number} 章（Scene 模式）")
-            chapter_trace, chapter_output = generator.execute(run_id=run_id, chapter_number=chapter_number)
-            context.db.upsert_run_chapter_trace(
-                run_id=run_id,
-                chapter_number=chapter_number,
-                status=chapter_trace.status,
-                planner_output=chapter_trace.chapter_plan.model_dump(mode="json"),
-                retrieval_pack={"story_plan": chapter_trace.story_plan.model_dump(mode="json")},
-                draft_text="",
-                final_content=chapter_trace.assembled_text,
-                changeset={"scene_count": len(chapter_trace.scenes)},
-                verifier_issues=[
-                    issue.model_dump(mode="json")
-                    for scene in chapter_trace.scenes
-                    for issue in scene.verifier_issues
-                ],
-                editor_rewrites=[],
-                merge_result={"review_required": chapter_trace.review_required},
-                summary_result=chapter_trace.summary,
-                metrics=chapter_trace.metrics,
-                error_message=chapter_trace.error_message,
-            )
-            publisher.execute(chapter_output, chapter_trace)
+            chapter_trace, _chapter_output = generator.execute(run_id=run_id, chapter_number=chapter_number)
             logger(f"第 {chapter_number} 章完成，包含 {len(chapter_trace.scenes)} 个 scene")
 
         context.db.update_run_trace_status(run_id, "completed", finished=True)
@@ -454,12 +480,9 @@ def list_runs(db: Database) -> list[RunSummary]:
 
 def get_run_detail(db: Database, run_id: int) -> dict[str, Any] | None:
     """读取 run 详情。"""
-    with db._cursor() as cur:  # noqa: SLF001
-        cur.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
-        run = cur.fetchone()
-    if run is None:
+    run_item = db.get_run_trace(run_id)
+    if run_item is None:
         return None
-    run_item = dict(run)
     chapters = db.list_run_chapter_traces(run_id)
     return {
         "run": RunSummary(
@@ -480,6 +503,8 @@ def get_run_detail(db: Database, run_id: int) -> dict[str, Any] | None:
                 "summary": item.get("summary_json") or {},
                 "metrics": item.get("metrics_json") or {},
                 "review_required": bool((item.get("merge_result_json") or {}).get("review_required")),
+                "can_publish": bool((item.get("merge_result_json") or {}).get("can_publish")),
+                "blockers": list((item.get("merge_result_json") or {}).get("blockers") or []),
             }
             for item in chapters
         ],
@@ -507,7 +532,11 @@ def get_chapter_detail(db: Database, run_id: int, chapter_number: int) -> dict[s
                 "status": output_row["status"],
             }
         )
-    return {"trace": trace, "output": output}
+    return {
+        "trace": trace,
+        "output": output,
+        "publish": _chapter_publish_blockers(row),
+    }
 
 
 def get_scene_detail(db: Database, run_id: int, chapter_number: int, scene_number: int) -> dict[str, Any] | None:
@@ -515,9 +544,14 @@ def get_scene_detail(db: Database, run_id: int, chapter_number: int, scene_numbe
     scene = db.get_run_scene_trace(run_id, chapter_number, scene_number)
     if scene is None:
         return None
+    review = db.get_scene_review_by_scene(run_id, chapter_number, scene_number)
+    chapter = db.get_run_chapter_trace(run_id, chapter_number)
     return {
         "scene": _build_scene_trace(run_id, scene),
-        "patches": db.list_scene_patches(run_id, chapter_number, scene_number),
+        "review": review,
+        "review_events": _build_review_events(db.list_scene_review_events(int(review["id"]))) if review else [],
+        "patches": _build_patch_records(db.list_scene_patches(run_id, chapter_number, scene_number)),
+        "publish_blockers": _chapter_publish_blockers(chapter) if chapter else PublishBlockers(),
     }
 
 
@@ -526,11 +560,43 @@ def list_review_queue(db: Database, book_id: int = 1) -> list[ReviewQueueItem]:
     return ReviewSceneUseCase(db).list_pending(book_id)
 
 
-def review_action(db: Database, review_id: int, action: str, patch_text: str = "") -> ReviewQueueItem | None:
+def review_action(
+    db: Database,
+    config_path: str,
+    review_id: int,
+    action: str,
+    patch_text: str = "",
+    operator: str = "admin",
+) -> ReviewQueueItem | None:
     """执行审阅动作。"""
+    review = db.get_scene_review(review_id)
+    if review is None:
+        return None
+    run = db.get_run_trace(int(review["run_id"]))
+    if run is None:
+        return None
+    context, _cfg, _book = _build_context_from_db(config_path, db, int(run["book_id"]))
+    if action == "approve":
+        return ApproveSceneReviewUseCase(context).execute(review_id, operator)
+    if action == "retry":
+        return RetrySceneUseCase(context).execute(review_id, operator)
     if action == "patch":
-        return ApplyPatchUseCase(db).execute(review_id, patch_text)
-    return ReviewSceneUseCase(db).update_action(review_id, action)
+        return ApplyPatchUseCase(context).execute(review_id, patch_text, operator)
+    raise ValueError(f"不支持的 review 动作：{action}")
+
+
+def publish_chapter(
+    db: Database,
+    config_path: str,
+    run_id: int,
+    chapter_number: int,
+) -> ChapterOutput:
+    """人工确认发布章节。"""
+    run = db.get_run_trace(run_id)
+    if run is None:
+        raise ValueError("run 不存在")
+    context, _cfg, _book = _build_context_from_db(config_path, db, int(run["book_id"]))
+    return PublishChapterUseCase(context).execute(run_id, chapter_number)
 
 
 def list_loops(db: Database, book_id: int = 1) -> list[LoopState]:

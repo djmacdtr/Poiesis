@@ -6,14 +6,20 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from poiesis.application.scene_contracts import (
+    ChangeSet,
     ChapterOutput,
     ChapterPlan,
+    ChapterStatus,
     ChapterTrace,
     LoopState,
     LoopStatus,
+    PublishBlockers,
     ReviewQueueItem,
+    SceneDraft,
+    ScenePlan,
     SceneTrace,
     StoryPlan,
+    VerifierIssue,
 )
 from poiesis.db.database import Database
 from poiesis.domain.world.model import WorldModel
@@ -46,58 +52,117 @@ class SceneGenerationContext:
     book_id: int
 
 
+def _fatal_issues(issues: list[VerifierIssue]) -> list[VerifierIssue]:
+    """筛出 fatal 问题，供重写与门禁判断复用。"""
+    return [issue for issue in issues if issue.severity == "fatal"]
+
+
+def _issue_summary(issues: list[VerifierIssue]) -> str:
+    """把问题列表压缩成可显示的简短摘要。"""
+    if not issues:
+        return "当前场景已通过校验。"
+    fatal = _fatal_issues(issues)
+    if fatal:
+        return "；".join(issue.reason for issue in fatal)
+    return "；".join(issue.reason for issue in issues[:3])
+
+
+def _build_scene_trace_from_row(run_id: int, row: dict[str, Any]) -> SceneTrace:
+    """把数据库 run_scenes 行转换成正式 SceneTrace。"""
+    return SceneTrace.model_validate(
+        {
+            "run_id": run_id,
+            "chapter_number": int(row["chapter_number"]),
+            "scene_number": int(row["scene_number"]),
+            "status": str(row.get("status") or "pending"),
+            "scene_plan": row.get("scene_plan_json") or {},
+            "draft": row.get("draft_json") or None,
+            "final_text": str(row.get("final_text") or ""),
+            "changeset": ChangeSet.model_validate(row.get("changeset_json") or {}),
+            "verifier_issues": row.get("verifier_issues_json") or [],
+            "review_required": bool(row.get("review_required")),
+            "review_reason": str(row.get("review_reason") or ""),
+            "review_status": str(row.get("review_status") or "auto_approved"),
+            "metrics": row.get("metrics_json") or {},
+            "error_message": row.get("error_message"),
+        }
+    )
+
+
+def _build_story_plan(book_id: int, payload: dict[str, Any]) -> StoryPlan:
+    """统一 story plan 的默认值，避免历史记录字段缺失。"""
+    merged = {
+        "book_id": book_id,
+        "focus": "",
+        "active_themes": [],
+        "active_loops": [],
+        "narrative_pressure": "",
+        **payload,
+    }
+    return StoryPlan.model_validate(merged)
+
+
+def _build_chapter_plan(chapter_number: int, payload: dict[str, Any]) -> ChapterPlan:
+    """统一 chapter plan 的默认值。"""
+    merged = {
+        "chapter_number": chapter_number,
+        "title": "",
+        "goal": "",
+        "hook": "",
+        "must_preserve": [],
+        "must_progress_loops": [],
+        "scene_count_target": 3,
+        "notes": [],
+        "source_plan": {},
+        **payload,
+    }
+    return ChapterPlan.model_validate(merged)
+
+
 class GenerateSceneUseCase:
-    """生成单个 scene。"""
+    """生成、重试与人工修补单个 scene。"""
 
     def __init__(self, context: SceneGenerationContext) -> None:
         self._context = context
 
-    def execute(self, run_id: int, chapter_plan: ChapterPlan, scene_plan: Any) -> SceneTrace:
-        """生成、抽取、审校并必要时进入 review。"""
-        draft = self._context.scene_writer.write(
-            scene_plan=scene_plan,
-            chapter_plan=chapter_plan,
-            world=self._context.world,
-            llm=self._context.writer_llm,
-        )
+    def _verify(
+        self,
+        scene_plan: ScenePlan,
+        chapter_plan: ChapterPlan,
+        content: str,
+    ) -> tuple[ChangeSet, list[VerifierIssue]]:
+        """统一执行抽取与校验，保证 retry/patch 走同一套逻辑。"""
         changeset = self._context.scene_extractor.extract(
             scene_plan=scene_plan,
-            content=draft.content,
+            content=content,
             world=self._context.world,
             llm=self._context.planner_llm,
         )
         issues = self._context.scene_verifier.verify(
             scene_plan=scene_plan,
-            content=draft.content,
+            content=content,
             chapter_plan=chapter_plan.model_dump(mode="json"),
             world=self._context.world,
             changeset=changeset,
             llm=self._context.planner_llm,
         )
-        final_text = draft.content
-        fatal_issues = [issue.reason for issue in issues if issue.severity == "fatal"]
-        if fatal_issues:
-            final_text = self._context.scene_editor.rewrite(
-                scene_plan=scene_plan,
-                chapter_plan=chapter_plan,
-                content=final_text,
-                issues=fatal_issues,
-                world=self._context.world,
-                llm=self._context.writer_llm,
-            )
-            issues = self._context.scene_verifier.verify(
-                scene_plan=scene_plan,
-                content=final_text,
-                chapter_plan=chapter_plan.model_dump(mode="json"),
-                world=self._context.world,
-                changeset=changeset,
-                llm=self._context.planner_llm,
-            )
+        return changeset, issues
 
-        review_required = len([issue for issue in issues if issue.severity == "fatal"]) > 0
+    def _to_trace(
+        self,
+        run_id: int,
+        scene_plan: ScenePlan,
+        draft: SceneDraft | None,
+        final_text: str,
+        changeset: ChangeSet,
+        issues: list[VerifierIssue],
+        error_message: str | None = None,
+    ) -> SceneTrace:
+        """把运行结果收口为统一的 SceneTrace。"""
+        review_required = len(_fatal_issues(issues)) > 0
         return SceneTrace(
             run_id=run_id,
-            chapter_number=chapter_plan.chapter_number,
+            chapter_number=scene_plan.chapter_number,
             scene_number=scene_plan.scene_number,
             status="needs_review" if review_required else "completed",
             scene_plan=scene_plan,
@@ -106,13 +171,70 @@ class GenerateSceneUseCase:
             changeset=changeset,
             verifier_issues=issues,
             review_required=review_required,
-            review_reason="; ".join(issue.reason for issue in issues if issue.severity == "fatal"),
-            review_status="pending" if review_required else "auto_approved",
+            review_reason=_issue_summary(issues) if review_required else "",
+            review_status="pending" if review_required else "completed",
             metrics={
                 "issue_count": len(issues),
-                "fatal_count": len([issue for issue in issues if issue.severity == "fatal"]),
+                "fatal_count": len(_fatal_issues(issues)),
                 "change_count": len(changeset.raw_changes),
             },
+            error_message=error_message,
+        )
+
+    def execute(self, run_id: int, chapter_plan: ChapterPlan, scene_plan: ScenePlan) -> SceneTrace:
+        """首次生成 scene。"""
+        draft = self._context.scene_writer.write(
+            scene_plan=scene_plan,
+            chapter_plan=chapter_plan,
+            world=self._context.world,
+            llm=self._context.writer_llm,
+        )
+        changeset, issues = self._verify(scene_plan, chapter_plan, draft.content)
+        final_text = draft.content
+        fatal_issues = _fatal_issues(issues)
+        if fatal_issues:
+            final_text = self._context.scene_editor.rewrite(
+                scene_plan=scene_plan,
+                chapter_plan=chapter_plan,
+                content=final_text,
+                issues=[issue.reason for issue in fatal_issues],
+                world=self._context.world,
+                llm=self._context.writer_llm,
+            )
+            changeset, issues = self._verify(scene_plan, chapter_plan, final_text)
+
+        return self._to_trace(run_id, scene_plan, draft, final_text, changeset, issues)
+
+    def apply_patch(
+        self,
+        run_id: int,
+        chapter_plan: ChapterPlan,
+        scene_trace: SceneTrace,
+        patch_text: str,
+    ) -> SceneTrace:
+        """把人工 patch 作为修补指令应用到当前 scene。"""
+        patch_guidance = patch_text.strip()
+        if not patch_guidance:
+            raise ValueError("patch 文本不能为空")
+
+        issues = [issue.reason for issue in _fatal_issues(scene_trace.verifier_issues)]
+        issues.append(f"人工修补要求：{patch_guidance}")
+        rewritten = self._context.scene_editor.rewrite(
+            scene_plan=scene_trace.scene_plan,
+            chapter_plan=chapter_plan,
+            content=scene_trace.final_text,
+            issues=issues,
+            world=self._context.world,
+            llm=self._context.writer_llm,
+        )
+        changeset, verifier_issues = self._verify(scene_trace.scene_plan, chapter_plan, rewritten)
+        return self._to_trace(
+            run_id=run_id,
+            scene_plan=scene_trace.scene_plan,
+            draft=scene_trace.draft,
+            final_text=rewritten,
+            changeset=changeset,
+            issues=verifier_issues,
         )
 
 
@@ -155,6 +277,142 @@ class AdvanceLoopStateUseCase:
             )
 
 
+class RefreshChapterAggregateUseCase:
+    """根据当前 scene 状态重组章节并刷新发布门禁。"""
+
+    def __init__(self, context: SceneGenerationContext) -> None:
+        self._context = context
+
+    def _build_blockers(self, scenes: list[SceneTrace], pending_reviews: int) -> PublishBlockers:
+        """把 scene 与 review 状态压缩成章节门禁结果。"""
+        blockers: list[str] = []
+        if any(scene.status == "needs_review" for scene in scenes):
+            blockers.append("仍有待审阅场景。")
+        if pending_reviews > 0:
+            blockers.append(f"仍有 {pending_reviews} 条待处理审阅记录。")
+        unfinished = [scene for scene in scenes if scene.status not in {"completed", "approved"}]
+        if unfinished and not blockers:
+            blockers.append("仍有场景未完成。")
+
+        if blockers:
+            status: ChapterStatus = "needs_review"
+        elif scenes:
+            status = "ready_to_publish"
+        else:
+            status = "draft"
+
+        return PublishBlockers(
+            chapter_status=status,
+            can_publish=status == "ready_to_publish",
+            blockers=blockers,
+        )
+
+    def execute(self, run_id: int, chapter_number: int) -> tuple[ChapterTrace, ChapterOutput, PublishBlockers]:
+        """重组 chapter，并把最新草稿态写回数据库。"""
+        row = self._context.db.get_run_chapter_trace(run_id, chapter_number)
+        if row is None:
+            raise ValueError("章节 trace 不存在")
+
+        scene_rows = self._context.db.list_run_scene_traces(run_id, chapter_number)
+        scenes = [_build_scene_trace_from_row(run_id, item) for item in scene_rows]
+        story_plan = _build_story_plan(
+            self._context.book_id,
+            dict((row.get("retrieval_pack_json") or {}).get("story_plan") or {}),
+        )
+        chapter_plan = _build_chapter_plan(chapter_number, dict(row.get("planner_output_json") or {}))
+        pending_reviews = self._context.db.count_pending_scene_reviews(run_id, chapter_number)
+        blockers = self._build_blockers(scenes, pending_reviews)
+        assembled_text = "\n\n".join(scene.final_text.strip() for scene in scenes if scene.final_text.strip())
+
+        summary: dict[str, Any]
+        if assembled_text.strip():
+            summary = self._context.summarizer.summarize(
+                chapter_number=chapter_number,
+                content=assembled_text,
+                plan=chapter_plan.model_dump(mode="json"),
+                world=self._context.world,
+                llm=self._context.planner_llm,
+            )
+        else:
+            summary = {
+                "summary": "",
+                "key_events": [],
+                "characters_featured": [],
+                "new_facts_introduced": [],
+            }
+
+        chapter_output = self._context.chapter_assembler.assemble(
+            run_id=run_id,
+            chapter_plan=chapter_plan,
+            scenes=scenes,
+            summary=summary,
+        )
+        chapter_output.status = blockers.chapter_status
+
+        chapter_trace = ChapterTrace(
+            run_id=run_id,
+            chapter_number=chapter_number,
+            status=blockers.chapter_status,
+            story_plan=story_plan,
+            chapter_plan=chapter_plan,
+            scenes=scenes,
+            assembled_text=chapter_output.content,
+            summary=summary,
+            metrics={
+                "scene_count": len(scenes),
+                "review_scene_count": len([scene for scene in scenes if scene.review_required]),
+                "pending_review_count": pending_reviews,
+            },
+            review_required=blockers.chapter_status == "needs_review",
+        )
+
+        self._context.db.upsert_run_chapter_trace(
+            run_id=run_id,
+            chapter_number=chapter_number,
+            status=blockers.chapter_status,
+            planner_output=chapter_plan.model_dump(mode="json"),
+            retrieval_pack={"story_plan": story_plan.model_dump(mode="json")},
+            draft_text="",
+            final_content=chapter_output.content,
+            changeset={"scene_count": len(scenes)},
+            verifier_issues=[
+                issue.model_dump(mode="json")
+                for scene in scenes
+                for issue in scene.verifier_issues
+            ],
+            editor_rewrites=[],
+            merge_result={
+                "review_required": blockers.chapter_status == "needs_review",
+                "can_publish": blockers.can_publish,
+                "blockers": blockers.blockers,
+            },
+            summary_result=summary,
+            metrics=chapter_trace.metrics,
+        )
+        self._context.db.upsert_chapter_output(
+            self._context.book_id,
+            chapter_output.model_dump(mode="json"),
+        )
+        self._context.db.upsert_chapter(
+            chapter_number=chapter_number,
+            title=chapter_output.title,
+            content=chapter_output.content,
+            plan=chapter_plan.model_dump(mode="json"),
+            book_id=self._context.book_id,
+            word_count=len(chapter_output.content),
+            status=blockers.chapter_status,
+        )
+        self._context.db.upsert_chapter_summary(
+            chapter_number=chapter_number,
+            summary=str(summary.get("summary") or ""),
+            book_id=self._context.book_id,
+            key_events=list(summary.get("key_events") or []),
+            characters_featured=list(summary.get("characters_featured") or []),
+            new_facts_introduced=list(summary.get("new_facts_introduced") or []),
+        )
+        return chapter_trace, chapter_output, blockers
+
+
 class GenerateChapterUseCase:
     """生成一个章节及其 scene 链路。"""
 
@@ -164,7 +422,7 @@ class GenerateChapterUseCase:
         self._loop_use_case = AdvanceLoopStateUseCase(context.db)
 
     def execute(self, run_id: int, chapter_number: int) -> tuple[ChapterTrace, ChapterOutput]:
-        """完整执行 chapter -> scenes -> assemble -> summary。"""
+        """完整执行 chapter -> scenes，并把 scene trace 写入数据库。"""
         previous = self._context.db.list_chapter_outputs(book_id=self._context.book_id)
         story_plan = StoryPlan(
             book_id=self._context.book_id,
@@ -180,11 +438,9 @@ class GenerateChapterUseCase:
             llm=self._context.planner_llm,
         )
         scene_plans = self._context.scene_planner.plan(chapter_plan)
-        scenes: list[SceneTrace] = []
 
         for scene_plan in scene_plans:
             scene = self._scene_use_case.execute(run_id=run_id, chapter_plan=chapter_plan, scene_plan=scene_plan)
-            scenes.append(scene)
             self._context.db.upsert_run_scene_trace(run_id, scene.model_dump(mode="json"))
             self._loop_use_case.execute(self._context.book_id, scene)
             if scene.review_required:
@@ -195,81 +451,80 @@ class GenerateChapterUseCase:
                     reason=scene.review_reason,
                 )
 
-        assembled_text = "\n\n".join(scene.final_text for scene in scenes)
-        summary = self._context.summarizer.summarize(
-            chapter_number=chapter_number,
-            content=assembled_text,
-            plan=chapter_plan.model_dump(mode="json"),
-            world=self._context.world,
-            llm=self._context.planner_llm,
-        )
-        chapter_output = self._context.chapter_assembler.assemble(
-            run_id=run_id,
-            chapter_plan=chapter_plan,
-            scenes=scenes,
-            summary=summary,
-        )
-        chapter_trace = ChapterTrace(
-            run_id=run_id,
-            chapter_number=chapter_number,
-            status="needs_review" if any(scene.review_required for scene in scenes) else "completed",
-            story_plan=story_plan,
-            chapter_plan=chapter_plan,
-            scenes=scenes,
-            assembled_text=chapter_output.content,
-            summary=summary,
-            review_required=any(scene.review_required for scene in scenes),
-            metrics={
-                "scene_count": len(scenes),
-                "review_scene_count": len([scene for scene in scenes if scene.review_required]),
-            },
-        )
+        refresh = RefreshChapterAggregateUseCase(self._context)
+        chapter_trace, chapter_output, _ = refresh.execute(run_id, chapter_number)
         return chapter_trace, chapter_output
 
 
 class PublishChapterUseCase:
-    """发布章节与状态快照。"""
+    """人工确认发布章节与状态快照。"""
 
-    def __init__(self, db: Database, world: WorldModel, book_id: int) -> None:
-        self._db = db
-        self._world = world
-        self._book_id = book_id
+    def __init__(self, context: SceneGenerationContext) -> None:
+        self._context = context
+        self._refresh = RefreshChapterAggregateUseCase(context)
 
-    def execute(self, chapter: ChapterOutput, trace: ChapterTrace) -> ChapterOutput:
-        """保存章节正文、摘要与状态快照。"""
-        chapter.status = "review" if trace.review_required else "published"
-        self._db.upsert_chapter_output(self._book_id, chapter.model_dump(mode="json"))
-        self._db.upsert_chapter(
-            chapter_number=chapter.chapter_number,
-            title=chapter.title,
-            content=chapter.content,
-            plan=trace.chapter_plan.model_dump(mode="json"),
-            book_id=self._book_id,
-            word_count=len(chapter.content),
-            status=chapter.status,
+    def execute(self, run_id: int, chapter_number: int) -> ChapterOutput:
+        """只有达到 ready_to_publish 的章节才允许正式发布。"""
+        chapter_trace, chapter_output, blockers = self._refresh.execute(run_id, chapter_number)
+        if not blockers.can_publish:
+            raise ValueError("；".join(blockers.blockers) or "章节尚未达到可发布状态")
+
+        chapter_output.status = "published"
+        self._context.db.upsert_chapter_output(
+            self._context.book_id,
+            chapter_output.model_dump(mode="json"),
         )
-        self._db.upsert_chapter_summary(
-            chapter_number=chapter.chapter_number,
-            summary=str(chapter.summary.get("summary") or ""),
-            book_id=self._book_id,
-            key_events=list(chapter.summary.get("key_events") or []),
-            characters_featured=list(chapter.summary.get("characters_featured") or []),
-            new_facts_introduced=list(chapter.summary.get("new_facts_introduced") or []),
+        self._context.db.upsert_chapter(
+            chapter_number=chapter_number,
+            title=chapter_output.title,
+            content=chapter_output.content,
+            plan=chapter_trace.chapter_plan.model_dump(mode="json"),
+            book_id=self._context.book_id,
+            word_count=len(chapter_output.content),
+            status="published",
         )
-        self._db.upsert_story_state_snapshot(
-            self._book_id,
-            chapter.chapter_number,
+        self._context.db.upsert_chapter_summary(
+            chapter_number=chapter_number,
+            summary=str(chapter_output.summary.get("summary") or ""),
+            book_id=self._context.book_id,
+            key_events=list(chapter_output.summary.get("key_events") or []),
+            characters_featured=list(chapter_output.summary.get("characters_featured") or []),
+            new_facts_introduced=list(chapter_output.summary.get("new_facts_introduced") or []),
+        )
+        self._context.db.upsert_run_chapter_trace(
+            run_id=run_id,
+            chapter_number=chapter_number,
+            status="published",
+            planner_output=chapter_trace.chapter_plan.model_dump(mode="json"),
+            retrieval_pack={"story_plan": chapter_trace.story_plan.model_dump(mode="json")},
+            draft_text="",
+            final_content=chapter_output.content,
+            changeset={"scene_count": len(chapter_trace.scenes)},
+            verifier_issues=[
+                issue.model_dump(mode="json")
+                for scene in chapter_trace.scenes
+                for issue in scene.verifier_issues
+            ],
+            editor_rewrites=[],
+            merge_result={"review_required": False, "can_publish": True, "blockers": []},
+            summary_result=chapter_output.summary,
+            metrics=chapter_trace.metrics,
+        )
+        self._context.db.upsert_story_state_snapshot(
+            self._context.book_id,
+            chapter_number,
             {
-                "canon_summary": self._world.world_context_summary(language="zh-CN"),
-                "open_loops": self._db.list_loops(self._book_id),
-                "review_required": trace.review_required,
+                "canon_summary": self._context.world.world_context_summary(language="zh-CN"),
+                "open_loops": self._context.db.list_loops(self._context.book_id),
+                "review_required": False,
+                "chapter_status": "published",
             },
         )
-        return chapter
+        return chapter_output
 
 
 class ReviewSceneUseCase:
-    """审阅队列读取与动作更新。"""
+    """审阅队列只负责查询，不直接承担动作执行。"""
 
     def __init__(self, db: Database) -> None:
         self._db = db
@@ -277,26 +532,186 @@ class ReviewSceneUseCase:
     def list_pending(self, book_id: int) -> list[ReviewQueueItem]:
         return [ReviewQueueItem.model_validate(item) for item in self._db.list_scene_reviews(book_id)]
 
-    def update_action(self, review_id: int, action: str) -> ReviewQueueItem | None:
-        updated = self._db.update_scene_review(review_id, action=action, status="completed")
-        return ReviewQueueItem.model_validate(updated) if updated else None
 
+class _ReviewActionBase:
+    """审阅动作共用逻辑。"""
 
-class ApplyPatchUseCase:
-    """记录 patch 并关闭 review。"""
+    def __init__(self, context: SceneGenerationContext) -> None:
+        self._context = context
+        self._scene_use_case = GenerateSceneUseCase(context)
+        self._refresh = RefreshChapterAggregateUseCase(context)
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
-    def execute(self, review_id: int, patch_text: str) -> ReviewQueueItem | None:
-        review = self._db.get_scene_review(review_id)
+    def _load_review_scene(
+        self,
+        review_id: int,
+    ) -> tuple[dict[str, Any], ChapterPlan, SceneTrace]:
+        """读取 review、chapter 和 scene 当前状态。"""
+        review = self._context.db.get_scene_review(review_id)
         if review is None:
-            return None
-        self._db.add_scene_patch(
+            raise ValueError("review 不存在")
+        if review["status"] != "pending":
+            raise ValueError("review 已完成，不可重复执行")
+
+        chapter_row = self._context.db.get_run_chapter_trace(review["run_id"], review["chapter_number"])
+        if chapter_row is None:
+            raise ValueError("章节 trace 不存在")
+        scene_row = self._context.db.get_run_scene_trace(
             review["run_id"],
             review["chapter_number"],
             review["scene_number"],
-            patch_text,
         )
-        updated = self._db.update_scene_review(review_id, action="patch", status="completed", patch_text=patch_text)
-        return ReviewQueueItem.model_validate(updated) if updated else None
+        if scene_row is None:
+            raise ValueError("scene trace 不存在")
+
+        chapter_plan = _build_chapter_plan(review["chapter_number"], chapter_row.get("planner_output_json") or {})
+        scene_trace = _build_scene_trace_from_row(review["run_id"], scene_row)
+        return review, chapter_plan, scene_trace
+
+    def _finalize_review(
+        self,
+        review_id: int,
+        action: str,
+        operator: str,
+        scene_trace: SceneTrace,
+        result_summary: str,
+        input_payload: dict[str, Any],
+    ) -> ReviewQueueItem:
+        """根据新 scene 结果更新 review 状态并记录事件。"""
+        if scene_trace.review_required:
+            event_status = "failed"
+            self._context.db.update_scene_review(
+                review_id=review_id,
+                action=action,
+                status="pending",
+                reason=scene_trace.review_reason,
+                result_summary=result_summary,
+                resolved_scene_status=scene_trace.status,
+            )
+        else:
+            event_status = "succeeded"
+            self._context.db.close_scene_review(
+                review_id=review_id,
+                action=action,
+                status="completed",
+                resolved_scene_status=scene_trace.status,
+                result_summary=result_summary,
+                patch_text=input_payload.get("patch_text"),
+            )
+
+        self._context.db.add_scene_review_event(
+            review_id=review_id,
+            action=action,
+            status=event_status,
+            operator=operator,
+            input_payload=input_payload,
+            result_payload={
+                "scene_status": scene_trace.status,
+                "review_required": scene_trace.review_required,
+                "review_reason": scene_trace.review_reason,
+                "issue_count": len(scene_trace.verifier_issues),
+            },
+        )
+        updated = self._context.db.get_scene_review(review_id)
+        if updated is None:
+            raise ValueError("review 更新失败")
+        return ReviewQueueItem.model_validate(updated)
+
+
+class ApproveSceneReviewUseCase(_ReviewActionBase):
+    """人工确认当前 scene 可通过。"""
+
+    def execute(self, review_id: int, operator: str) -> ReviewQueueItem:
+        review, _chapter_plan, scene_trace = self._load_review_scene(review_id)
+        approved_trace = scene_trace.model_copy(
+            update={
+                "status": "approved",
+                "review_required": False,
+                "review_status": "completed",
+                "review_reason": "",
+            }
+        )
+        self._context.db.upsert_run_scene_trace(
+            review["run_id"],
+            approved_trace.model_dump(mode="json"),
+        )
+        updated_review = self._finalize_review(
+            review_id=review_id,
+            action="approve",
+            operator=operator,
+            scene_trace=approved_trace,
+            result_summary="人工审阅通过，保留当前场景文本。",
+            input_payload={},
+        )
+        self._refresh.execute(review["run_id"], review["chapter_number"])
+        return updated_review
+
+
+class RetrySceneUseCase(_ReviewActionBase):
+    """重新生成单个 scene，并自动刷新所属 chapter。"""
+
+    def execute(self, review_id: int, operator: str) -> ReviewQueueItem:
+        review, chapter_plan, scene_trace = self._load_review_scene(review_id)
+        retried_trace = self._scene_use_case.execute(
+            run_id=review["run_id"],
+            chapter_plan=chapter_plan,
+            scene_plan=scene_trace.scene_plan,
+        )
+        self._context.db.upsert_run_scene_trace(
+            review["run_id"],
+            retried_trace.model_dump(mode="json"),
+        )
+        updated_review = self._finalize_review(
+            review_id=review_id,
+            action="retry",
+            operator=operator,
+            scene_trace=retried_trace,
+            result_summary=(
+                "重试后已通过校验。"
+                if not retried_trace.review_required
+                else f"重试后仍存在 fatal 问题：{retried_trace.review_reason}"
+            ),
+            input_payload={},
+        )
+        self._refresh.execute(review["run_id"], review["chapter_number"])
+        return updated_review
+
+
+class ApplyPatchUseCase(_ReviewActionBase):
+    """应用人工 patch，重新校验并重组所属 chapter。"""
+
+    def execute(self, review_id: int, patch_text: str, operator: str) -> ReviewQueueItem:
+        review, chapter_plan, scene_trace = self._load_review_scene(review_id)
+        patched_trace = self._scene_use_case.apply_patch(
+            run_id=review["run_id"],
+            chapter_plan=chapter_plan,
+            scene_trace=scene_trace,
+            patch_text=patch_text,
+        )
+        self._context.db.upsert_run_scene_trace(
+            review["run_id"],
+            patched_trace.model_dump(mode="json"),
+        )
+        self._context.db.add_scene_patch(
+            run_id=review["run_id"],
+            chapter_number=review["chapter_number"],
+            scene_number=review["scene_number"],
+            patch_text=patch_text,
+            before_text=scene_trace.final_text,
+            after_text=patched_trace.final_text,
+            verifier_issues=[issue.model_dump(mode="json") for issue in patched_trace.verifier_issues],
+            applied_successfully=not patched_trace.review_required,
+        )
+        updated_review = self._finalize_review(
+            review_id=review_id,
+            action="patch",
+            operator=operator,
+            scene_trace=patched_trace,
+            result_summary=(
+                "修补后已通过校验。"
+                if not patched_trace.review_required
+                else f"修补后仍需人工处理：{patched_trace.review_reason}"
+            ),
+            input_payload={"patch_text": patch_text},
+        )
+        self._refresh.execute(review["run_id"], review["chapter_number"])
+        return updated_review

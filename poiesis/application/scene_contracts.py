@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field
 
 SceneStatus = Literal["pending", "running", "completed", "needs_review", "failed", "approved"]
 ReviewAction = Literal["approve", "retry", "rewrite", "patch", "reject"]
+ReviewStatus = Literal["pending", "completed", "failed"]
+ReviewEventStatus = Literal["succeeded", "failed"]
+ChapterStatus = Literal["draft", "needs_review", "ready_to_publish", "published"]
 LoopStatus = Literal["open", "hinted", "escalated", "resolved", "dropped", "overdue"]
 
 
@@ -105,7 +108,7 @@ class ChapterTrace(BaseModel):
 
     run_id: int
     chapter_number: int
-    status: str = "running"
+    status: str = "draft"
     story_plan: StoryPlan
     chapter_plan: ChapterPlan
     scenes: list[SceneTrace] = Field(default_factory=list)
@@ -125,7 +128,7 @@ class ChapterOutput(BaseModel):
     content: str
     summary: dict[str, Any] = Field(default_factory=dict)
     scene_count: int = 0
-    status: str = "draft"
+    status: ChapterStatus = "draft"
 
 
 class LoopState(BaseModel):
@@ -150,11 +153,53 @@ class ReviewQueueItem(BaseModel):
     chapter_number: int
     scene_number: int
     action: str = "pending"
-    status: str = "pending"
+    status: ReviewStatus = "pending"
     reason: str = ""
     patch_text: str = ""
+    scene_status: SceneStatus = "needs_review"
+    latest_result_summary: str = ""
+    event_count: int = 0
+    resolved_scene_status: str = ""
+    result_summary: str = ""
+    closed_at: str | None = None
     created_at: str = ""
     updated_at: str = ""
+
+
+class ReviewEvent(BaseModel):
+    """单次审阅动作的留痕记录。"""
+
+    id: int
+    review_id: int
+    action: ReviewAction
+    status: ReviewEventStatus
+    operator: str = ""
+    input_payload: dict[str, Any] = Field(default_factory=dict)
+    result_payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = ""
+
+
+class ScenePatchRecord(BaseModel):
+    """scene 修补历史。"""
+
+    id: int
+    run_id: int
+    chapter_number: int
+    scene_number: int
+    patch_text: str
+    before_text: str = ""
+    after_text: str = ""
+    verifier_issues: list[VerifierIssue] = Field(default_factory=list)
+    applied_successfully: bool = False
+    created_at: str = ""
+
+
+class PublishBlockers(BaseModel):
+    """章节发布门禁说明。"""
+
+    chapter_status: ChapterStatus = "draft"
+    can_publish: bool = False
+    blockers: list[str] = Field(default_factory=list)
 
 
 class RunSummary(BaseModel):

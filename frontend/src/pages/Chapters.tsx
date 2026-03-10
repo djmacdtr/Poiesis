@@ -18,6 +18,8 @@ const ACTIVE_BOOK_ID_KEY = 'poiesis.activeBookId'
 const statusColor: Record<string, string> = {
   draft: 'bg-gray-100 text-gray-600',
   completed: 'bg-green-100 text-green-700',
+  needs_review: 'bg-amber-100 text-amber-700',
+  ready_to_publish: 'bg-emerald-100 text-emerald-700',
   published: 'bg-indigo-100 text-indigo-700',
 }
 

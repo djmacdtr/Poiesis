@@ -20,6 +20,11 @@ class TestSchemaInitialization:
             "chapter_summaries",
             "runs",
             "run_chapters",
+            "run_scenes",
+            "scene_reviews",
+            "scene_review_events",
+            "scene_patches",
+            "chapter_outputs",
         }
         with tmp_db._cursor() as cur:
             cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -349,3 +354,57 @@ class TestRunTraceCRUD:
         assert run["status"] == "failed"
         assert run["error_message"] == "boom"
         assert run["finished_at"] is not None
+
+    def test_scene_review_events_and_patch_history_round_trip(self, tmp_db: Database) -> None:
+        run_id = tmp_db.create_run_trace(
+            task_id="task-scene-review",
+            book_id=1,
+            status="running",
+            config_snapshot={},
+            llm_snapshot={},
+        )
+        review_id = tmp_db.create_scene_review(run_id, 1, 1, "存在设定冲突")
+
+        tmp_db.add_scene_review_event(
+            review_id=review_id,
+            action="retry",
+            status="failed",
+            operator="tester",
+            input_payload={"source": "api"},
+            result_payload={"reason": "仍存在 fatal 问题"},
+        )
+        tmp_db.add_scene_patch(
+            run_id=run_id,
+            chapter_number=1,
+            scene_number=1,
+            patch_text="请降低冲突强度",
+            before_text="原始正文",
+            after_text="修补后正文",
+            verifier_issues=[{"severity": "warning", "reason": "仍需润色"}],
+            applied_successfully=True,
+        )
+        tmp_db.close_scene_review(
+            review_id=review_id,
+            action="patch",
+            status="completed",
+            resolved_scene_status="completed",
+            result_summary="修补后通过",
+            patch_text="请降低冲突强度",
+        )
+
+        review = tmp_db.get_scene_review(review_id)
+        events = tmp_db.list_scene_review_events(review_id)
+        patches = tmp_db.list_scene_patches(run_id, 1, 1)
+
+        assert review is not None
+        assert review["resolved_scene_status"] == "completed"
+        assert review["result_summary"] == "修补后通过"
+        assert review["closed_at"] is not None
+        assert len(events) == 1
+        assert events[0]["operator"] == "tester"
+        assert events[0]["result_payload_json"]["reason"] == "仍存在 fatal 问题"
+        assert len(patches) == 1
+        assert patches[0]["before_text"] == "原始正文"
+        assert patches[0]["after_text"] == "修补后正文"
+        assert patches[0]["applied_successfully"] is True
+        assert patches[0]["verifier_issues_json"][0]["reason"] == "仍需润色"
