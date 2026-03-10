@@ -16,6 +16,18 @@ export function formatDate(dateStr: string): string {
   })
 }
 
+// 将 ISO 日期字符串格式化为本地可读日期时间
+export function formatDateTime(dateStr: string): string {
+  if (!dateStr) return '—'
+  return new Date(dateStr).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 // 将字数格式化为带单位的字符串
 export function formatWordCount(count: number): string {
   return `${count.toLocaleString('zh-CN')} 字`
@@ -25,6 +37,8 @@ export function formatWordCount(count: number): string {
 export const chapterStatusLabel: Record<string, string> = {
   draft: '草稿',
   completed: '已完成',
+  needs_review: '待审阅',
+  ready_to_publish: '可发布',
   published: '已发布',
 }
 
