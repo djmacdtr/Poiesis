@@ -23,6 +23,7 @@ type TabKey = (typeof tabs)[number]['key']
 
 /** 伏笔状态颜色 */
 const foreshadowingColor: Record<string, string> = {
+  pending: 'bg-amber-100 text-amber-700',
   active: 'bg-blue-100 text-blue-700',
   resolved: 'bg-green-100 text-green-700',
   dropped: 'bg-gray-100 text-gray-500',
@@ -186,12 +187,20 @@ export default function Canon() {
               <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
                 {data.world_rules.map((rule) => (
                   <div key={rule.id} className="px-5 py-4 space-y-1">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-medium text-gray-800">世界规则</p>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{rule.category}</span>
+                        {rule.is_immutable && (
+                          <span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded">不可变</span>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-400">规则标识：{rule.rule_key}</p>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono text-gray-400">{rule.rule_key}</span>
                       {rule.is_immutable && (
-                        <span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded">不可变</span>
+                        <span className="text-xs text-red-500">核心设定，生成过程中不允许改写</span>
                       )}
-                      <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{rule.category}</span>
                     </div>
                     <p className="text-sm text-gray-700">{rule.description}</p>
                   </div>
@@ -252,13 +261,16 @@ export default function Canon() {
               <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
                 {data.foreshadowing.map((item) => (
                   <div key={item.id} className="px-5 py-4 space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono text-gray-400">{item.hint_key}</span>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-medium text-gray-800">伏笔记录</p>
                       <span className={cn('text-xs px-1.5 py-0.5 rounded', foreshadowingColor[item.status] ?? 'bg-gray-100 text-gray-500')}>
                         {foreshadowingStatusLabel[item.status] ?? item.status}
                       </span>
                     </div>
                     <p className="text-sm text-gray-700">{item.description}</p>
+                    <p className="text-xs text-gray-400">
+                      标识：{item.hint_key}
+                    </p>
                     <p className="text-xs text-gray-400">
                       引入于第 {item.introduced_in_chapter} 章
                       {item.resolved_in_chapter != null && `，解决于第 ${item.resolved_in_chapter} 章`}

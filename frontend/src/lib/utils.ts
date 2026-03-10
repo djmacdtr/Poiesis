@@ -44,6 +44,7 @@ export const chapterStatusLabel: Record<string, string> = {
 
 // 伏笔状态中文标签
 export const foreshadowingStatusLabel: Record<string, string> = {
+  pending: '待回收',
   active: '活跃',
   resolved: '已解决',
   dropped: '已放弃',
