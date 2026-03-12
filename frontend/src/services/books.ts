@@ -109,6 +109,15 @@ export function generateRoadmap(bookId: number, payload: BlueprintGenerateReques
   return post<BookBlueprint>(`/api/books/${bookId}/blueprint/roadmap:generate`, payload)
 }
 
+/** 只重生成某个阶段的章节路线 */
+export function regenerateRoadmapStage(
+  bookId: number,
+  arcNumber: number,
+  payload: BlueprintGenerateRequest,
+): Promise<BookBlueprint> {
+  return post<BookBlueprint>(`/api/books/${bookId}/blueprint/roadmap/stages/${arcNumber}:regenerate`, payload)
+}
+
 /** 确认章节路线 */
 export function confirmRoadmap(bookId: number, draft: ChapterRoadmapItem[]): Promise<BookBlueprint> {
   return post<BookBlueprint>(`/api/books/${bookId}/blueprint/roadmap:confirm`, { draft })

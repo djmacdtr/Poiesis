@@ -21,6 +21,7 @@ from poiesis.api.schemas.blueprint import (
     ConfirmWorldBlueprintRequest,
     CreationIntentRequest,
     RegenerateConceptVariantResponse,
+    RegenerateRoadmapStageRequest,
     RelationshipGraphResponse,
     RelationshipPendingListResponse,
     RelationshipReplanConfirmRequest,
@@ -237,6 +238,22 @@ def generate_roadmap(
     """生成章节路线草稿。"""
     try:
         payload = blueprint_service.generate_roadmap(db, _config_path(), book_id, body.feedback)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BookBlueprintResponse(**payload.model_dump(mode="json"))
+
+
+@router.post("/{book_id}/blueprint/roadmap/stages/{arc_number}:regenerate", response_model=BookBlueprintResponse)
+def regenerate_roadmap_stage(
+    book_id: int,
+    arc_number: int,
+    body: RegenerateRoadmapStageRequest,
+    db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
+) -> BookBlueprintResponse:
+    """只重生成某个阶段，作为路线工作台的主修复入口。"""
+    try:
+        payload = blueprint_service.regenerate_roadmap_stage(db, _config_path(), book_id, arc_number, body.feedback)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return BookBlueprintResponse(**payload.model_dump(mode="json"))

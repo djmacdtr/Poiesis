@@ -1,15 +1,17 @@
 /**
  * 世界设定 Canon 页：展示角色、世界规则、时间线、伏笔
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
+import { RelationshipGraphPanel } from '@/components/relationship-graph/RelationshipGraphPanel'
+import { buildCharacterNodesFromCanon, buildRelationshipGraphViewModel } from '@/lib/relationship-graph'
 import { fetchCanon } from '@/services/world'
 import { fetchBooks } from '@/services/books'
 import { LoadingSpinner, ErrorMessage, EmptyState } from '@/components/Feedback'
 import { formatDate, foreshadowingStatusLabel } from '@/lib/utils'
 import { cn } from '@/lib/utils'
-import type { BookItem, CanonData } from '@/types'
+import type { BookItem, CanonData, RelationshipGraphSelection } from '@/types'
 
 /** 标签页配置 */
 const tabs = [
@@ -35,6 +37,7 @@ const ACTIVE_BOOK_ID_KEY = 'poiesis.activeBookId'
 export default function Canon() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [activeTab, setActiveTab] = useState<TabKey>('characters')
+  const [graphSelection, setGraphSelection] = useState<RelationshipGraphSelection>(null)
   const [activeBookId, setActiveBookId] = useState<number>(() => {
     const fromQuery = Number(searchParams.get('book') || '')
     if (Number.isFinite(fromQuery) && fromQuery > 0) return fromQuery
@@ -79,6 +82,18 @@ export default function Canon() {
     timeline: data?.timeline.length ?? 0,
     foreshadowing: data?.foreshadowing.length ?? 0,
   }
+  const relationshipGraphView = useMemo(
+    () =>
+      buildRelationshipGraphViewModel({
+        nodes: buildCharacterNodesFromCanon(data?.characters ?? []),
+        edges: data?.relationship_graph ?? [],
+        pending: [],
+        selection: graphSelection,
+        conflict: null,
+        replanEdgeId: null,
+      }),
+    [data?.characters, data?.relationship_graph, graphSelection],
+  )
 
   return (
     <div className="space-y-5">
@@ -323,30 +338,39 @@ export default function Canon() {
             {!data?.relationship_graph?.length ? (
               <EmptyState text="当前还没有人物关系图谱，请先在人物蓝图阶段确认关系网。" />
             ) : (
-              <div className="grid gap-4 md:grid-cols-2">
-                {data.relationship_graph.map((edge) => (
-                  <article key={edge.edge_id} className="rounded-xl border border-gray-200 bg-white p-4 space-y-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <h3 className="text-sm font-semibold text-gray-900">
-                        {edge.source_character_id} → {edge.target_character_id}
-                      </h3>
-                      <span className="rounded bg-stone-100 px-2 py-0.5 text-xs text-stone-600">{edge.relation_type}</span>
-                    </div>
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      <span className="rounded bg-sky-50 px-2 py-0.5 text-sky-700">倾向：{edge.polarity}</span>
-                      <span className="rounded bg-violet-50 px-2 py-0.5 text-violet-700">公开度：{edge.visibility}</span>
-                      <span className="rounded bg-amber-50 px-2 py-0.5 text-amber-700">稳定性：{edge.stability}</span>
-                      <span className="rounded bg-gray-100 px-2 py-0.5 text-gray-600">强度：{edge.intensity}</span>
-                    </div>
-                    <p className="text-sm text-gray-700">{edge.summary || '未填写关系摘要'}</p>
-                    {edge.hidden_truth && (
-                      <p className="text-xs text-amber-700">隐藏真相：{edge.hidden_truth}</p>
-                    )}
-                    {edge.non_breakable_without_reveal && (
-                      <p className="text-xs text-red-600">这条关系需要通过“揭示事件”才能被合法改写。</p>
-                    )}
-                  </article>
-                ))}
+              <div className="space-y-4">
+                <RelationshipGraphPanel
+                  nodes={relationshipGraphView.nodes}
+                  edges={relationshipGraphView.edges}
+                  selection={graphSelection}
+                  onSelectionChange={setGraphSelection}
+                  readOnly
+                />
+                <div className="grid gap-4 md:grid-cols-2">
+                  {data.relationship_graph.map((edge) => (
+                    <article key={edge.edge_id} className="rounded-xl border border-gray-200 bg-white p-4 space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-sm font-semibold text-gray-900">
+                          {edge.source_character_id} → {edge.target_character_id}
+                        </h3>
+                        <span className="rounded bg-stone-100 px-2 py-0.5 text-xs text-stone-600">{edge.relation_type}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        <span className="rounded bg-sky-50 px-2 py-0.5 text-sky-700">倾向：{edge.polarity}</span>
+                        <span className="rounded bg-violet-50 px-2 py-0.5 text-violet-700">公开度：{edge.visibility}</span>
+                        <span className="rounded bg-amber-50 px-2 py-0.5 text-amber-700">稳定性：{edge.stability}</span>
+                        <span className="rounded bg-gray-100 px-2 py-0.5 text-gray-600">强度：{edge.intensity}</span>
+                      </div>
+                      <p className="text-sm text-gray-700">{edge.summary || '未填写关系摘要'}</p>
+                      {edge.hidden_truth && (
+                        <p className="text-xs text-amber-700">隐藏真相：{edge.hidden_truth}</p>
+                      )}
+                      {edge.non_breakable_without_reveal && (
+                        <p className="text-xs text-red-600">这条关系需要通过“揭示事件”才能被合法改写。</p>
+                      )}
+                    </article>
+                  ))}
+                </div>
               </div>
             )}
           </div>

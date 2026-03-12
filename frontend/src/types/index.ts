@@ -510,6 +510,44 @@ export interface RelationshipBlueprintEdge {
   non_breakable_without_reveal: boolean
 }
 
+export interface RelationshipGraphNodeViewModel {
+  id: string
+  name: string
+  role: string
+  public_persona: string
+  core_motivation: string
+  fatal_flaw: string
+  related_count: number
+  is_protagonist: boolean
+  is_pending: boolean
+  is_selected: boolean
+}
+
+export interface RelationshipGraphEdgeViewModel {
+  id: string
+  source: string
+  target: string
+  source_name: string
+  target_name: string
+  relation_type: string
+  polarity: RelationshipBlueprintEdge['polarity']
+  intensity: number
+  visibility: RelationshipBlueprintEdge['visibility']
+  stability: RelationshipBlueprintEdge['stability']
+  summary: string
+  hidden_truth: string
+  non_breakable_without_reveal: boolean
+  is_pending: boolean
+  is_conflict: boolean
+  has_replan: boolean
+  is_selected: boolean
+}
+
+export type RelationshipGraphSelection =
+  | { kind: 'node'; id: string }
+  | { kind: 'edge'; id: string }
+  | null
+
 export interface RelationshipPendingItem {
   id?: number | null
   item_type: 'character' | 'relationship'
@@ -541,14 +579,45 @@ export interface RelationshipRetconProposal {
   required_reveals: string[]
 }
 
+export interface StoryArcPlan {
+  arc_number: number
+  title: string
+  purpose: string
+  start_chapter: number
+  end_chapter: number
+  main_progress: string[]
+  relationship_progress: string[]
+  loop_progress: string[]
+  timeline_milestones: string[]
+  arc_climax: string
+}
+
+export interface RoadmapValidationIssue {
+  severity: 'fatal' | 'warning'
+  type: string
+  message: string
+  chapter_number: number | null
+  story_stage: string
+  arc_number?: number | null
+  suggested_action?: 'regenerate_stage' | 'edit_chapter' | 'review_stage'
+}
+
 export interface ChapterRoadmapItem {
   chapter_number: number
   title: string
+  story_stage: string
+  timeline_anchor: string
+  depends_on_chapters: number[]
   goal: string
   core_conflict: string
   turning_point: string
+  story_progress: string
   character_progress: string[]
   relationship_progress: string[]
+  new_reveals: string[]
+  status_shift: string[]
+  chapter_function: string
+  anti_repeat_signature: string
   planned_loops: Array<Record<string, unknown>>
   closure_function: string
 }
@@ -579,8 +648,11 @@ export interface BookBlueprint {
   relationship_graph_draft: RelationshipBlueprintEdge[]
   relationship_graph_confirmed: RelationshipBlueprintEdge[]
   relationship_pending: RelationshipPendingItem[]
+  story_arcs_draft: StoryArcPlan[]
+  story_arcs_confirmed: StoryArcPlan[]
   roadmap_draft: ChapterRoadmapItem[]
   roadmap_confirmed: ChapterRoadmapItem[]
+  roadmap_validation_issues: RoadmapValidationIssue[]
   revisions: BlueprintRevision[]
 }
 

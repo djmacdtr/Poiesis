@@ -5,8 +5,13 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from poiesis.api.main import app
-from poiesis.application.blueprint_contracts import ConceptVariant, CreationIntent
-from poiesis.application.blueprint_use_cases import BlueprintContext
+from poiesis.application.blueprint_contracts import (
+    CharacterBlueprint,
+    ConceptVariant,
+    CreationIntent,
+    WorldBlueprint,
+)
+from poiesis.application.blueprint_use_cases import BlueprintContext, build_book_blueprint
 from poiesis.db.database import Database
 from poiesis.llm.base import LLMClient
 from poiesis.pipeline.planning.roadmap_planner import RoadmapPlanner
@@ -269,6 +274,435 @@ def test_roadmap_planner_generate_world_accepts_rich_structure() -> None:
     assert world.taboo_rules[0].consequence
 
 
+def test_roadmap_planner_generate_world_normalizes_string_lists() -> None:
+    """世界观归一化应容忍字符串型列表字段和单对象字段。"""
+    planner = RoadmapPlanner()
+    llm = _SequencedJsonLLM(
+        [
+            {
+                "setting_summary": "江湖分裂，旧门规与暗网交易并行。",
+                "era_context": "王朝崩坏后的群雄割据时代。",
+                "social_order": "门派、镖局与地方豪强共同维持表层稳定。",
+                "historical_wounds": "天机阁血案；边城屠门",
+                "public_secrets": "旧机关谱重现，黑市在争抢残页",
+                "geography": {
+                    "name": "断潮关",
+                    "role": "边境要冲",
+                    "description": "多方势力长期争夺的交通隘口",
+                },
+                "factions": {
+                    "name": "铁衣盟",
+                    "position": "边地新兴势力",
+                    "goal": "垄断黑市与边贸",
+                    "methods": "暗桩渗透，悬赏追捕、收编败军",
+                    "public_image": "护商义盟",
+                    "hidden_truth": "以战养商，操控边贸命脉",
+                },
+            },
+            {
+                "power_system": {
+                    "core_mechanics": "真气与机关术短暂共鸣后会引发反噬。",
+                    "costs": "经脉折损；寿命缩减",
+                    "limitations": "必须持有残谱；血脉适配者优先",
+                    "advancement_path": "炼体、聚气、合鸣",
+                    "symbols": "裂纹玉符，机关残页",
+                },
+                "immutable_rules": {
+                    "key": "残谱共鸣",
+                    "description": "机关残谱只能由适配血脉激活。",
+                    "category": "power",
+                    "rationale": "维持力量稀缺性",
+                    "is_immutable": True,
+                },
+                "taboo_rules": {
+                    "key": "逆转合鸣",
+                    "description": "逆行真气强行驱动机关残谱。",
+                    "consequence": "经脉崩坏并诱发走火入魔",
+                    "is_immutable": True,
+                },
+            },
+        ]
+    )
+
+    world = planner.generate_world(
+        intent=CreationIntent(
+            genre="武侠",
+            themes=["成长", "禁忌"],
+            tone="冷峻",
+            protagonist_prompt="被卷入旧案的少年剑客",
+            conflict_prompt="黑市与门派争夺失落机关谱",
+            ending_preference="代价胜利",
+            forbidden_elements=["系统流"],
+            length_preference="12",
+            target_experience="层层揭晓",
+            variant_preference="世界差异优先",
+        ),
+        variant=ConceptVariant(
+            variant_no=1,
+            hook="断潮关旧案重启",
+            world_pitch="江湖与黑市秩序同时失衡。",
+            main_arc_pitch="主角在旧案追查中被迫介入新旧势力之争。",
+            ending_pitch="代价胜利",
+            variant_strategy="真相追查局",
+            core_driver="悬疑驱动",
+            conflict_source="旧案阴谋",
+            world_structure="暗网江湖",
+            protagonist_arc_mode="破局",
+            tone_signature="冷峻",
+            differentiators=["黑市暗网"],
+            diversity_note="",
+        ),
+        llm=llm,
+    )
+
+    assert world.historical_wounds == ["天机阁血案", "边城屠门"]
+    assert world.public_secrets == ["旧机关谱重现", "黑市在争抢残页"]
+    assert world.geography[0].name == "断潮关"
+    assert world.factions[0].methods == ["暗桩渗透", "悬赏追捕", "收编败军"]
+    assert world.power_system.costs == ["经脉折损", "寿命缩减"]
+    assert world.power_system.limitations == ["必须持有残谱", "血脉适配者优先"]
+    assert world.power_system.advancement_path == ["炼体", "聚气", "合鸣"]
+    assert world.power_system.symbols == ["裂纹玉符", "机关残页"]
+    assert world.immutable_rules[0].key == "残谱共鸣"
+    assert world.taboo_rules[0].key == "逆转合鸣"
+
+
+def test_roadmap_planner_generate_characters_normalizes_string_lists() -> None:
+    """人物蓝图归一化应容忍字符串型列表字段。"""
+    planner = RoadmapPlanner()
+    llm = _SequencedJsonLLM(
+        [
+            {
+                "characters": {
+                    "name": "沈砚",
+                    "role": "主角",
+                    "public_persona": "冷静寡言的落魄少年",
+                    "core_motivation": "追查父母真相",
+                    "fatal_flaw": "执念过重",
+                    "non_negotiable_traits": "嘴硬心软；遇到大义不会退缩",
+                    "relationship_constraints": "对师父始终保留戒心、与师兄既竞争又依赖",
+                    "arc_outline": "前期被动卷入；中期主动追查；后期承担代价完成选择",
+                }
+            }
+        ]
+    )
+
+    characters = planner.generate_characters(
+        intent=CreationIntent(
+            genre="武侠",
+            themes=["成长", "背叛"],
+            tone="冷峻",
+            protagonist_prompt="落魄少年",
+            conflict_prompt="追查父母之死",
+            ending_preference="代价胜利",
+            forbidden_elements=["系统流"],
+            length_preference="12",
+            target_experience="层层揭晓",
+            variant_preference="人物差异优先",
+        ),
+        variant=ConceptVariant(
+            variant_no=1,
+            hook="旧案重启",
+            world_pitch="暗网江湖浮出水面。",
+            main_arc_pitch="主角在真相与秩序之间选择。",
+            ending_pitch="代价胜利",
+            variant_strategy="真相追查局",
+            core_driver="悬疑驱动",
+            conflict_source="旧案阴谋",
+            world_structure="暗网江湖",
+            protagonist_arc_mode="破局",
+            tone_signature="冷峻",
+            differentiators=["谜案推进"],
+            diversity_note="",
+        ),
+        world=WorldBlueprint(setting_summary="暗网江湖浮出水面。"),
+        llm=llm,
+    )
+
+    assert len(characters) == 1
+    assert characters[0].non_negotiable_traits == ["嘴硬心软", "遇到大义不会退缩"]
+    assert characters[0].relationship_constraints == ["对师父始终保留戒心", "与师兄既竞争又依赖"]
+    assert characters[0].arc_outline == ["前期被动卷入", "中期主动追查", "后期承担代价完成选择"]
+
+
+def test_roadmap_planner_generate_relationships_normalizes_enum_fields() -> None:
+    """人物关系边归一化应兼容英文枚举、半结构强度和文本布尔值。"""
+    planner = RoadmapPlanner()
+    llm = _SequencedJsonLLM(
+        [
+            {
+                "relationships": {
+                    "edge_id": "rel-1",
+                    "source_character_id": "沈砚",
+                    "target_character_id": "陆行川",
+                    "relation_type": "师徒",
+                    "polarity": "positive",
+                    "visibility": "public",
+                    "stability": "high",
+                    "intensity": "4",
+                    "summary": "名义师徒，实则相互试探。",
+                    "hidden_truth": "师父隐瞒了旧案真相。",
+                    "non_breakable_without_reveal": "required",
+                }
+            }
+        ]
+    )
+
+    edges = planner.generate_relationship_graph(
+        intent=CreationIntent(
+            genre="武侠",
+            themes=["成长", "背叛"],
+            tone="冷峻",
+            protagonist_prompt="落魄少年",
+            conflict_prompt="追查父母之死",
+            ending_preference="代价胜利",
+            forbidden_elements=["系统流"],
+            length_preference="12",
+            target_experience="层层揭晓",
+            variant_preference="人物差异优先",
+        ),
+        variant=ConceptVariant(
+            variant_no=1,
+            hook="旧案重启",
+            world_pitch="暗网江湖浮出水面。",
+            main_arc_pitch="主角在真相与秩序之间选择。",
+            ending_pitch="代价胜利",
+            variant_strategy="真相追查局",
+            core_driver="悬疑驱动",
+            conflict_source="旧案阴谋",
+            world_structure="暗网江湖",
+            protagonist_arc_mode="破局",
+            tone_signature="冷峻",
+            differentiators=["谜案推进"],
+            diversity_note="",
+        ),
+        world=WorldBlueprint(setting_summary="暗网江湖浮出水面。"),
+        characters=[
+            CharacterBlueprint(
+                name="沈砚",
+                role="主角",
+                public_persona="冷静寡言的落魄少年",
+                core_motivation="追查真相",
+                fatal_flaw="执念过重",
+                non_negotiable_traits=["不愿退缩"],
+                relationship_constraints=["与师父彼此试探"],
+                arc_outline=["前期卷入", "中期追查", "后期承担代价"],
+            ),
+            CharacterBlueprint(
+                name="陆行川",
+                role="师父",
+                public_persona="表面冷静的隐世剑客",
+                core_motivation="压住旧案余波",
+                fatal_flaw="习惯隐瞒真相",
+                non_negotiable_traits=["不轻易表露软弱"],
+                relationship_constraints=["对主角既保护又设防"],
+                arc_outline=["前期试探", "中期让位", "后期揭示真相"],
+            ),
+        ],
+        llm=llm,
+    )
+
+    assert len(edges) == 1
+    assert edges[0].polarity == "正向"
+    assert edges[0].visibility == "公开"
+    assert edges[0].stability == "稳定"
+    assert edges[0].intensity == 4
+    assert edges[0].non_breakable_without_reveal is True
+
+
+def test_roadmap_planner_generate_roadmap_normalizes_half_structured_payload() -> None:
+    """章节路线归一化应兼容字符串推进字段和字符串型线索列表。"""
+    planner = RoadmapPlanner()
+    llm = _SequencedJsonLLM(
+        [
+            {
+                "chapters": {
+                    "chapter_number": "1",
+                    "title": "裂碑夜雨",
+                    "goal": "让主角卷入主线",
+                    "core_conflict": "主角想置身事外，但门派与黑市都在逼近",
+                    "turning_point": "主角首次看到残谱异动，无法继续旁观",
+                    "character_progress": "林寒第一次主动追查父母之死；苏璃开始意识到门内有人隐瞒真相",
+                    "relationship_progress": "林寒与苏璃建立初步信任、林寒开始怀疑赵无极的真实立场",
+                    "planned_loops": ["残谱异动", "天机令纹路闪现"],
+                    "closure_function": "抛出下一章钩子",
+                }
+            }
+        ]
+    )
+
+    roadmap = planner.generate_roadmap(
+        intent=CreationIntent(
+            genre="武侠",
+            themes=["成长", "背叛"],
+            tone="冷峻",
+            protagonist_prompt="被卷入旧案的少年",
+            conflict_prompt="追查父母之死与机关残谱",
+            ending_preference="代价胜利",
+            forbidden_elements=["系统流"],
+            length_preference="12",
+            target_experience="层层揭晓",
+            variant_preference="世界差异优先",
+        ),
+        variant=ConceptVariant(
+            variant_no=1,
+            hook="裂碑夜雨",
+            world_pitch="表层江湖平静，暗网秩序暗流涌动。",
+            main_arc_pitch="主角在旧案追查中不断被迫介入各方势力的博弈。",
+            ending_pitch="代价胜利",
+            variant_strategy="真相追查局",
+            core_driver="悬疑驱动",
+            conflict_source="旧案阴谋",
+            world_structure="暗网江湖",
+            protagonist_arc_mode="破局",
+            tone_signature="冷峻",
+            differentiators=["谜案推进"],
+            diversity_note="",
+        ),
+        world=WorldBlueprint(setting_summary="暗网江湖浮出水面。"),
+        characters=[
+            CharacterBlueprint(
+                name="林寒",
+                role="主角",
+                public_persona="冷静寡言的少年",
+                core_motivation="追查父母真相",
+                fatal_flaw="执念过重",
+                non_negotiable_traits=["不会轻易退缩"],
+                relationship_constraints=["对师门保持警惕"],
+                arc_outline=["前期卷入", "中期追查", "后期承担代价"],
+            ),
+            CharacterBlueprint(
+                name="苏璃",
+                role="师妹",
+                public_persona="活泼却敏锐",
+                core_motivation="守住师门",
+                fatal_flaw="过度保护",
+                non_negotiable_traits=["关键时刻会站到主角身边"],
+                relationship_constraints=["与主角逐步建立信任"],
+                arc_outline=["前期陪伴", "中期动摇", "后期共同承担"],
+            ),
+        ],
+        llm=llm,
+        chapter_count=1,
+    )
+
+    assert len(roadmap) == 1
+    assert roadmap[0].character_progress == ["林寒第一次主动追查父母之死", "苏璃开始意识到门内有人隐瞒真相"]
+    assert roadmap[0].relationship_progress == ["林寒与苏璃建立初步信任", "林寒开始怀疑赵无极的真实立场"]
+    assert roadmap[0].planned_loops[0]["title"] == "残谱异动"
+    assert roadmap[0].planned_loops[0]["due_start_chapter"] == 1
+    assert roadmap[0].planned_loops[1]["loop_id"] == "chapter-1-loop-2"
+
+
+def test_roadmap_stage_regenerate_api_returns_updated_blueprint(tmp_db: Database, monkeypatch) -> None:
+    """阶段重生成接口应返回更新后的阶段草稿与路线警示。"""
+    from poiesis.api.services import blueprint_service
+
+    book_id = tmp_db.create_book("阶段重生成测试", "zh-CN", "literary_cn", "", "localized_zh")
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="roadmap_ready",
+        current_step="roadmap",
+        story_arcs_draft=[
+            {
+                "arc_number": 1,
+                "title": "第一幕",
+                "purpose": "主角卷入旧案",
+                "start_chapter": 1,
+                "end_chapter": 3,
+                "main_progress": ["主角接触旧案"],
+                "relationship_progress": ["与师妹建立初步信任"],
+                "loop_progress": ["残谱异动"],
+                "timeline_milestones": ["初夜"],
+                "arc_climax": "旧案第一次暴露",
+            }
+        ],
+        roadmap_draft=[
+            {
+                "chapter_number": 1,
+                "title": "旧案初现",
+                "story_stage": "第一幕",
+                "timeline_anchor": "初夜",
+                "depends_on_chapters": [],
+                "goal": "卷入旧案",
+                "core_conflict": "主角想躲，但线索逼近",
+                "turning_point": "残谱异动",
+                "story_progress": "主角第一次接触旧案",
+                "character_progress": ["林寒被迫入局"],
+                "relationship_progress": ["与苏璃建立初步信任"],
+                "new_reveals": ["残谱并未失传"],
+                "status_shift": ["主角不再只是旁观者"],
+                "planned_loops": [{"title": "残谱异动"}],
+                "chapter_function": "开局",
+                "anti_repeat_signature": "卷入旧案",
+                "closure_function": "抛出钩子",
+            }
+        ],
+        roadmap_validation_issues=[],
+    )
+
+    def _fake_regenerate(db: Database, config_path: str, target_book_id: int, arc_number: int, feedback: str = ""):
+        assert target_book_id == book_id
+        assert arc_number == 1
+        assert "升级" in feedback
+        tmp_db.upsert_book_blueprint_state(
+            book_id,
+            status="roadmap_ready",
+            current_step="roadmap",
+            story_arcs_draft=[
+                {
+                    "arc_number": 1,
+                    "title": "第一幕：局势升级",
+                    "purpose": "主角卷入旧案并被迫面对更大局势",
+                    "start_chapter": 1,
+                    "end_chapter": 3,
+                    "main_progress": ["主角接触旧案", "局势明确升级"],
+                    "relationship_progress": ["与师妹从试探转为并肩"],
+                    "loop_progress": ["残谱异动", "天机阁暗线浮出"],
+                    "timeline_milestones": ["初夜", "次日拂晓"],
+                    "arc_climax": "第一幕结尾形成局势反转",
+                }
+            ],
+            roadmap_draft=[
+                {
+                    "chapter_number": 1,
+                    "title": "局势骤变",
+                    "story_stage": "第一幕：局势升级",
+                    "timeline_anchor": "次日拂晓",
+                    "depends_on_chapters": [],
+                    "goal": "让局势快速升级",
+                    "core_conflict": "旧案背后势力主动出手",
+                    "turning_point": "天机阁暗线暴露",
+                    "story_progress": "旧案正式升级为江湖势力冲突",
+                    "character_progress": ["林寒第一次主动反击"],
+                    "relationship_progress": ["与苏璃形成并肩关系"],
+                    "new_reveals": ["幕后势力来自天机阁"],
+                    "status_shift": ["主角不再被动应对"],
+                    "planned_loops": [{"title": "天机阁暗线"}],
+                    "chapter_function": "升级",
+                    "anti_repeat_signature": "局势升级",
+                    "closure_function": "推动进入下一章",
+                }
+            ],
+            roadmap_validation_issues=[],
+        )
+        return build_book_blueprint(tmp_db, book_id)
+
+    monkeypatch.setattr(blueprint_service, "regenerate_roadmap_stage", _fake_regenerate)
+    client = _make_client(tmp_db)
+
+    response = client.post(
+        f"/api/books/{book_id}/blueprint/roadmap/stages/1:regenerate",
+        json={"feedback": "请让第一幕更早出现局势升级"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["story_arcs_draft"][0]["title"] == "第一幕：局势升级"
+    assert payload["roadmap_draft"][0]["chapter_function"] == "升级"
+    assert payload["roadmap_validation_issues"] == []
+
+
 def test_blueprint_creation_flow_can_lock_book_blueprint(tmp_db: Database, monkeypatch) -> None:
     """从创作意图到整书蓝图锁定，应形成完整的工作流。"""
     from poiesis.api.services import blueprint_service
@@ -365,6 +799,686 @@ def test_blueprint_creation_flow_can_lock_book_blueprint(tmp_db: Database, monke
     assert detail.status_code == 200
     assert detail.json()["roadmap_confirmed"]
     assert detail.json()["revisions"][0]["is_active"] is True
+
+
+def test_world_generate_api_normalizes_rich_payload(tmp_db: Database, monkeypatch) -> None:
+    """世界观生成接口应在 rich JSON 形状不稳定时仍返回规范化结果。"""
+    from poiesis.api.services import blueprint_service
+
+    llm = _SequencedJsonLLM(
+        [
+            {
+                "setting_summary": "武林旧秩序正在裂解，边地黑市同步坐大。",
+                "era_context": "王朝式微后的群雄割据时代。",
+                "social_order": "门派与商会互相依赖却彼此提防。",
+                "historical_wounds": "边城屠门；旧谱失窃",
+                "public_secrets": "人人都知道黑市在追残谱",
+                "geography": {
+                    "name": "裂碑渡",
+                    "role": "货物流转枢纽",
+                    "description": "各方势力都试图控制的渡口",
+                },
+                "factions": {
+                    "name": "渡口盟",
+                    "position": "边地商武共同体",
+                    "goal": "控制渡口和残谱流向",
+                    "methods": "收买、渗透；雇佣死士",
+                    "public_image": "维持商路秩序",
+                    "hidden_truth": "暗中替黑市洗白残谱交易",
+                },
+            },
+            {
+                "power_system": {
+                    "core_mechanics": "残谱会放大持有者真气回路，但必须付出经脉代价。",
+                    "costs": "经脉灼伤；真气紊乱",
+                    "limitations": "需要残谱碎页、血脉承载",
+                    "advancement_path": "炼体、凝脉、合谱",
+                    "symbols": "残谱碎页；裂碑印记",
+                },
+                "immutable_rules": {
+                    "key": "残谱承载",
+                    "description": "残谱只能被少数适配者稳定承载。",
+                    "category": "power",
+                    "rationale": "限制力量泛滥",
+                    "is_immutable": True,
+                },
+                "taboo_rules": {
+                    "key": "燃脉催谱",
+                    "description": "燃烧经脉强开残谱。",
+                    "consequence": "短期爆发后迅速崩毁",
+                    "is_immutable": True,
+                },
+            },
+        ]
+    )
+
+    def _fake_context(config_path: str, db: Database, book_id: int) -> BlueprintContext:  # noqa: ARG001
+        return BlueprintContext(
+            db=db,
+            llm=llm,
+            book_id=book_id,
+            planner=RoadmapPlanner(),
+        )
+
+    monkeypatch.setattr(blueprint_service, "_build_context", _fake_context)
+    client = _make_client(tmp_db)
+
+    created = client.post(
+        "/api/books",
+        json={
+            "name": "世界观归一化接口测试",
+            "language": "zh-CN",
+            "style_preset": "literary_cn",
+            "style_prompt": "",
+            "naming_policy": "localized_zh",
+            "is_default": False,
+        },
+    )
+    book_id = created.json()["id"]
+    tmp_db.upsert_creation_intent(
+        book_id,
+        {
+            "genre": "武侠",
+            "themes": ["成长"],
+            "tone": "冷峻",
+            "protagonist_prompt": "少年剑客",
+            "conflict_prompt": "追查残谱旧案",
+            "ending_preference": "代价胜利",
+            "forbidden_elements": [],
+            "length_preference": "12",
+            "target_experience": "层层揭晓",
+            "variant_preference": "世界差异优先",
+        },
+    )
+    tmp_db.replace_concept_variants(
+        book_id,
+        [
+            {
+                "variant_no": 1,
+                "hook": "渡口旧案重启",
+                "world_pitch": "武林旧秩序与黑市暗网同时失衡。",
+                "main_arc_pitch": "主角在追查残谱时被迫卷入商武两界的角力。",
+                "ending_pitch": "代价胜利",
+                "variant_strategy": "真相追查局",
+                "core_driver": "悬疑驱动",
+                "conflict_source": "旧案阴谋",
+                "world_structure": "暗网江湖",
+                "protagonist_arc_mode": "破局",
+                "tone_signature": "冷峻",
+                "differentiators": ["黑市暗网"],
+            }
+        ],
+    )
+    variant_id = tmp_db.list_concept_variants(book_id)[0]["id"]
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="concept_selected",
+        current_step="world",
+        selected_variant_id=variant_id,
+    )
+
+    response = client.post(
+        f"/api/books/{book_id}/blueprint/world:generate",
+        json={"feedback": "更强调边地黑市与残谱代价"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "world_ready"
+    world = payload["world_draft"]
+    assert world["factions"][0]["methods"] == ["收买", "渗透", "雇佣死士"]
+    assert world["power_system"]["costs"] == ["经脉灼伤", "真气紊乱"]
+    assert world["historical_wounds"] == ["边城屠门", "旧谱失窃"]
+
+
+def test_roadmap_generate_api_normalizes_half_structured_payload(tmp_db: Database, monkeypatch) -> None:
+    """章节路线生成接口应在半结构 payload 下返回规范化后的正式结构。"""
+    from poiesis.api.services import blueprint_service
+
+    llm = _SequencedJsonLLM(
+        [
+            {
+                "story_arcs": [
+                    {
+                        "arc_number": 1,
+                        "title": "血月旧案开启",
+                        "purpose": "让主角卷入主线并建立江湖格局",
+                        "start_chapter": 1,
+                        "end_chapter": 12,
+                        "main_progress": "主角确认父母旧案与血月门有关",
+                        "relationship_progress": "林寒与苏璃建立互信",
+                        "loop_progress": ["残谱异动"],
+                        "timeline_milestones": "入秋初夜；三日后",
+                        "arc_climax": "主角第一次公开与敌对势力交锋",
+                    }
+                ]
+            },
+            {
+                "chapters": [
+                    {
+                        "chapter_number": 1,
+                        "title": "裂碑夜雨",
+                        "story_stage": "血月旧案开启",
+                        "timeline_anchor": "入秋初夜",
+                        "depends_on_chapters": [],
+                        "goal": "让主角卷入主线",
+                        "core_conflict": "主角想置身事外，但黑市与师门都在逼近",
+                        "turning_point": "主角第一次看见残谱异动",
+                        "story_progress": "父母旧案与血月门第一次产生明确联系",
+                        "character_progress": "林寒第一次主动追查父母之死；苏璃发现门内气氛异常",
+                        "relationship_progress": "林寒与苏璃建立初步信任、林寒开始怀疑赵无极",
+                        "new_reveals": "残谱会对主角血脉产生共鸣",
+                        "status_shift": "主角不再只是被动逃避",
+                        "chapter_function": "开局",
+                        "anti_repeat_signature": "血月旧案开启:卷入主线",
+                        "planned_loops": ["残谱异动", "天机令纹路闪现"],
+                        "closure_function": "抛出下一章钩子",
+                    }
+                ]
+            }
+        ]
+    )
+
+    def _fake_context(config_path: str, db: Database, book_id: int) -> BlueprintContext:  # noqa: ARG001
+        return BlueprintContext(
+            db=db,
+            llm=llm,
+            book_id=book_id,
+            planner=RoadmapPlanner(),
+        )
+
+    monkeypatch.setattr(blueprint_service, "_build_context", _fake_context)
+    client = _make_client(tmp_db)
+
+    created = client.post(
+        "/api/books",
+        json={
+            "name": "章节路线归一化接口测试",
+            "language": "zh-CN",
+            "style_preset": "literary_cn",
+            "style_prompt": "",
+            "naming_policy": "localized_zh",
+            "is_default": False,
+        },
+    )
+    book_id = created.json()["id"]
+    tmp_db.upsert_creation_intent(
+        book_id,
+        {
+            "genre": "武侠",
+            "themes": ["成长"],
+            "tone": "冷峻",
+            "protagonist_prompt": "被卷入旧案的少年",
+            "conflict_prompt": "追查父母之死与残谱",
+            "ending_preference": "代价胜利",
+            "forbidden_elements": [],
+            "length_preference": "12",
+            "target_experience": "层层揭晓",
+            "variant_preference": "世界差异优先",
+        },
+    )
+    tmp_db.replace_concept_variants(
+        book_id,
+        [
+            {
+                "variant_no": 1,
+                "hook": "裂碑夜雨",
+                "world_pitch": "表层江湖平静，暗网秩序暗流涌动。",
+                "main_arc_pitch": "主角在旧案追查中不断被迫介入各方势力的博弈。",
+                "ending_pitch": "代价胜利",
+                "variant_strategy": "真相追查局",
+                "core_driver": "悬疑驱动",
+                "conflict_source": "旧案阴谋",
+                "world_structure": "暗网江湖",
+                "protagonist_arc_mode": "破局",
+                "tone_signature": "冷峻",
+                "differentiators": ["谜案推进"],
+            }
+        ],
+    )
+    variant_id = tmp_db.list_concept_variants(book_id)[0]["id"]
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="characters_confirmed",
+        current_step="roadmap",
+        selected_variant_id=variant_id,
+        world_confirmed=WorldBlueprint(setting_summary="暗网江湖浮出水面。").model_dump(mode="json"),
+        character_confirmed=[
+            CharacterBlueprint(
+                name="林寒",
+                role="主角",
+                public_persona="冷静寡言的少年",
+                core_motivation="追查父母真相",
+                fatal_flaw="执念过重",
+                non_negotiable_traits=["不会轻易退缩"],
+                relationship_constraints=["对师门保持警惕"],
+                arc_outline=["前期卷入", "中期追查", "后期承担代价"],
+            ).model_dump(mode="json"),
+            CharacterBlueprint(
+                name="苏璃",
+                role="师妹",
+                public_persona="活泼却敏锐",
+                core_motivation="守住师门",
+                fatal_flaw="过度保护",
+                non_negotiable_traits=["关键时刻会站到主角身边"],
+                relationship_constraints=["与主角逐步建立信任"],
+                arc_outline=["前期陪伴", "中期动摇", "后期共同承担"],
+            ).model_dump(mode="json"),
+        ],
+    )
+
+    roadmap_resp = client.post(
+        f"/api/books/{book_id}/blueprint/roadmap:generate",
+        json={"feedback": "前三章开局更猛"},
+    )
+
+    assert roadmap_resp.status_code == 200
+    body = roadmap_resp.json()
+    payload = body["roadmap_draft"]
+    assert body["story_arcs_draft"][0]["title"] == "血月旧案开启"
+    assert body["roadmap_validation_issues"] == []
+    assert payload[0]["story_stage"] == "血月旧案开启"
+    assert payload[0]["timeline_anchor"] == "入秋初夜"
+    assert payload[0]["story_progress"] == "父母旧案与血月门第一次产生明确联系"
+    assert payload[0]["chapter_function"] == "开局"
+    assert payload[0]["character_progress"] == ["林寒第一次主动追查父母之死", "苏璃发现门内气氛异常"]
+    assert payload[0]["relationship_progress"] == ["林寒与苏璃建立初步信任", "林寒开始怀疑赵无极"]
+    assert payload[0]["planned_loops"][0]["title"] == "残谱异动"
+    assert payload[0]["planned_loops"][1]["loop_id"] == "chapter-1-loop-2"
+
+
+def test_build_book_blueprint_normalizes_stored_half_structured_roadmap(tmp_db: Database) -> None:
+    """读取蓝图工作态时，应自动规范化旧的半结构章节路线。"""
+    book_id = tmp_db.create_book("章节路线读取归一化", "zh-CN", "literary_cn", "", "localized_zh")
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="roadmap_ready",
+        current_step="roadmap",
+        roadmap_draft=[
+            {
+                "chapter_number": "3",
+                "title": "夜渡裂碑",
+                "goal": "推进调查",
+                "core_conflict": "主角想隐忍，但线索开始逼近",
+                "turning_point": "裂碑渡异动暴露残谱踪迹",
+                "character_progress": "林寒开始主动追查；苏璃第一次公开站队",
+                "relationship_progress": "林寒与苏璃建立互信、林寒与赵无极出现裂痕",
+                "planned_loops": ["裂碑渡异动", "残谱缺页现身"],
+                "closure_function": "抛出后续追查线索",
+            }
+        ],
+    )
+
+    blueprint = build_book_blueprint(tmp_db, book_id)
+
+    assert blueprint.roadmap_draft[0].chapter_number == 3
+    assert blueprint.roadmap_draft[0].character_progress == ["林寒开始主动追查", "苏璃第一次公开站队"]
+    assert blueprint.roadmap_draft[0].planned_loops[0]["title"] == "裂碑渡异动"
+
+
+def test_build_book_blueprint_derives_story_arcs_and_roadmap_warnings(tmp_db: Database) -> None:
+    """读取蓝图时，应派生阶段视图并暴露重复功能章警示。"""
+    book_id = tmp_db.create_book("长篇路线校验", "zh-CN", "literary_cn", "", "localized_zh")
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="roadmap_ready",
+        current_step="roadmap",
+        roadmap_draft=[
+            {
+                "chapter_number": 1,
+                "title": "夜查旧案",
+                "story_stage": "第一幕",
+                "timeline_anchor": "初夜",
+                "goal": "调查旧案",
+                "core_conflict": "主角不敢惊动师门",
+                "turning_point": "残谱异动",
+                "story_progress": "主角第一次确认旧案并非巧合",
+                "character_progress": ["主角开始怀疑师门"],
+                "relationship_progress": [],
+                "chapter_function": "调查",
+                "anti_repeat_signature": "第一幕:调查旧案",
+                "planned_loops": [],
+                "closure_function": "继续追查",
+            },
+            {
+                "chapter_number": 2,
+                "title": "再查旧案",
+                "story_stage": "第一幕",
+                "timeline_anchor": "初夜",
+                "goal": "调查旧案",
+                "core_conflict": "主角不敢惊动师门",
+                "turning_point": "账册缺页",
+                "story_progress": "主角第二次确认旧案并非巧合",
+                "character_progress": ["主角对师兄产生疑心"],
+                "relationship_progress": [],
+                "chapter_function": "调查",
+                "anti_repeat_signature": "第一幕:调查旧案",
+                "planned_loops": [],
+                "closure_function": "继续追查",
+            },
+        ],
+    )
+
+    blueprint = build_book_blueprint(tmp_db, book_id)
+
+    assert blueprint.story_arcs_draft[0].title == "第一幕"
+    assert any(item.type == "repeated_chapter_function" for item in blueprint.roadmap_validation_issues)
+
+
+def test_character_generate_api_normalizes_rich_payload(tmp_db: Database, monkeypatch) -> None:
+    """人物蓝图生成 API 应容忍字符串型数组字段。"""
+    from poiesis.api.services import blueprint_service
+
+    llm = _SequencedJsonLLM(
+        [
+            {
+                "characters": [
+                    {
+                        "name": "沈砚",
+                        "role": "主角",
+                        "public_persona": "冷静寡言的落魄少年",
+                        "core_motivation": "追查父母真相",
+                        "fatal_flaw": "执念过重",
+                        "non_negotiable_traits": "嘴硬心软；遇到大义不会退缩",
+                        "relationship_constraints": "对师父始终保留戒心、与师兄既竞争又依赖",
+                        "arc_outline": "前期被动卷入；中期主动追查；后期承担代价完成选择",
+                    }
+                ]
+            },
+            {
+                "relationships": [],
+            },
+        ]
+    )
+
+    def _fake_context(config_path: str, db: Database, book_id: int) -> BlueprintContext:  # noqa: ARG001
+        return BlueprintContext(
+            db=db,
+            llm=llm,
+            book_id=book_id,
+            planner=RoadmapPlanner(),
+        )
+
+    monkeypatch.setattr(blueprint_service, "_build_context", _fake_context)
+    client = _make_client(tmp_db)
+    book_id = tmp_db.create_book(
+        name="人物归一化测试",
+        language="zh-CN",
+        style_preset="literary_cn",
+        style_prompt="",
+        naming_policy="localized_zh",
+        is_default=False,
+    )
+    tmp_db.upsert_creation_intent(
+        book_id,
+        {
+            "genre": "武侠",
+            "themes": ["成长"],
+            "tone": "冷峻",
+            "protagonist_prompt": "落魄少年",
+            "conflict_prompt": "追查父母之死",
+            "ending_preference": "代价胜利",
+            "forbidden_elements": [],
+            "length_preference": "12",
+            "target_experience": "层层揭晓",
+            "variant_preference": "人物差异优先",
+        },
+    )
+    tmp_db.replace_concept_variants(
+        book_id,
+        [
+            {
+                "variant_no": 1,
+                "hook": "旧案重启",
+                "world_pitch": "暗网江湖浮出水面。",
+                "main_arc_pitch": "主角在真相与秩序之间选择。",
+                "ending_pitch": "代价胜利",
+                "variant_strategy": "真相追查局",
+                "core_driver": "悬疑驱动",
+                "conflict_source": "旧案阴谋",
+                "world_structure": "暗网江湖",
+                "protagonist_arc_mode": "破局",
+                "tone_signature": "冷峻",
+                "differentiators": ["谜案推进"],
+            }
+        ],
+    )
+    variant_id = tmp_db.list_concept_variants(book_id)[0]["id"]
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="world_confirmed",
+        current_step="characters",
+        selected_variant_id=variant_id,
+        world_confirmed={
+            "setting_summary": "暗网江湖浮出水面。",
+            "era_context": "王朝衰微",
+            "social_order": "门派与豪强维持表面平衡",
+            "historical_wounds": [],
+            "public_secrets": [],
+            "geography": [],
+            "power_system": {
+                "core_mechanics": "真气与机关术共鸣",
+                "costs": [],
+                "limitations": [],
+                "advancement_path": [],
+                "symbols": [],
+            },
+            "factions": [],
+            "immutable_rules": [],
+            "taboo_rules": [],
+        },
+    )
+
+    response = client.post(
+        f"/api/books/{book_id}/blueprint/characters:generate",
+        json={"feedback": "主角更复杂一些"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "characters_ready"
+    character = payload["character_draft"][0]
+    assert character["arc_outline"] == ["前期被动卷入", "中期主动追查", "后期承担代价完成选择"]
+    assert character["relationship_constraints"] == ["对师父始终保留戒心", "与师兄既竞争又依赖"]
+
+
+def test_character_generate_api_normalizes_relationship_enum_payload(
+    tmp_db: Database,
+    monkeypatch,
+) -> None:
+    """人物蓝图生成接口应把关系边中的英文枚举映射成中文正式值。"""
+    from poiesis.api.services import blueprint_service
+
+    llm = _SequencedJsonLLM(
+        [
+            {
+                "characters": [
+                    {
+                        "name": "沈砚",
+                        "role": "主角",
+                        "public_persona": "落魄少年",
+                        "core_motivation": "追查真相",
+                        "fatal_flaw": "执念过重",
+                        "non_negotiable_traits": ["嘴硬心软"],
+                        "relationship_constraints": ["对师父既依赖又怀疑"],
+                        "arc_outline": ["前期卷入", "中期追查", "后期承担代价"],
+                    },
+                    {
+                        "name": "陆行川",
+                        "role": "师父",
+                        "public_persona": "隐世剑客",
+                        "core_motivation": "压住旧案余波",
+                        "fatal_flaw": "习惯隐瞒真相",
+                        "non_negotiable_traits": ["不轻易失控"],
+                        "relationship_constraints": ["对主角既保护又设防"],
+                        "arc_outline": ["前期试探", "中期让位", "后期揭示真相"],
+                    },
+                ]
+            },
+            {
+                "relationships": [
+                    {
+                        "edge_id": "rel-1",
+                        "source_character_id": "沈砚",
+                        "target_character_id": "陆行川",
+                        "relation_type": "师徒",
+                        "polarity": "positive",
+                        "visibility": "public",
+                        "stability": "high",
+                        "intensity": "4",
+                        "summary": "名义师徒，实则彼此试探。",
+                        "hidden_truth": "师父隐瞒了旧案真相。",
+                        "non_breakable_without_reveal": "yes",
+                    }
+                ]
+            },
+        ]
+    )
+
+    def _fake_context(config_path: str, db: Database, book_id: int) -> BlueprintContext:  # noqa: ARG001
+        return BlueprintContext(
+            db=db,
+            llm=llm,
+            book_id=book_id,
+            planner=RoadmapPlanner(),
+        )
+
+    monkeypatch.setattr(blueprint_service, "_build_context", _fake_context)
+    client = _make_client(tmp_db)
+    book_id = tmp_db.create_book(
+        name="人物关系枚举归一化测试",
+        language="zh-CN",
+        style_preset="literary_cn",
+        style_prompt="",
+        naming_policy="localized_zh",
+        is_default=False,
+    )
+    tmp_db.upsert_creation_intent(
+        book_id,
+        {
+            "genre": "武侠",
+            "themes": ["成长", "背叛"],
+            "tone": "冷峻",
+            "protagonist_prompt": "落魄少年",
+            "conflict_prompt": "追查父母之死",
+            "ending_preference": "代价胜利",
+            "forbidden_elements": ["系统流"],
+            "length_preference": "12",
+            "target_experience": "层层揭晓",
+            "variant_preference": "人物差异优先",
+        },
+    )
+    tmp_db.replace_concept_variants(
+        book_id,
+        [
+            {
+                "variant_no": 1,
+                "selected": True,
+                "hook": "旧案重启",
+                "world_pitch": "暗网江湖浮出水面。",
+                "main_arc_pitch": "主角在真相与秩序之间选择。",
+                "ending_pitch": "代价胜利",
+                "variant_strategy": "真相追查局",
+                "core_driver": "悬疑驱动",
+                "conflict_source": "旧案阴谋",
+                "world_structure": "暗网江湖",
+                "protagonist_arc_mode": "破局",
+                "tone_signature": "冷峻",
+                "differentiators": ["谜案推进"],
+            }
+        ],
+    )
+    variant_id = tmp_db.list_concept_variants(book_id)[0]["id"]
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="world_confirmed",
+        current_step="characters",
+        selected_variant_id=variant_id,
+        world_confirmed={
+            "setting_summary": "暗网江湖浮出水面。",
+            "era_context": "王朝衰微",
+            "social_order": "门派与豪强维持表面平衡",
+            "historical_wounds": [],
+            "public_secrets": [],
+            "geography": [],
+            "power_system": {
+                "core_mechanics": "真气与机关术共鸣",
+                "costs": [],
+                "limitations": [],
+                "advancement_path": [],
+                "symbols": [],
+            },
+            "factions": [],
+            "immutable_rules": [],
+            "taboo_rules": [],
+        },
+    )
+
+    response = client.post(
+        f"/api/books/{book_id}/blueprint/characters:generate",
+        json={"feedback": "关系里要有明显试探感"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    relationship = payload["relationship_graph_draft"][0]
+    assert relationship["polarity"] == "正向"
+    assert relationship["visibility"] == "公开"
+    assert relationship["stability"] == "稳定"
+    assert relationship["intensity"] == 4
+    assert relationship["non_breakable_without_reveal"] is True
+
+
+def test_get_blueprint_normalizes_stored_world_and_character_payload(tmp_db: Database) -> None:
+    """读取蓝图工作态时，应自动把历史半结构草稿收口成正式协议。"""
+    client = _make_client(tmp_db)
+    book_id = tmp_db.create_book(
+        name="读取草稿归一化测试",
+        language="zh-CN",
+        style_preset="literary_cn",
+        style_prompt="",
+        naming_policy="localized_zh",
+        is_default=False,
+    )
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="characters_ready",
+        current_step="characters",
+        world_draft={
+            "setting_summary": "旧秩序与暗网并存。",
+            "power_system": {
+                "core_mechanics": "真气与机关术共鸣",
+                "costs": "经脉灼伤；真气紊乱",
+                "limitations": "血脉适配；残谱加持",
+                "advancement_path": "炼体、化气",
+                "symbols": "裂纹玉牌，机关残页",
+            },
+            "factions": {
+                "name": "天机阁",
+                "position": "隐秘门派",
+                "goal": "维持均势",
+                "methods": "暗线操盘；收拢秘卷",
+                "public_image": "避世门派",
+                "hidden_truth": "操盘江湖均势",
+            },
+        },
+        character_draft=[
+            {
+                "name": "沈砚",
+                "role": "主角",
+                "public_persona": "落魄少年",
+                "core_motivation": "追查真相",
+                "fatal_flaw": "执念过重",
+                "non_negotiable_traits": "嘴硬心软；不肯退缩",
+                "relationship_constraints": "对师父保留戒心、与师兄相互牵制",
+                "arc_outline": "前期卷入；中期追查；后期承担代价",
+            }
+        ],
+    )
+
+    response = client.get(f"/api/books/{book_id}/blueprint")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["world_draft"]["factions"][0]["methods"] == ["暗线操盘", "收拢秘卷"]
+    assert payload["world_draft"]["power_system"]["costs"] == ["经脉灼伤", "真气紊乱"]
+    assert payload["character_draft"][0]["arc_outline"] == ["前期卷入", "中期追查", "后期承担代价"]
 
 
 def test_can_regenerate_single_concept_variant_before_selection(tmp_db: Database, monkeypatch) -> None:

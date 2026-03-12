@@ -36,6 +36,7 @@ from poiesis.application.blueprint_use_cases import (
     GetRelationshipGraphUseCase,
     ListRelationshipPendingUseCase,
     RegenerateConceptVariantUseCase,
+    RegenerateRoadmapStageUseCase,
     RejectRelationshipPendingUseCase,
     RelationshipConflictError,
     ReplanBlueprintUseCase,
@@ -150,6 +151,18 @@ def generate_roadmap(
     """生成章节路线草稿。"""
     context = _build_context(config_path, db, book_id)
     return GenerateRoadmapUseCase(context).execute(feedback)
+
+
+def regenerate_roadmap_stage(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    arc_number: int,
+    feedback: str = "",
+) -> BookBlueprint:
+    """只重生成某个阶段覆盖的章节范围。"""
+    context = _build_context(config_path, db, book_id)
+    return RegenerateRoadmapStageUseCase(context).execute(arc_number, feedback)
 
 
 def confirm_blueprint_layer(

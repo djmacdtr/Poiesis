@@ -274,16 +274,51 @@ class RelationshipPendingItem(BaseModel):
     relationship: RelationshipBlueprintEdge | None = None
 
 
+class StoryArcPlan(BaseModel):
+    """整书蓝图中的阶段/卷级路线。"""
+
+    arc_number: int
+    title: str = ""
+    purpose: str = ""
+    start_chapter: int = 1
+    end_chapter: int = 1
+    main_progress: list[str] = Field(default_factory=list)
+    relationship_progress: list[str] = Field(default_factory=list)
+    loop_progress: list[str] = Field(default_factory=list)
+    timeline_milestones: list[str] = Field(default_factory=list)
+    arc_climax: str = ""
+
+
+class RoadmapValidationIssue(BaseModel):
+    """蓝图阶段的静态路线校验问题。"""
+
+    severity: Literal["fatal", "warning"] = "warning"
+    type: str = ""
+    message: str = ""
+    chapter_number: int | None = None
+    story_stage: str = ""
+    arc_number: int | None = None
+    suggested_action: Literal["regenerate_stage", "edit_chapter", "review_stage"] = "review_stage"
+
+
 class ChapterRoadmapItem(BaseModel):
     """整书路线中的单章规划。"""
 
     chapter_number: int
     title: str = ""
+    story_stage: str = ""
+    timeline_anchor: str = ""
+    depends_on_chapters: list[int] = Field(default_factory=list)
     goal: str = ""
     core_conflict: str = ""
     turning_point: str = ""
+    story_progress: str = ""
     character_progress: list[str] = Field(default_factory=list)
     relationship_progress: list[str] = Field(default_factory=list)
+    new_reveals: list[str] = Field(default_factory=list)
+    status_shift: list[str] = Field(default_factory=list)
+    chapter_function: str = ""
+    anti_repeat_signature: str = ""
     planned_loops: list[dict[str, object]] = Field(default_factory=list)
     closure_function: str = ""
 
@@ -318,8 +353,11 @@ class BookBlueprint(BaseModel):
     relationship_graph_draft: list[RelationshipBlueprintEdge] = Field(default_factory=list)
     relationship_graph_confirmed: list[RelationshipBlueprintEdge] = Field(default_factory=list)
     relationship_pending: list[RelationshipPendingItem] = Field(default_factory=list)
+    story_arcs_draft: list[StoryArcPlan] = Field(default_factory=list)
+    story_arcs_confirmed: list[StoryArcPlan] = Field(default_factory=list)
     roadmap_draft: list[ChapterRoadmapItem] = Field(default_factory=list)
     roadmap_confirmed: list[ChapterRoadmapItem] = Field(default_factory=list)
+    roadmap_validation_issues: list[RoadmapValidationIssue] = Field(default_factory=list)
     revisions: list[BlueprintRevision] = Field(default_factory=list)
 
 

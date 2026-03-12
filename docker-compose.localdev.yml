@@ -57,7 +57,14 @@ services:
       - sh
       - -c
       - >-
-        if [ ! -x node_modules/.bin/vite ]; then npm ci; fi &&
+        CURRENT_LOCK_HASH="$$(sha256sum package-lock.json | awk '{print $$1}')" &&
+        INSTALLED_LOCK_HASH="$$(cat node_modules/.package-lock.sha256 2>/dev/null || true)" &&
+        if [ ! -d node_modules ] || [ "$$CURRENT_LOCK_HASH" != "$$INSTALLED_LOCK_HASH" ]; then
+          echo "检测到前端依赖变化，重新执行 npm ci..." &&
+          npm ci &&
+          mkdir -p node_modules &&
+          printf '%s' "$$CURRENT_LOCK_HASH" > node_modules/.package-lock.sha256;
+        fi &&
         npm run dev -- --host 0.0.0.0 --port 5173
     environment:
       - VITE_API_BASE_URL=http://127.0.0.1:18000

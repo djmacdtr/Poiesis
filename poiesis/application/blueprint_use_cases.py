@@ -20,6 +20,8 @@ from poiesis.application.blueprint_contracts import (
     RelationshipConflictReport,
     RelationshipPendingItem,
     RelationshipRetconProposal,
+    RoadmapValidationIssue,
+    StoryArcPlan,
     WorldBlueprint,
 )
 from poiesis.db.database import Database
@@ -40,6 +42,7 @@ class BlueprintContext:
 def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
     """把当前蓝图工作态和版本快照组装成统一响应。"""
     state = db.get_book_blueprint_state(book_id) or {}
+    planner = RoadmapPlanner()
     intent_row = db.get_creation_intent(book_id)
     variants = [ConceptVariant.model_validate(item) for item in db.list_concept_variants(book_id)]
     selected_variant = None
@@ -63,6 +66,14 @@ def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
         )
         for item in db.list_blueprint_revisions(book_id)
     ]
+    roadmap_draft = planner.normalize_roadmap_payload(state.get("roadmap_draft") or [])
+    roadmap_confirmed = planner.normalize_roadmap_payload(state.get("roadmap_confirmed") or [])
+    story_arcs_draft = planner.derive_story_arcs_from_roadmap(roadmap_draft)
+    story_arcs_confirmed = planner.derive_story_arcs_from_roadmap(roadmap_confirmed)
+    roadmap_issues = planner.verify_roadmap(
+        story_arcs_draft or story_arcs_confirmed,
+        roadmap_draft or roadmap_confirmed,
+    ) if (roadmap_draft or roadmap_confirmed) else []
 
     return BookBlueprint(
         book_id=book_id,
@@ -86,35 +97,39 @@ def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
         intent=CreationIntent.model_validate(intent_row) if intent_row else None,
         concept_variants=variants,
         selected_variant=selected_variant,
-        world_draft=WorldBlueprint.model_validate(state["world_draft"]) if state.get("world_draft") else None,
+        world_draft=planner.normalize_world_blueprint_payload(state["world_draft"]) if state.get("world_draft") else None,
         world_confirmed=(
-            WorldBlueprint.model_validate(state["world_confirmed"]) if state.get("world_confirmed") else None
+            planner.normalize_world_blueprint_payload(state["world_confirmed"])
+            if state.get("world_confirmed")
+            else None
         ),
-        character_draft=[
-            CharacterBlueprint.model_validate(item) for item in list(state.get("character_draft") or [])
-        ],
-        character_confirmed=[
-            CharacterBlueprint.model_validate(item) for item in list(state.get("character_confirmed") or [])
-        ],
-        relationship_graph_draft=[
-            RelationshipBlueprintEdge.model_validate(item)
-            for item in list(state.get("relationship_graph_draft") or [])
-        ],
-        relationship_graph_confirmed=[
-            RelationshipBlueprintEdge.model_validate(item)
-            for item in list(state.get("relationship_graph_confirmed") or [])
-        ],
+        character_draft=planner.normalize_character_blueprints_payload(state.get("character_draft") or []),
+        character_confirmed=planner.normalize_character_blueprints_payload(state.get("character_confirmed") or []),
+        relationship_graph_draft=planner.normalize_relationship_blueprint_edges_payload(
+            state.get("relationship_graph_draft") or [],
+            planner.normalize_character_blueprints_payload(state.get("character_draft") or []),
+        ),
+        relationship_graph_confirmed=planner.normalize_relationship_blueprint_edges_payload(
+            state.get("relationship_graph_confirmed") or [],
+            planner.normalize_character_blueprints_payload(
+                state.get("character_confirmed") or state.get("character_draft") or []
+            ),
+        ),
         relationship_pending=[
             RelationshipPendingItem.model_validate(item)
             for item in db.list_relationship_pending_items(book_id, status="pending")
         ]
         if hasattr(db, "list_relationship_pending_items")
         else [],
-        roadmap_draft=[
-            ChapterRoadmapItem.model_validate(item) for item in list(state.get("roadmap_draft") or [])
+        story_arcs_draft=[StoryArcPlan.model_validate(item.model_dump(mode="json")) for item in story_arcs_draft],
+        story_arcs_confirmed=[
+            StoryArcPlan.model_validate(item.model_dump(mode="json")) for item in story_arcs_confirmed
         ],
-        roadmap_confirmed=[
-            ChapterRoadmapItem.model_validate(item) for item in list(state.get("roadmap_confirmed") or [])
+        roadmap_draft=roadmap_draft,
+        roadmap_confirmed=roadmap_confirmed,
+        roadmap_validation_issues=[
+            RoadmapValidationIssue.model_validate(item.model_dump(mode="json"))
+            for item in roadmap_issues
         ],
         revisions=revisions,
     )
@@ -290,14 +305,17 @@ class _BlueprintLayerBase:
         payload = state.get("world_confirmed") or state.get("world_draft")
         if not payload:
             raise ValueError("请先生成并确认世界观蓝图")
-        return WorldBlueprint.model_validate(payload)
+        return self._context.planner.normalize_world_blueprint_payload(payload)
 
     def _require_character_confirmed(self) -> list[CharacterBlueprint]:
         state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
         payload = state.get("character_confirmed") or state.get("character_draft") or []
         if not payload:
             raise ValueError("请先生成并确认人物蓝图")
-        return [CharacterBlueprint.model_validate(item) for item in payload]
+        characters = self._context.planner.normalize_character_blueprints_payload(payload)
+        if not characters:
+            raise ValueError("请先生成并确认人物蓝图")
+        return characters
 
     def _length_to_chapter_count(self, intent: CreationIntent) -> int:
         raw = intent.length_preference.strip()
@@ -514,7 +532,7 @@ class GenerateRoadmapUseCase(_BlueprintLayerBase):
         variant = self._require_selected_variant()
         world = self._require_world_confirmed()
         characters = self._require_character_confirmed()
-        roadmap = self._context.planner.generate_roadmap(
+        story_arcs, roadmap, issues = self._context.planner.generate_structured_roadmap(
             intent=intent,
             variant=variant,
             world=world,
@@ -527,7 +545,79 @@ class GenerateRoadmapUseCase(_BlueprintLayerBase):
             self._context.book_id,
             status="roadmap_ready",
             current_step="roadmap",
+            story_arcs_draft=[item.model_dump(mode="json") for item in story_arcs],
             roadmap_draft=[item.model_dump(mode="json") for item in roadmap],
+            roadmap_validation_issues=[item.model_dump(mode="json") for item in issues],
+        )
+        return build_book_blueprint(self._context.db, self._context.book_id)
+
+
+class RegenerateRoadmapStageUseCase(_BlueprintLayerBase):
+    """只重生成一个阶段，作为路线工作台的主修复入口。"""
+
+    def execute(self, arc_number: int, feedback: str = "") -> BookBlueprint:
+        intent = self._require_intent()
+        variant = self._require_selected_variant()
+        world = self._require_world_confirmed()
+        characters = self._require_character_confirmed()
+        state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
+        current_roadmap = self._context.planner.normalize_roadmap_payload(
+            state.get("roadmap_draft") or state.get("roadmap_confirmed") or []
+        )
+        if not current_roadmap:
+            raise ValueError("当前还没有章节路线，请先生成整书路线。")
+        story_arcs = self._context.planner.derive_story_arcs_from_roadmap(current_roadmap)
+        target_arc = next((item for item in story_arcs if item.arc_number == arc_number), None)
+        if target_arc is None:
+            raise ValueError(f"第 {arc_number} 幕不存在。")
+
+        preserved_before = [item for item in current_roadmap if item.chapter_number < target_arc.start_chapter]
+        preserved_after = [item for item in current_roadmap if item.chapter_number > target_arc.end_chapter]
+        current_issues = self._context.planner.verify_roadmap(story_arcs, current_roadmap)
+        target_issue_messages = [
+            item.message
+            for item in current_issues
+            if item.arc_number == arc_number or item.story_stage == target_arc.title
+        ]
+        regeneration_feedback = "；".join(
+            part
+            for part in [
+                feedback.strip(),
+                f"请重点修复当前阶段的问题：{'；'.join(target_issue_messages)}" if target_issue_messages else "",
+            ]
+            if part
+        )
+        regenerated_stage, arc_issues = self._context.planner.regenerate_story_arc(
+            intent=intent,
+            variant=variant,
+            world=world,
+            characters=characters,
+            llm=self._context.llm,
+            story_arc=target_arc,
+            feedback=regeneration_feedback,
+            existing_roadmap=preserved_before,
+        )
+        if any(item.severity == "fatal" for item in arc_issues):
+            detail = "；".join(item.message for item in arc_issues if item.severity == "fatal")
+            raise ValueError(f"阶段重生成失败：{detail}")
+
+        merged = [*preserved_before, *regenerated_stage, *preserved_after]
+        merged_arcs = self._context.planner.derive_story_arcs_from_roadmap(merged)
+        merged_issues = self._context.planner.verify_roadmap(merged_arcs, merged)
+        merged_arc_issues = [
+            item for item in merged_issues if item.arc_number == arc_number or item.story_stage == target_arc.title
+        ]
+        if any(item.severity == "fatal" for item in merged_arc_issues):
+            detail = "；".join(item.message for item in merged_arc_issues if item.severity == "fatal")
+            raise ValueError(f"阶段重生成失败：{detail}")
+
+        self._context.db.upsert_book_blueprint_state(
+            self._context.book_id,
+            status=str(state.get("status") or "roadmap_ready"),
+            current_step="roadmap",
+            story_arcs_draft=[item.model_dump(mode="json") for item in merged_arcs],
+            roadmap_draft=[item.model_dump(mode="json") for item in merged],
+            roadmap_validation_issues=[item.model_dump(mode="json") for item in merged_issues],
         )
         return build_book_blueprint(self._context.db, self._context.book_id)
 
@@ -542,9 +632,12 @@ class ConfirmBlueprintLayerUseCase(_BlueprintLayerBase):
     ) -> BookBlueprint:
         state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
         if layer == "world":
-            world = payload if isinstance(payload, WorldBlueprint) else WorldBlueprint.model_validate(
-                state.get("world_draft") or state.get("world_confirmed") or {}
-            )
+            if isinstance(payload, WorldBlueprint):
+                world = payload
+            else:
+                world = self._context.planner.normalize_world_blueprint_payload(
+                    payload if isinstance(payload, dict) else state.get("world_draft") or state.get("world_confirmed") or {}
+                )
             self._sync_world_to_canon(world)
             self._context.db.upsert_book_blueprint_state(
                 self._context.book_id,
@@ -561,14 +654,11 @@ class ConfirmBlueprintLayerUseCase(_BlueprintLayerBase):
             else:
                 raw_characters = payload if isinstance(payload, list) else state.get("character_draft") or []
                 raw_relationships = state.get("relationship_graph_draft") or []
-            characters = [
-                item if isinstance(item, CharacterBlueprint) else CharacterBlueprint.model_validate(item)
-                for item in raw_characters
-            ]
-            relationship_graph = [
-                item if isinstance(item, RelationshipBlueprintEdge) else RelationshipBlueprintEdge.model_validate(item)
-                for item in raw_relationships
-            ]
+            characters = self._context.planner.normalize_character_blueprints_payload(raw_characters)
+            relationship_graph = self._context.planner.normalize_relationship_blueprint_edges_payload(
+                raw_relationships,
+                characters,
+            )
             self._sync_characters_to_canon(characters)
             self._sync_relationship_graph(relationship_graph)
             self._context.db.upsert_book_blueprint_state(
@@ -581,10 +671,9 @@ class ConfirmBlueprintLayerUseCase(_BlueprintLayerBase):
             return build_book_blueprint(self._context.db, self._context.book_id)
 
         raw_roadmap = payload if isinstance(payload, list) else state.get("roadmap_draft") or []
-        roadmap = [
-            item if isinstance(item, ChapterRoadmapItem) else ChapterRoadmapItem.model_validate(item)
-            for item in raw_roadmap
-        ]
+        roadmap = self._context.planner.normalize_roadmap_payload(raw_roadmap)
+        story_arcs = self._context.planner.derive_story_arcs_from_roadmap(roadmap)
+        roadmap_issues = self._context.planner.verify_roadmap(story_arcs, roadmap)
         revision_id = self._create_revision(
             roadmap=roadmap,
             change_reason="初次锁定整书蓝图",
@@ -597,7 +686,9 @@ class ConfirmBlueprintLayerUseCase(_BlueprintLayerBase):
             status="locked",
             current_step="locked",
             active_revision_id=revision_id,
+            story_arcs_confirmed=[item.model_dump(mode="json") for item in story_arcs],
             roadmap_confirmed=[item.model_dump(mode="json") for item in roadmap],
+            roadmap_validation_issues=[item.model_dump(mode="json") for item in roadmap_issues],
         )
         return build_book_blueprint(self._context.db, self._context.book_id)
 
@@ -614,10 +705,10 @@ class ConfirmBlueprintLayerUseCase(_BlueprintLayerBase):
         world = self._require_world_confirmed()
         characters = self._require_character_confirmed()
         state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
-        relationship_graph = [
-            RelationshipBlueprintEdge.model_validate(item)
-            for item in list(state.get("relationship_graph_confirmed") or [])
-        ]
+        relationship_graph = self._context.planner.normalize_relationship_blueprint_edges_payload(
+            list(state.get("relationship_graph_confirmed") or []),
+            characters,
+        )
         return self._context.db.create_blueprint_revision(
             self._context.book_id,
             revision_number=next_revision,
@@ -649,7 +740,7 @@ class ReplanBlueprintUseCase(_BlueprintLayerBase):
         variant = self._require_selected_variant()
         world = self._require_world_confirmed()
         characters = self._require_character_confirmed()
-        current_roadmap = [ChapterRoadmapItem.model_validate(item) for item in active_revision.get("roadmap") or []]
+        current_roadmap = self._context.planner.normalize_roadmap_payload(active_revision.get("roadmap") or [])
         preserved = [item for item in current_roadmap if item.chapter_number < payload.starting_chapter]
         future_count = max(len([item for item in current_roadmap if item.chapter_number >= payload.starting_chapter]), 1)
         replanned = self._context.planner.generate_roadmap(
@@ -664,6 +755,8 @@ class ReplanBlueprintUseCase(_BlueprintLayerBase):
             existing_roadmap=preserved,
         )
         merged = [*preserved, *replanned]
+        merged_arcs = self._context.planner.derive_story_arcs_from_roadmap(merged)
+        merged_issues = self._context.planner.verify_roadmap(merged_arcs, merged)
         revision_id = ConfirmBlueprintLayerUseCase(self._context)._create_revision(
             roadmap=merged,
             change_reason=payload.reason or "未来章节重规划",
@@ -676,7 +769,9 @@ class ReplanBlueprintUseCase(_BlueprintLayerBase):
             status="locked",
             current_step="locked",
             active_revision_id=revision_id,
+            story_arcs_confirmed=[item.model_dump(mode="json") for item in merged_arcs],
             roadmap_confirmed=[item.model_dump(mode="json") for item in merged],
+            roadmap_validation_issues=[item.model_dump(mode="json") for item in merged_issues],
         )
         return build_book_blueprint(self._context.db, self._context.book_id)
 
@@ -694,22 +789,27 @@ class GetRelationshipGraphUseCase(_BlueprintLayerBase):
 
     def execute(self) -> dict[str, Any]:
         state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
-        raw_characters = state.get("character_confirmed") or state.get("character_draft") or []
+        raw_characters = self._context.planner.normalize_character_blueprints_payload(
+            state.get("character_confirmed") or state.get("character_draft") or []
+        )
         raw_relationships = state.get("relationship_graph_confirmed") or state.get("relationship_graph_draft") or []
         nodes = [
             CharacterNode(
-                character_id=self._character_id(item.get("name") or ""),
-                name=str(item.get("name") or ""),
-                role=str(item.get("role") or ""),
-                public_persona=str(item.get("public_persona") or ""),
-                core_motivation=str(item.get("core_motivation") or ""),
-                fatal_flaw=str(item.get("fatal_flaw") or ""),
-                non_negotiable_traits=list(item.get("non_negotiable_traits") or []),
-                arc_outline=list(item.get("arc_outline") or []),
+                character_id=self._character_id(item.name),
+                name=item.name,
+                role=item.role,
+                public_persona=item.public_persona,
+                core_motivation=item.core_motivation,
+                fatal_flaw=item.fatal_flaw,
+                non_negotiable_traits=item.non_negotiable_traits,
+                arc_outline=item.arc_outline,
             )
             for item in raw_characters
         ]
-        edges = [RelationshipBlueprintEdge.model_validate(item) for item in raw_relationships]
+        edges = self._context.planner.normalize_relationship_blueprint_edges_payload(
+            raw_relationships,
+            raw_characters,
+        )
         pending = [
             RelationshipPendingItem.model_validate(item)
             for item in self._context.db.list_relationship_pending_items(self._context.book_id)
