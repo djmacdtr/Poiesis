@@ -13,24 +13,48 @@ from poiesis.application.blueprint_contracts import (
     BlueprintLayer,
     BlueprintReplanRequest,
     BookBlueprint,
+    ConceptVariant,
+    ConceptVariantRegenerationResult,
     CreationIntent,
+    RelationshipBlueprintEdge,
+    RelationshipConflictReport,
+    RelationshipPendingItem,
+    RelationshipRetconProposal,
 )
 from poiesis.application.blueprint_use_cases import (
+    AcceptRegeneratedConceptVariantUseCase,
     BlueprintContext,
     ConfirmBlueprintLayerUseCase,
+    ConfirmRelationshipGraphUseCase,
+    ConfirmRelationshipPendingUseCase,
+    ConfirmRelationshipReplanUseCase,
+    CreateRelationshipReplanUseCase,
     GenerateCharacterBlueprintUseCase,
     GenerateConceptVariantsUseCase,
     GenerateRoadmapUseCase,
     GenerateWorldBlueprintUseCase,
+    GetRelationshipGraphUseCase,
+    ListRelationshipPendingUseCase,
     RegenerateConceptVariantUseCase,
+    RejectRelationshipPendingUseCase,
+    RelationshipConflictError,
     ReplanBlueprintUseCase,
     SaveCreationIntentUseCase,
     SelectConceptVariantUseCase,
+    UpsertRelationshipEdgeUseCase,
     build_book_blueprint,
 )
 from poiesis.config import load_config
 from poiesis.db.database import Database
 from poiesis.pipeline.planning.roadmap_planner import RoadmapPlanner
+
+
+class RelationshipConflictHttpError(ValueError):
+    """把关系冲突报告包装到 API 层。"""
+
+    def __init__(self, report: RelationshipConflictReport) -> None:
+        super().__init__(report.conflict_summary)
+        self.report = report
 
 
 def _build_context(config_path: str, db: Database, book_id: int) -> BlueprintContext:
@@ -72,10 +96,27 @@ def select_concept_variant(db: Database, config_path: str, book_id: int, variant
     return SelectConceptVariantUseCase(context).execute(variant_id)
 
 
-def regenerate_concept_variant(db: Database, config_path: str, book_id: int, variant_id: int) -> BookBlueprint:
+def regenerate_concept_variant(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    variant_id: int,
+) -> ConceptVariantRegenerationResult:
     """只重生成单条候选方向。"""
     context = _build_context(config_path, db, book_id)
     return RegenerateConceptVariantUseCase(context).execute(variant_id)
+
+
+def accept_regenerated_concept_variant(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    variant_id: int,
+    payload: dict[str, Any],
+) -> BookBlueprint:
+    """接受单版重生成提案，并覆盖原候选。"""
+    context = _build_context(config_path, db, book_id)
+    return AcceptRegeneratedConceptVariantUseCase(context).execute(variant_id, ConceptVariant.model_validate(payload))
 
 
 def generate_world_blueprint(
@@ -132,3 +173,116 @@ def replan_blueprint(
     """只针对未来章节生成新的蓝图版本。"""
     context = _build_context(config_path, db, book_id)
     return ReplanBlueprintUseCase(context).execute(BlueprintReplanRequest.model_validate(payload))
+
+
+def get_relationship_graph(
+    db: Database,
+    config_path: str,
+    book_id: int,
+) -> dict[str, list[dict[str, object]]]:
+    """读取关系图谱工作态。"""
+    context = _build_context(config_path, db, book_id)
+    return cast(dict[str, list[dict[str, object]]], GetRelationshipGraphUseCase(context).execute())
+
+
+def confirm_relationship_graph(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    edges: list[RelationshipBlueprintEdge],
+) -> BookBlueprint:
+    """确认关系图谱。"""
+    context = _build_context(config_path, db, book_id)
+    return ConfirmRelationshipGraphUseCase(context).execute(edges)
+
+
+def upsert_relationship_edge(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    edge: RelationshipBlueprintEdge,
+) -> dict[str, list[dict[str, object]]]:
+    """新增或更新关系边。"""
+    context = _build_context(config_path, db, book_id)
+    try:
+        return cast(dict[str, list[dict[str, object]]], UpsertRelationshipEdgeUseCase(context).execute(edge))
+    except RelationshipConflictError as exc:
+        raise RelationshipConflictHttpError(exc.report) from exc
+
+
+def list_relationship_pending(
+    db: Database,
+    config_path: str,
+    book_id: int,
+) -> list[RelationshipPendingItem]:
+    """读取待确认人物/关系队列。"""
+    context = _build_context(config_path, db, book_id)
+    return ListRelationshipPendingUseCase(context).execute()
+
+
+def confirm_relationship_pending(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    item_id: int,
+) -> dict[str, list[dict[str, object]]]:
+    """确认待确认项。"""
+    context = _build_context(config_path, db, book_id)
+    return cast(dict[str, list[dict[str, object]]], ConfirmRelationshipPendingUseCase(context).execute(item_id))
+
+
+def reject_relationship_pending(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    item_id: int,
+) -> dict[str, list[dict[str, object]]]:
+    """拒绝待确认项。"""
+    context = _build_context(config_path, db, book_id)
+    return cast(dict[str, list[dict[str, object]]], RejectRelationshipPendingUseCase(context).execute(item_id))
+
+
+def create_relationship_replan(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    edge_id: str,
+    reason: str,
+    desired_change: str,
+) -> dict[str, object]:
+    """创建关系重规划请求。"""
+    context = _build_context(config_path, db, book_id)
+    return cast(dict[str, object], CreateRelationshipReplanUseCase(context).execute(edge_id, reason, desired_change))
+
+
+def get_relationship_replan(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    request_id: int,
+) -> dict[str, object]:
+    """读取关系重规划工作态。"""
+    _ = config_path
+    request = db.get_relationship_replan_request(request_id)
+    if request is None or int(request.get("book_id") or 0) != book_id:
+        raise ValueError("关系重规划请求不存在")
+    proposal = db.get_relationship_replan_proposal(request_id, f"replan-{request_id}")
+    if proposal is None:
+        raise ValueError("关系重规划提案不存在")
+    return {
+        "request_id": request_id,
+        "request": request,
+        "proposal": RelationshipRetconProposal.model_validate(proposal.get("proposal") or {}),
+    }
+
+
+def confirm_relationship_replan(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    request_id: int,
+    proposal_id: str,
+) -> dict[str, object]:
+    """确认关系重规划提案。"""
+    context = _build_context(config_path, db, book_id)
+    return cast(dict[str, object], ConfirmRelationshipReplanUseCase(context).execute(request_id, proposal_id))

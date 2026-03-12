@@ -122,6 +122,8 @@ export interface CanonData {
   timeline: TimelineEvent[]
   foreshadowing: Foreshadowing[]
   story_state: StoryStateSummary
+  world_blueprint_summary?: WorldBlueprint | null
+  relationship_graph?: RelationshipBlueprintEdge[]
 }
 
 // ──────────────────────────────────────────────
@@ -390,17 +392,84 @@ export interface ConceptVariant {
   selected: boolean
 }
 
+export interface VariantSimilarityIssue {
+  compared_variant_no: number
+  text_similarity: number
+  structure_overlap: number
+  repeated_keywords: string[]
+  repeated_sections: string[]
+  repeated_fields: string[]
+  guidance: string[]
+}
+
+export interface VariantRegenerationAttempt {
+  attempt_no: number
+  status: 'retrying' | 'applied' | 'needs_confirmation'
+  warnings: string[]
+  similarity_issue: VariantSimilarityIssue | null
+}
+
+export interface ConceptVariantRegenerationResult {
+  status: 'applied' | 'needs_confirmation'
+  target_variant_id: number
+  attempt_count: number
+  warnings: string[]
+  applied_variant: ConceptVariant | null
+  proposed_variant: ConceptVariant | null
+  similarity_report: VariantSimilarityIssue | null
+  attempts: VariantRegenerationAttempt[]
+  blueprint: BookBlueprint
+}
+
 export interface WorldBlueprint {
   setting_summary: string
-  immutable_rules: Array<{
-    key: string
-    description: string
-    is_immutable?: boolean
-    category?: string
-  }>
-  power_system: string
-  factions: string[]
-  taboo_rules: string[]
+  era_context: string
+  social_order: string
+  historical_wounds: string[]
+  public_secrets: string[]
+  geography: LocationBlueprint[]
+  power_system: PowerSystemBlueprint
+  factions: FactionBlueprint[]
+  immutable_rules: ImmutableRuleBlueprint[]
+  taboo_rules: TabooRuleBlueprint[]
+}
+
+export interface LocationBlueprint {
+  name: string
+  role: string
+  description: string
+}
+
+export interface PowerSystemBlueprint {
+  core_mechanics: string
+  costs: string[]
+  limitations: string[]
+  advancement_path: string[]
+  symbols: string[]
+}
+
+export interface FactionBlueprint {
+  name: string
+  position: string
+  goal: string
+  methods: string[]
+  public_image: string
+  hidden_truth: string
+}
+
+export interface ImmutableRuleBlueprint {
+  key: string
+  description: string
+  category: string
+  rationale: string
+  is_immutable: boolean
+}
+
+export interface TabooRuleBlueprint {
+  key: string
+  description: string
+  consequence: string
+  is_immutable: boolean
 }
 
 export interface CharacterBlueprint {
@@ -414,6 +483,64 @@ export interface CharacterBlueprint {
   arc_outline: string[]
 }
 
+export interface CharacterNode {
+  character_id: string
+  name: string
+  role: string
+  public_persona: string
+  core_motivation: string
+  fatal_flaw: string
+  non_negotiable_traits: string[]
+  arc_outline: string[]
+  faction_affiliation: string
+  status: string
+}
+
+export interface RelationshipBlueprintEdge {
+  edge_id: string
+  source_character_id: string
+  target_character_id: string
+  relation_type: string
+  polarity: '正向' | '负向' | '复杂' | '伪装'
+  intensity: number
+  visibility: '公开' | '半公开' | '隐藏' | '误导性表象'
+  stability: '稳定' | '脆弱' | '正在转变'
+  summary: string
+  hidden_truth: string
+  non_breakable_without_reveal: boolean
+}
+
+export interface RelationshipPendingItem {
+  id?: number | null
+  item_type: 'character' | 'relationship'
+  status: 'pending' | 'confirmed' | 'rejected'
+  source_chapter: number | null
+  source_scene_ref: string
+  summary: string
+  character?: CharacterNode | null
+  relationship?: RelationshipBlueprintEdge | null
+}
+
+export interface RelationshipConflictReport {
+  edge_id: string
+  source_chapter: number
+  source_scene_ref: string
+  conflict_summary: string
+  immutable_fact: string
+  recommended_paths: string[]
+}
+
+export interface RelationshipRetconProposal {
+  proposal_id: string
+  edge_id: string
+  request_reason: string
+  change_summary: string
+  strategy: '未来关系重规划' | '关系反转提案' | '表象关系与真相关系分层'
+  affected_future_chapters: number[]
+  future_edge: RelationshipBlueprintEdge
+  required_reveals: string[]
+}
+
 export interface ChapterRoadmapItem {
   chapter_number: number
   title: string
@@ -421,6 +548,7 @@ export interface ChapterRoadmapItem {
   core_conflict: string
   turning_point: string
   character_progress: string[]
+  relationship_progress: string[]
   planned_loops: Array<Record<string, unknown>>
   closure_function: string
 }
@@ -448,9 +576,24 @@ export interface BookBlueprint {
   world_confirmed: WorldBlueprint | null
   character_draft: CharacterBlueprint[]
   character_confirmed: CharacterBlueprint[]
+  relationship_graph_draft: RelationshipBlueprintEdge[]
+  relationship_graph_confirmed: RelationshipBlueprintEdge[]
+  relationship_pending: RelationshipPendingItem[]
   roadmap_draft: ChapterRoadmapItem[]
   roadmap_confirmed: ChapterRoadmapItem[]
   revisions: BlueprintRevision[]
+}
+
+export interface RelationshipGraphResponse {
+  nodes: CharacterNode[]
+  edges: RelationshipBlueprintEdge[]
+  pending: RelationshipPendingItem[]
+}
+
+export interface RelationshipReplanResponse {
+  request_id: number
+  request: Record<string, unknown>
+  proposal: RelationshipRetconProposal
 }
 
 export interface BlueprintGenerateRequest {

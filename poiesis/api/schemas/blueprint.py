@@ -9,8 +9,14 @@ from poiesis.application.blueprint_contracts import (
     BookBlueprint,
     ChapterRoadmapItem,
     CharacterBlueprint,
+    CharacterNode,
     ConceptVariant,
+    ConceptVariantRegenerationResult,
     CreationIntent,
+    RelationshipBlueprintEdge,
+    RelationshipConflictReport,
+    RelationshipPendingItem,
+    RelationshipRetconProposal,
     WorldBlueprint,
 )
 
@@ -44,7 +50,8 @@ class ConfirmWorldBlueprintRequest(BaseModel):
 class ConfirmCharacterBlueprintRequest(BaseModel):
     """确认人物层时允许作者提交修改后的草稿。"""
 
-    draft: list[CharacterBlueprint] | None = None
+    characters: list[CharacterBlueprint] | None = None
+    relationship_graph: list[RelationshipBlueprintEdge] | None = None
 
 
 class ConfirmRoadmapRequest(BaseModel):
@@ -57,6 +64,16 @@ class BookBlueprintResponse(BookBlueprint):
     """整书蓝图响应。"""
 
 
+class RegenerateConceptVariantResponse(ConceptVariantRegenerationResult):
+    """单版重生成结果。"""
+
+
+class AcceptRegeneratedConceptVariantRequest(BaseModel):
+    """人工接受单版重生成提案。"""
+
+    proposal: ConceptVariant
+
+
 class BlueprintRevisionListResponse(BaseModel):
     """蓝图版本历史。"""
 
@@ -65,3 +82,57 @@ class BlueprintRevisionListResponse(BaseModel):
 
 class BlueprintReplanPayload(BlueprintReplanRequest):
     """未来章节重规划请求。"""
+
+
+class RelationshipGraphResponse(BaseModel):
+    """人物关系图谱工作态响应。"""
+
+    nodes: list[CharacterNode]
+    edges: list[RelationshipBlueprintEdge]
+    pending: list[RelationshipPendingItem]
+
+
+class ConfirmRelationshipGraphRequest(BaseModel):
+    """确认关系图谱。"""
+
+    edges: list[RelationshipBlueprintEdge]
+
+
+class UpsertRelationshipEdgeRequest(BaseModel):
+    """新增或编辑关系边。"""
+
+    edge: RelationshipBlueprintEdge
+
+
+class RelationshipConflictResponse(BaseModel):
+    """关系编辑命中冲突时返回的结构化报告。"""
+
+    report: RelationshipConflictReport
+
+
+class RelationshipPendingListResponse(BaseModel):
+    """待确认关系/人物列表。"""
+
+    items: list[RelationshipPendingItem]
+
+
+class RelationshipReplanCreateRequest(BaseModel):
+    """创建关系重规划请求。"""
+
+    edge_id: str
+    reason: str = ""
+    desired_change: str = ""
+
+
+class RelationshipReplanConfirmRequest(BaseModel):
+    """确认关系重规划提案。"""
+
+    proposal_id: str
+
+
+class RelationshipReplanResponse(BaseModel):
+    """关系重规划工作态。"""
+
+    request_id: int
+    request: dict[str, object]
+    proposal: RelationshipRetconProposal

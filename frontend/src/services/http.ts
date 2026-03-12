@@ -45,6 +45,8 @@ export async function request<T>(
         message = body.detail
       } else if (body.detail?.message) {
         message = body.detail.message
+      } else if (body.detail) {
+        message = JSON.stringify(body.detail)
       } else {
         message = body.message ?? message
       }

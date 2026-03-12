@@ -10,7 +10,13 @@ import type {
   BookUpsertRequest,
   ChapterRoadmapItem,
   CharacterBlueprint,
+  ConceptVariant,
+  ConceptVariantRegenerationResult,
   CreationIntent,
+  RelationshipBlueprintEdge,
+  RelationshipGraphResponse,
+  RelationshipPendingItem,
+  RelationshipReplanResponse,
   WorldBlueprint,
 } from '@/types'
 
@@ -53,8 +59,22 @@ export function selectConceptVariant(bookId: number, variantId: number): Promise
 }
 
 /** 仅重生成单条候选方向 */
-export function regenerateConceptVariant(bookId: number, variantId: number): Promise<BookBlueprint> {
-  return post<BookBlueprint>(`/api/books/${bookId}/concept-variants/${variantId}:regenerate`, {})
+export function regenerateConceptVariant(
+  bookId: number,
+  variantId: number,
+): Promise<ConceptVariantRegenerationResult> {
+  return post<ConceptVariantRegenerationResult>(`/api/books/${bookId}/concept-variants/${variantId}:regenerate`, {})
+}
+
+/** 人工接受单版重生成提案 */
+export function acceptRegeneratedConceptVariant(
+  bookId: number,
+  variantId: number,
+  proposal: ConceptVariant,
+): Promise<BookBlueprint> {
+  return post<BookBlueprint>(`/api/books/${bookId}/concept-variants/${variantId}:accept-regenerated`, {
+    proposal,
+  })
 }
 
 /** 生成世界观蓝图 */
@@ -76,8 +96,12 @@ export function generateCharacterBlueprint(bookId: number, payload: BlueprintGen
 export function confirmCharacterBlueprint(
   bookId: number,
   draft: CharacterBlueprint[],
+  relationshipGraph: RelationshipBlueprintEdge[],
 ): Promise<BookBlueprint> {
-  return post<BookBlueprint>(`/api/books/${bookId}/blueprint/characters:confirm`, { draft })
+  return post<BookBlueprint>(`/api/books/${bookId}/blueprint/characters:confirm`, {
+    characters: draft,
+    relationship_graph: relationshipGraph,
+  })
 }
 
 /** 生成章节路线 */
@@ -93,4 +117,79 @@ export function confirmRoadmap(bookId: number, draft: ChapterRoadmapItem[]): Pro
 /** 对未来章节重规划 */
 export function replanBlueprint(bookId: number, payload: BlueprintReplanRequest): Promise<BookBlueprint> {
   return post<BookBlueprint>(`/api/books/${bookId}/blueprint/replan`, payload)
+}
+
+/** 读取关系图谱工作态 */
+export function fetchRelationshipGraph(bookId: number): Promise<RelationshipGraphResponse> {
+  return get<RelationshipGraphResponse>(`/api/books/${bookId}/relationship-graph`)
+}
+
+/** 确认关系图谱 */
+export function confirmRelationshipGraph(
+  bookId: number,
+  edges: RelationshipBlueprintEdge[],
+): Promise<BookBlueprint> {
+  return post<BookBlueprint>(`/api/books/${bookId}/relationship-graph/confirm`, { edges })
+}
+
+/** 新增或编辑关系边 */
+export function upsertRelationshipEdge(
+  bookId: number,
+  edge: RelationshipBlueprintEdge,
+): Promise<RelationshipGraphResponse> {
+  return post<RelationshipGraphResponse>(`/api/books/${bookId}/relationship-edges`, { edge })
+}
+
+/** 更新关系边 */
+export function updateRelationshipEdge(
+  bookId: number,
+  edgeId: string,
+  edge: RelationshipBlueprintEdge,
+): Promise<RelationshipGraphResponse> {
+  return request<RelationshipGraphResponse>(`/api/books/${bookId}/relationship-edges/${edgeId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ edge }),
+  })
+}
+
+/** 读取待确认人物/关系 */
+export function fetchRelationshipPending(bookId: number): Promise<{ items: RelationshipPendingItem[] }> {
+  return get<{ items: RelationshipPendingItem[] }>(`/api/books/${bookId}/relationship-pending`)
+}
+
+/** 确认待确认项 */
+export function confirmRelationshipPending(bookId: number, itemId: number): Promise<RelationshipGraphResponse> {
+  return post<RelationshipGraphResponse>(`/api/books/${bookId}/relationship-pending/${itemId}/confirm`, {})
+}
+
+/** 拒绝待确认项 */
+export function rejectRelationshipPending(bookId: number, itemId: number): Promise<RelationshipGraphResponse> {
+  return post<RelationshipGraphResponse>(`/api/books/${bookId}/relationship-pending/${itemId}/reject`, {})
+}
+
+/** 创建关系重规划请求 */
+export function createRelationshipReplan(
+  bookId: number,
+  payload: { edge_id: string; reason: string; desired_change: string },
+): Promise<RelationshipReplanResponse> {
+  return post<RelationshipReplanResponse>(`/api/books/${bookId}/relationship-replan`, payload)
+}
+
+/** 读取关系重规划提案 */
+export function fetchRelationshipReplan(
+  bookId: number,
+  requestId: number,
+): Promise<RelationshipReplanResponse> {
+  return get<RelationshipReplanResponse>(`/api/books/${bookId}/relationship-replan/${requestId}`)
+}
+
+/** 确认关系重规划提案 */
+export function confirmRelationshipReplan(
+  bookId: number,
+  requestId: number,
+  proposalId: string,
+): Promise<RelationshipGraphResponse> {
+  return post<RelationshipGraphResponse>(`/api/books/${bookId}/relationship-replan/${requestId}/confirm`, {
+    proposal_id: proposalId,
+  })
 }

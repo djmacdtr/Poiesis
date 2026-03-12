@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from poiesis.application.blueprint_contracts import (
     BlueprintLayer,
@@ -12,8 +12,14 @@ from poiesis.application.blueprint_contracts import (
     BookBlueprint,
     ChapterRoadmapItem,
     CharacterBlueprint,
+    CharacterNode,
     ConceptVariant,
+    ConceptVariantRegenerationResult,
     CreationIntent,
+    RelationshipBlueprintEdge,
+    RelationshipConflictReport,
+    RelationshipPendingItem,
+    RelationshipRetconProposal,
     WorldBlueprint,
 )
 from poiesis.db.database import Database
@@ -90,6 +96,20 @@ def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
         character_confirmed=[
             CharacterBlueprint.model_validate(item) for item in list(state.get("character_confirmed") or [])
         ],
+        relationship_graph_draft=[
+            RelationshipBlueprintEdge.model_validate(item)
+            for item in list(state.get("relationship_graph_draft") or [])
+        ],
+        relationship_graph_confirmed=[
+            RelationshipBlueprintEdge.model_validate(item)
+            for item in list(state.get("relationship_graph_confirmed") or [])
+        ],
+        relationship_pending=[
+            RelationshipPendingItem.model_validate(item)
+            for item in db.list_relationship_pending_items(book_id, status="pending")
+        ]
+        if hasattr(db, "list_relationship_pending_items")
+        else [],
         roadmap_draft=[
             ChapterRoadmapItem.model_validate(item) for item in list(state.get("roadmap_draft") or [])
         ],
@@ -148,7 +168,7 @@ class RegenerateConceptVariantUseCase:
     def __init__(self, context: BlueprintContext) -> None:
         self._context = context
 
-    def execute(self, variant_id: int) -> BookBlueprint:
+    def execute(self, variant_id: int) -> ConceptVariantRegenerationResult:
         state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
         if str(state.get("status") or "") != "concept_generated":
             raise ValueError("只有在候选方向阶段才能重生成单条方向")
@@ -164,13 +184,59 @@ class RegenerateConceptVariantUseCase:
             for item in self._context.db.list_concept_variants(self._context.book_id)
             if int(item["id"]) != variant_id
         ]
-        regenerated = self._context.planner.regenerate_concept_variant(
+        regenerated, similarity_issue, attempts, applied = self._context.planner.regenerate_concept_variant(
             CreationIntent.model_validate(intent_row),
             ConceptVariant.model_validate(variant),
             siblings,
             self._context.llm,
         )
-        self._context.db.update_concept_variant(variant_id, regenerated.model_dump(mode="json"))
+        if applied:
+            self._context.db.update_concept_variant(variant_id, regenerated.model_dump(mode="json"))
+            blueprint = build_book_blueprint(self._context.db, self._context.book_id)
+            return ConceptVariantRegenerationResult(
+                status="applied",
+                target_variant_id=variant_id,
+                attempt_count=len(attempts),
+                warnings=["已自动替换为差异更明显的新版本。"],
+                applied_variant=next(
+                    (item for item in blueprint.concept_variants if item.id == variant_id),
+                    regenerated,
+                ),
+                similarity_report=similarity_issue,
+                attempts=attempts,
+                blueprint=blueprint,
+            )
+        return ConceptVariantRegenerationResult(
+            status="needs_confirmation",
+            target_variant_id=variant_id,
+            attempt_count=len(attempts),
+            warnings=["多轮回炉后仍存在明显相似度，请人工决定是否替换原候选。"],
+            proposed_variant=regenerated,
+            similarity_report=similarity_issue,
+            attempts=attempts,
+            blueprint=build_book_blueprint(self._context.db, self._context.book_id),
+        )
+
+
+class AcceptRegeneratedConceptVariantUseCase:
+    """作者确认接受一版仍偏相似但更符合方向需求的候选提案。"""
+
+    def __init__(self, context: BlueprintContext) -> None:
+        self._context = context
+
+    def execute(self, variant_id: int, proposal: ConceptVariant) -> BookBlueprint:
+        state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
+        if str(state.get("status") or "") != "concept_generated":
+            raise ValueError("只有在候选方向阶段才能确认重生成提案")
+        variant = self._context.db.get_concept_variant(variant_id)
+        if variant is None or int(variant["book_id"]) != self._context.book_id:
+            raise ValueError("候选方向不存在")
+        current = ConceptVariant.model_validate(variant)
+        if proposal.variant_no != current.variant_no:
+            raise ValueError("重生成提案与当前候选编号不匹配")
+        proposal.id = current.id
+        proposal.selected = current.selected
+        self._context.db.update_concept_variant(variant_id, proposal.model_dump(mode="json"))
         return build_book_blueprint(self._context.db, self._context.book_id)
 
 
@@ -249,10 +315,10 @@ class _BlueprintLayerBase:
         for rule in world.immutable_rules:
             self._context.db.upsert_world_rule(
                 book_id=self._context.book_id,
-                rule_key=str(rule.get("key") or ""),
-                description=str(rule.get("description") or ""),
-                is_immutable=bool(rule.get("is_immutable", True)),
-                category=str(rule.get("category") or "world"),
+                rule_key=rule.key,
+                description=rule.description,
+                is_immutable=bool(rule.is_immutable),
+                category=rule.category or "world",
             )
         if world.setting_summary:
             self._context.db.upsert_world_rule(
@@ -262,27 +328,47 @@ class _BlueprintLayerBase:
                 is_immutable=True,
                 category="setting",
             )
-        if world.power_system:
+        if world.era_context:
             self._context.db.upsert_world_rule(
                 book_id=self._context.book_id,
-                rule_key="power_system",
-                description=world.power_system,
+                rule_key="era_context",
+                description=world.era_context,
+                is_immutable=True,
+                category="setting",
+            )
+        if world.social_order:
+            self._context.db.upsert_world_rule(
+                book_id=self._context.book_id,
+                rule_key="social_order",
+                description=world.social_order,
+                is_immutable=False,
+                category="setting",
+            )
+        if world.power_system.core_mechanics:
+            self._context.db.upsert_world_rule(
+                book_id=self._context.book_id,
+                rule_key="power_system_core",
+                description=world.power_system.core_mechanics,
                 is_immutable=True,
                 category="power",
             )
-        for index, faction in enumerate(world.factions, start=1):
+        for faction in world.factions:
+            if not faction.name:
+                continue
             self._context.db.upsert_world_rule(
                 book_id=self._context.book_id,
-                rule_key=f"faction_{index}",
-                description=faction,
+                rule_key=f"faction:{faction.name}",
+                description=f"{faction.position}｜{faction.goal}",
                 is_immutable=False,
                 category="faction",
             )
-        for index, taboo in enumerate(world.taboo_rules, start=1):
+        for taboo in world.taboo_rules:
+            if not taboo.key:
+                continue
             self._context.db.upsert_world_rule(
                 book_id=self._context.book_id,
-                rule_key=f"taboo_rule_{index}",
-                description=taboo,
+                rule_key=f"taboo:{taboo.key}",
+                description=f"{taboo.description}｜后果：{taboo.consequence}",
                 is_immutable=True,
                 category="taboo",
             )
@@ -290,7 +376,19 @@ class _BlueprintLayerBase:
     def _sync_characters_to_canon(self, characters: list[CharacterBlueprint]) -> None:
         """人物蓝图确认后，同步到现有角色 canon。"""
         self._context.db.delete_characters(self._context.book_id)
+        nodes: list[dict[str, object]] = []
         for item in characters:
+            node = CharacterNode(
+                character_id=self._character_id(item.name),
+                name=item.name,
+                role=item.role,
+                public_persona=item.public_persona,
+                core_motivation=item.core_motivation,
+                fatal_flaw=item.fatal_flaw,
+                non_negotiable_traits=item.non_negotiable_traits,
+                arc_outline=item.arc_outline,
+            )
+            nodes.append(node.model_dump(mode="json"))
             self._context.db.upsert_character(
                 book_id=self._context.book_id,
                 name=item.name,
@@ -304,6 +402,21 @@ class _BlueprintLayerBase:
                     "arc_outline": item.arc_outline,
                 },
             )
+        self._context.db.replace_character_nodes(self._context.book_id, nodes)
+
+    def _sync_relationship_graph(
+        self,
+        edges: list[RelationshipBlueprintEdge],
+    ) -> None:
+        """把确认后的关系图谱同步到执行态表。"""
+        self._context.db.replace_relationship_graph(
+            self._context.book_id,
+            [item.model_dump(mode="json") for item in edges],
+        )
+
+    def _character_id(self, name: str) -> str:
+        """统一人物节点 ID，避免前后端和执行层命名漂移。"""
+        return name.strip().replace(" ", "_")
 
     def _sync_planned_loops(self, roadmap: list[ChapterRoadmapItem]) -> None:
         """章节路线确认后，把计划中的关键线索种到 loop 状态里。"""
@@ -373,11 +486,20 @@ class GenerateCharacterBlueprintUseCase(_BlueprintLayerBase):
         variant = self._require_selected_variant()
         world = self._require_world_confirmed()
         characters = self._context.planner.generate_characters(intent, variant, world, self._context.llm, feedback)
+        relationship_graph = self._context.planner.generate_relationship_graph(
+            intent,
+            variant,
+            world,
+            characters,
+            self._context.llm,
+            feedback,
+        )
         self._context.db.upsert_book_blueprint_state(
             self._context.book_id,
             status="characters_ready",
             current_step="characters",
             character_draft=[item.model_dump(mode="json") for item in characters],
+            relationship_graph_draft=[item.model_dump(mode="json") for item in relationship_graph],
             roadmap_draft=[],
             roadmap_confirmed=[],
         )
@@ -416,7 +538,7 @@ class ConfirmBlueprintLayerUseCase(_BlueprintLayerBase):
     def execute(
         self,
         layer: BlueprintLayer,
-        payload: WorldBlueprint | list[CharacterBlueprint] | list[ChapterRoadmapItem] | None = None,
+        payload: WorldBlueprint | list[CharacterBlueprint] | list[ChapterRoadmapItem] | dict[str, Any] | None = None,
     ) -> BookBlueprint:
         state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
         if layer == "world":
@@ -433,17 +555,28 @@ class ConfirmBlueprintLayerUseCase(_BlueprintLayerBase):
             return build_book_blueprint(self._context.db, self._context.book_id)
 
         if layer == "characters":
-            raw_characters = payload if isinstance(payload, list) else state.get("character_draft") or []
+            if isinstance(payload, dict):
+                raw_characters = payload.get("characters") or state.get("character_draft") or []
+                raw_relationships = payload.get("relationship_graph") or state.get("relationship_graph_draft") or []
+            else:
+                raw_characters = payload if isinstance(payload, list) else state.get("character_draft") or []
+                raw_relationships = state.get("relationship_graph_draft") or []
             characters = [
                 item if isinstance(item, CharacterBlueprint) else CharacterBlueprint.model_validate(item)
                 for item in raw_characters
             ]
+            relationship_graph = [
+                item if isinstance(item, RelationshipBlueprintEdge) else RelationshipBlueprintEdge.model_validate(item)
+                for item in raw_relationships
+            ]
             self._sync_characters_to_canon(characters)
+            self._sync_relationship_graph(relationship_graph)
             self._context.db.upsert_book_blueprint_state(
                 self._context.book_id,
                 status="characters_confirmed",
                 current_step="roadmap",
                 character_confirmed=[item.model_dump(mode="json") for item in characters],
+                relationship_graph_confirmed=[item.model_dump(mode="json") for item in relationship_graph],
             )
             return build_book_blueprint(self._context.db, self._context.book_id)
 
@@ -480,6 +613,11 @@ class ConfirmBlueprintLayerUseCase(_BlueprintLayerBase):
         next_revision = (max((int(item["revision_number"]) for item in revisions), default=0) + 1)
         world = self._require_world_confirmed()
         characters = self._require_character_confirmed()
+        state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
+        relationship_graph = [
+            RelationshipBlueprintEdge.model_validate(item)
+            for item in list(state.get("relationship_graph_confirmed") or [])
+        ]
         return self._context.db.create_blueprint_revision(
             self._context.book_id,
             revision_number=next_revision,
@@ -489,6 +627,7 @@ class ConfirmBlueprintLayerUseCase(_BlueprintLayerBase):
             affected_range=affected_range,
             world_blueprint=world.model_dump(mode="json"),
             character_blueprints=[item.model_dump(mode="json") for item in characters],
+            relationship_graph=[item.model_dump(mode="json") for item in relationship_graph],
             roadmap=[item.model_dump(mode="json") for item in roadmap],
             is_active=True,
         )
@@ -540,3 +679,263 @@ class ReplanBlueprintUseCase(_BlueprintLayerBase):
             roadmap_confirmed=[item.model_dump(mode="json") for item in merged],
         )
         return build_book_blueprint(self._context.db, self._context.book_id)
+
+
+class RelationshipConflictError(ValueError):
+    """关系编辑命中已发布事实冲突时抛出结构化异常。"""
+
+    def __init__(self, report: RelationshipConflictReport) -> None:
+        super().__init__(report.conflict_summary)
+        self.report = report
+
+
+class GetRelationshipGraphUseCase(_BlueprintLayerBase):
+    """读取当前作品的关系图谱工作态。"""
+
+    def execute(self) -> dict[str, Any]:
+        state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
+        raw_characters = state.get("character_confirmed") or state.get("character_draft") or []
+        raw_relationships = state.get("relationship_graph_confirmed") or state.get("relationship_graph_draft") or []
+        nodes = [
+            CharacterNode(
+                character_id=self._character_id(item.get("name") or ""),
+                name=str(item.get("name") or ""),
+                role=str(item.get("role") or ""),
+                public_persona=str(item.get("public_persona") or ""),
+                core_motivation=str(item.get("core_motivation") or ""),
+                fatal_flaw=str(item.get("fatal_flaw") or ""),
+                non_negotiable_traits=list(item.get("non_negotiable_traits") or []),
+                arc_outline=list(item.get("arc_outline") or []),
+            )
+            for item in raw_characters
+        ]
+        edges = [RelationshipBlueprintEdge.model_validate(item) for item in raw_relationships]
+        pending = [
+            RelationshipPendingItem.model_validate(item)
+            for item in self._context.db.list_relationship_pending_items(self._context.book_id)
+        ]
+        return {
+            "nodes": [item.model_dump(mode="json") for item in nodes],
+            "edges": [item.model_dump(mode="json") for item in edges],
+            "pending": [item.model_dump(mode="json") for item in pending],
+        }
+
+
+class ConfirmRelationshipGraphUseCase(_BlueprintLayerBase):
+    """确认并同步当前关系图谱。"""
+
+    def execute(self, edges: list[RelationshipBlueprintEdge]) -> BookBlueprint:
+        self._sync_relationship_graph(edges)
+        self._context.db.upsert_book_blueprint_state(
+            self._context.book_id,
+            status="characters_confirmed",
+            current_step="roadmap",
+            relationship_graph_confirmed=[item.model_dump(mode="json") for item in edges],
+        )
+        return build_book_blueprint(self._context.db, self._context.book_id)
+
+
+class UpsertRelationshipEdgeUseCase(_BlueprintLayerBase):
+    """新增或编辑关系边；若命中已发布事实冲突则转入重规划流程。"""
+
+    def _load_published_chapters(self) -> list[int]:
+        snapshot = self._context.db.get_latest_story_state_snapshot(self._context.book_id) or {}
+        raw = dict(snapshot.get("snapshot_json") or {})
+        return [int(item) for item in list(raw.get("published_chapters") or [])]
+
+    def _build_conflict_report(
+        self,
+        existing: dict[str, Any],
+        edge: RelationshipBlueprintEdge,
+    ) -> RelationshipConflictReport:
+        latest_chapter = int(existing.get("latest_chapter") or 0)
+        return RelationshipConflictReport(
+            edge_id=edge.edge_id,
+            source_chapter=latest_chapter or 1,
+            source_scene_ref=str(existing.get("latest_scene_ref") or ""),
+            conflict_summary="当前关系已在已发布章节中形成明确事实，不能直接改写。",
+            immutable_fact=f"已发布关系：{existing.get('relation_type') or '未命名关系'}｜{existing.get('summary') or ''}",
+            recommended_paths=["未来关系重规划", "关系反转提案", "表象关系与真相关系分层"],
+        )
+
+    def execute(self, edge: RelationshipBlueprintEdge) -> dict[str, Any]:
+        existing = self._context.db.get_relationship_edge(self._context.book_id, edge.edge_id)
+        published_chapters = self._load_published_chapters()
+        if existing is not None and published_chapters:
+            changed = any(
+                [
+                    str(existing.get("relation_type") or "") != edge.relation_type,
+                    str(existing.get("polarity") or "") != edge.polarity,
+                    str(existing.get("visibility") or "") != edge.visibility,
+                    bool(existing.get("non_breakable_without_reveal")) != edge.non_breakable_without_reveal,
+                ]
+            )
+            if changed:
+                raise RelationshipConflictError(self._build_conflict_report(existing, edge))
+
+        self._context.db.upsert_relationship_edge(self._context.book_id, edge.model_dump(mode="json"))
+        state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
+        raw_relationships = list(state.get("relationship_graph_confirmed") or state.get("relationship_graph_draft") or [])
+        merged: list[dict[str, Any]] = []
+        replaced = False
+        for item in raw_relationships:
+            if str(item.get("edge_id") or "") == edge.edge_id:
+                merged.append(edge.model_dump(mode="json"))
+                replaced = True
+            else:
+                merged.append(item)
+        if not replaced:
+            merged.append(edge.model_dump(mode="json"))
+        self._context.db.upsert_book_blueprint_state(
+            self._context.book_id,
+            status=str(state.get("status") or "characters_ready"),
+            current_step=str(state.get("current_step") or "characters"),
+            relationship_graph_draft=merged,
+            relationship_graph_confirmed=merged if state.get("relationship_graph_confirmed") else None,
+        )
+        return self.execute_graph_snapshot()
+
+    def execute_graph_snapshot(self) -> dict[str, Any]:
+        return GetRelationshipGraphUseCase(self._context).execute()
+
+
+class ListRelationshipPendingUseCase(_BlueprintLayerBase):
+    """读取待确认人物/关系列表。"""
+
+    def execute(self) -> list[RelationshipPendingItem]:
+        return [
+            RelationshipPendingItem.model_validate(item)
+            for item in self._context.db.list_relationship_pending_items(self._context.book_id)
+        ]
+
+
+class ConfirmRelationshipPendingUseCase(_BlueprintLayerBase):
+    """确认自动接入的待确认项。"""
+
+    def execute(self, item_id: int) -> dict[str, Any]:
+        item = self._context.db.get_relationship_pending_item(item_id)
+        if item is None or int(item.get("book_id") or 0) != self._context.book_id:
+            raise ValueError("待确认项不存在")
+        if str(item.get("status") or "") != "pending":
+            raise ValueError("待确认项已处理")
+        self._context.db.update_relationship_pending_item_status(item_id, "confirmed")
+        if item.get("item_type") == "character" and item.get("character"):
+            self._context.db.replace_character_nodes(
+                self._context.book_id,
+                [
+                    *self._context.db.list_character_nodes(self._context.book_id),
+                    dict(item["character"]),
+                ],
+            )
+        if item.get("item_type") == "relationship" and item.get("relationship"):
+            self._context.db.upsert_relationship_edge(self._context.book_id, dict(item["relationship"]))
+        return GetRelationshipGraphUseCase(self._context).execute()
+
+
+class RejectRelationshipPendingUseCase(_BlueprintLayerBase):
+    """拒绝待确认项。"""
+
+    def execute(self, item_id: int) -> dict[str, Any]:
+        item = self._context.db.get_relationship_pending_item(item_id)
+        if item is None or int(item.get("book_id") or 0) != self._context.book_id:
+            raise ValueError("待确认项不存在")
+        self._context.db.update_relationship_pending_item_status(item_id, "rejected")
+        return GetRelationshipGraphUseCase(self._context).execute()
+
+
+class CreateRelationshipReplanUseCase(_BlueprintLayerBase):
+    """为冲突关系创建未来重规划/反转提案。"""
+
+    def execute(self, edge_id: str, reason: str, desired_change: str) -> dict[str, Any]:
+        edge = self._context.db.get_relationship_edge(self._context.book_id, edge_id)
+        if edge is None:
+            raise ValueError("关系边不存在")
+        latest_chapter = int(edge.get("latest_chapter") or 1)
+        report = RelationshipConflictReport(
+            edge_id=edge_id,
+            source_chapter=latest_chapter,
+            source_scene_ref=str(edge.get("latest_scene_ref") or ""),
+            conflict_summary="当前关系已被已发布章节确认，不能直接改写，只能生成未来重规划提案。",
+            immutable_fact=f"{edge.get('relation_type') or ''}｜{edge.get('summary') or ''}",
+            recommended_paths=["未来关系重规划", "关系反转提案", "表象关系与真相关系分层"],
+        )
+        request_id = self._context.db.create_relationship_replan_request(
+            self._context.book_id,
+            {
+                "edge_id": edge_id,
+                "request_reason": reason,
+                "desired_change": desired_change,
+                "conflict_report": report.model_dump(mode="json"),
+                "status": "pending",
+            },
+        )
+        future_edge = RelationshipBlueprintEdge(
+            edge_id=edge_id,
+            source_character_id=str(edge.get("source_character_id") or ""),
+            target_character_id=str(edge.get("target_character_id") or ""),
+            relation_type=desired_change or str(edge.get("relation_type") or ""),
+            polarity="复杂",
+            intensity=int(edge.get("intensity") or 3),
+            visibility="公开",
+            stability="正在转变",
+            summary=f"通过未来章节重规划，把关系逐步推向：{desired_change or edge.get('relation_type')}",
+            hidden_truth=str(edge.get("hidden_truth") or ""),
+            non_breakable_without_reveal=True,
+        )
+        proposal = RelationshipRetconProposal(
+            proposal_id=f"replan-{request_id}",
+            edge_id=edge_id,
+            request_reason=reason,
+            change_summary=desired_change,
+            strategy="未来关系重规划",
+            affected_future_chapters=[latest_chapter + 1, latest_chapter + 2],
+            future_edge=future_edge,
+            required_reveals=[
+                "先在未来章节建立关系异动迹象",
+                "通过关键揭示解释旧关系为何发生反转",
+            ],
+        )
+        self._context.db.add_relationship_replan_proposal(
+            request_id,
+            proposal.proposal_id,
+            proposal.model_dump(mode="json"),
+        )
+        request = self._context.db.get_relationship_replan_request(request_id) or {}
+        return {
+            "request_id": request_id,
+            "request": request,
+            "proposal": proposal.model_dump(mode="json"),
+        }
+
+
+class ConfirmRelationshipReplanUseCase(_BlueprintLayerBase):
+    """确认关系重规划提案，并更新未来执行态关系。"""
+
+    def execute(self, request_id: int, proposal_id: str) -> dict[str, Any]:
+        request = self._context.db.get_relationship_replan_request(request_id)
+        if request is None or int(request.get("book_id") or 0) != self._context.book_id:
+            raise ValueError("关系重规划请求不存在")
+        proposal_row = self._context.db.get_relationship_replan_proposal(request_id, proposal_id)
+        if proposal_row is None:
+            raise ValueError("关系重规划提案不存在")
+        proposal = RelationshipRetconProposal.model_validate(proposal_row.get("proposal") or {})
+        edge_payload = proposal.future_edge.model_dump(mode="json")
+        edge_payload["status"] = "confirmed"
+        self._context.db.upsert_relationship_edge(self._context.book_id, edge_payload)
+        self._context.db.add_relationship_event(
+            self._context.book_id,
+            {
+                "edge_id": proposal.edge_id,
+                "event_id": proposal.proposal_id,
+                "event_type": "reversed" if proposal.strategy == "关系反转提案" else "progressed",
+                "chapter_number": min(proposal.affected_future_chapters) if proposal.affected_future_chapters else None,
+                "scene_ref": "",
+                "summary": proposal.change_summary,
+                "revealed_fact": "、".join(proposal.required_reveals),
+            },
+        )
+        self._context.db.update_relationship_replan_status(request_id, "confirmed")
+        return {
+            "request": self._context.db.get_relationship_replan_request(request_id),
+            "graph": GetRelationshipGraphUseCase(self._context).execute(),
+        }
