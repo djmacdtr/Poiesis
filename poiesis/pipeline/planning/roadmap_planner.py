@@ -301,23 +301,32 @@ class RoadmapPlanner:
         existing_roadmap: list[ChapterRoadmapItem] | None = None,
     ) -> tuple[list[ChapterRoadmapItem], list[RoadmapValidationIssue]]:
         """只重生成单个阶段覆盖的章节，并返回该阶段局部校验结果。"""
-        raw = llm.complete_json(
-            self._build_arc_chapter_prompt(
-                intent=intent,
-                variant=variant,
-                world=world,
-                characters=characters,
-                feedback=feedback,
-                story_arc=story_arc,
-                existing_roadmap=existing_roadmap or [],
-            ),
-            system="你是长篇小说总编剧。你只允许重写当前阶段，并必须修复已指出的问题。",
-        )
-        chapters = self.normalize_roadmap_payload(
-            raw,
-            starting_chapter=story_arc.start_chapter,
-            chapter_count=story_arc.end_chapter - story_arc.start_chapter + 1,
-        )
+        try:
+            raw = llm.complete_json(
+                self._build_arc_chapter_prompt(
+                    intent=intent,
+                    variant=variant,
+                    world=world,
+                    characters=characters,
+                    feedback=feedback,
+                    story_arc=story_arc,
+                    existing_roadmap=existing_roadmap or [],
+                ),
+                system="你是长篇小说总编剧。你只允许重写当前阶段，并必须修复已指出的问题。",
+            )
+            chapters = self.normalize_roadmap_payload(
+                raw,
+                starting_chapter=story_arc.start_chapter,
+                chapter_count=story_arc.end_chapter - story_arc.start_chapter + 1,
+            )
+        except ValueError as exc:
+            logger.exception(
+                "阶段重生成时章节 JSON 归一化失败",
+                extra={
+                    "story_arc": story_arc.model_dump(mode="json"),
+                },
+            )
+            raise ValueError(self._build_roadmap_stage_regeneration_error_message(exc)) from exc
         arc_issues = [
             issue
             for issue in self.verify_roadmap([story_arc], chapters)
@@ -467,20 +476,20 @@ class RoadmapPlanner:
         existing_roadmap: list[ChapterRoadmapItem],
     ) -> list[StoryArcPlan]:
         """先生成阶段弧线，再由每个阶段展开成章节。"""
-        raw = llm.complete_json(
-            self._build_story_arc_prompt(
-                intent,
-                variant,
-                world,
-                characters,
-                feedback,
-                starting_chapter,
-                chapter_count,
-                existing_roadmap,
-            ),
-            system="你是长篇小说总编剧。必须先规划阶段弧线，再允许展开为章节。",
-        )
         try:
+            raw = llm.complete_json(
+                self._build_story_arc_prompt(
+                    intent,
+                    variant,
+                    world,
+                    characters,
+                    feedback,
+                    starting_chapter,
+                    chapter_count,
+                    existing_roadmap,
+                ),
+                system="你是长篇小说总编剧。必须先规划阶段弧线，再允许展开为章节。",
+            )
             direct_roadmap = self._extract_roadmap_items(raw)
             if direct_roadmap:
                 prefetched = self.normalize_roadmap_payload(
@@ -536,19 +545,19 @@ class RoadmapPlanner:
             return prefetched
         roadmap: list[ChapterRoadmapItem] = []
         for arc in story_arcs:
-            raw = llm.complete_json(
-                self._build_arc_chapter_prompt(
-                    intent=intent,
-                    variant=variant,
-                    world=world,
-                    characters=characters,
-                    feedback=feedback,
-                    story_arc=arc,
-                    existing_roadmap=[*existing_roadmap, *roadmap],
-                ),
-                system="你是长篇小说总编剧。必须让当前阶段章节持续升级并承接上一阶段结果。",
-            )
             try:
+                raw = llm.complete_json(
+                    self._build_arc_chapter_prompt(
+                        intent=intent,
+                        variant=variant,
+                        world=world,
+                        characters=characters,
+                        feedback=feedback,
+                        story_arc=arc,
+                        existing_roadmap=[*existing_roadmap, *roadmap],
+                    ),
+                    system="你是长篇小说总编剧。必须让当前阶段章节持续升级并承接上一阶段结果。",
+                )
                 chapters = self.normalize_roadmap_payload(
                     raw,
                     starting_chapter=arc.start_chapter,
@@ -1789,6 +1798,8 @@ class RoadmapPlanner:
     def _build_roadmap_generation_error_message(self, exc: ValueError) -> str:
         """把章节路线校验错误压缩成中文提示。"""
         text = str(exc)
+        if "Could not extract JSON" in text:
+            return "章节路线生成失败：模型返回的章节结构不是合法 JSON，请重试。"
         if "character_progress" in text:
             return "章节路线生成失败：人物推进字段应为列表。"
         if "relationship_progress" in text:
@@ -1796,6 +1807,19 @@ class RoadmapPlanner:
         if "planned_loops" in text:
             return "章节路线生成失败：计划线索字段格式不正确。"
         return "章节路线生成失败：章节结构输出不符合要求，请重试。"
+
+    def _build_roadmap_stage_regeneration_error_message(self, exc: ValueError) -> str:
+        """把阶段重生成错误压缩成用户可读提示。"""
+        text = str(exc)
+        if "Could not extract JSON" in text:
+            return "阶段重生成失败：模型返回的阶段章节结构不是合法 JSON，请重试。"
+        if "character_progress" in text:
+            return "阶段重生成失败：人物推进字段应为列表。"
+        if "relationship_progress" in text:
+            return "阶段重生成失败：关系推进字段应为列表。"
+        if "planned_loops" in text:
+            return "阶段重生成失败：计划线索字段格式不正确。"
+        return "阶段重生成失败：章节结构输出不符合要求，请重试。"
 
     def _build_world_skeleton_prompt(
         self,
