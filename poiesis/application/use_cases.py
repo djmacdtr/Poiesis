@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from poiesis.application.blueprint_contracts import CharacterNode
 from poiesis.application.scene_contracts import (
     ChangeSet,
     ChapterOutput,
@@ -442,6 +443,59 @@ class AdvanceLoopStateUseCase:
         self._mark_overdue_loops(book_id, scene.chapter_number)
 
 
+class AdvanceRelationshipStateUseCase:
+    """根据 scene 提取结果补入新人物待确认项。"""
+
+    def __init__(self, db: Database, world: WorldModel) -> None:
+        self._db = db
+        self._world = world
+
+    def _character_id(self, name: str) -> str:
+        return name.strip().replace(" ", "_")
+
+    def execute(self, book_id: int, scene: SceneTrace) -> None:
+        """识别 scene 中新增人物，并进入待确认队列。"""
+        known_names = {
+            str(item.get("name") or "")
+            for item in self._db.list_character_nodes(book_id)
+        }
+        known_names.update(
+            str(item.get("name") or "")
+            for item in self._world.canon.get("characters", {}).values()
+            if item.get("name")
+        )
+        for change in scene.changeset.characters:
+            proposed = dict(change.get("proposed_data") or {})
+            name = str(proposed.get("name") or change.get("entity_key") or "").strip()
+            if not name or name in known_names:
+                continue
+            node = CharacterNode(
+                character_id=self._character_id(name),
+                name=name,
+                role=str(proposed.get("role") or "新人物"),
+                public_persona=str(proposed.get("description") or proposed.get("public_persona") or ""),
+                core_motivation=str(proposed.get("core_motivation") or ""),
+                fatal_flaw=str(proposed.get("fatal_flaw") or ""),
+                non_negotiable_traits=list(proposed.get("non_negotiable_traits") or []),
+                arc_outline=list(proposed.get("arc_outline") or []),
+                faction_affiliation=str(proposed.get("faction_affiliation") or ""),
+                status="pending",
+            )
+            self._db.add_relationship_pending_item(
+                book_id,
+                {
+                    "item_type": "character",
+                    "status": "pending",
+                    "source_chapter": scene.chapter_number,
+                    "source_scene_ref": f"{scene.chapter_number}-{scene.scene_number}",
+                    "summary": f"检测到新人物“{name}”，请确认是否纳入人物关系图谱。",
+                    "character": node.model_dump(mode="json"),
+                    "relationship": None,
+                },
+            )
+            known_names.add(name)
+
+
 class RefreshChapterAggregateUseCase:
     """根据当前 scene 状态重组章节并刷新发布门禁。"""
 
@@ -460,6 +514,13 @@ class RefreshChapterAggregateUseCase:
             blockers.append("仍有待审阅场景。")
         if pending_reviews > 0:
             blockers.append(f"仍有 {pending_reviews} 条待处理审阅记录。")
+        pending_relationship_items = [
+            item
+            for item in self._context.db.list_relationship_pending_items(self._context.book_id, status="pending")
+            if int(item.get("source_chapter") or 0) <= chapter_plan.chapter_number
+        ]
+        if pending_relationship_items:
+            blockers.append(f"仍有 {len(pending_relationship_items)} 条待确认人物/关系，暂不可发布。")
         progressed_loops = {
             str(item.get("loop_id") or "")
             for scene in scenes
@@ -473,6 +534,20 @@ class RefreshChapterAggregateUseCase:
         ]
         if missing_required:
             blockers.append(f"本章尚未推进必需剧情线索：{'、'.join(missing_required)}。")
+        roadmap = dict(chapter_plan.source_plan.get("blueprint_roadmap") or {})
+        relationship_progress = [
+            str(item).strip()
+            for item in list(roadmap.get("relationship_progress") or [])
+            if str(item).strip()
+        ]
+        assembled_text = "\n".join(scene.final_text for scene in scenes if scene.final_text)
+        missing_relationship_progress = [
+            item for item in relationship_progress if item not in assembled_text
+        ]
+        if missing_relationship_progress:
+            blockers.append(
+                f"本章尚未明确落地关系推进：{'、'.join(missing_relationship_progress)}。"
+            )
         unfinished = [scene for scene in scenes if scene.status not in {"completed", "approved"}]
         if unfinished and not blockers:
             blockers.append("仍有场景未完成。")
@@ -628,6 +703,7 @@ class GenerateChapterUseCase:
         self._context = context
         self._scene_use_case = GenerateSceneUseCase(context)
         self._loop_use_case = AdvanceLoopStateUseCase(context.db, context.world)
+        self._relationship_use_case = AdvanceRelationshipStateUseCase(context.db, context.world)
 
     def _initialize_chapter_trace(
         self,
@@ -733,6 +809,7 @@ class GenerateChapterUseCase:
                 )
             else:
                 self._loop_use_case.execute(self._context.book_id, scene)
+                self._relationship_use_case.execute(self._context.book_id, scene)
 
         refresh = RefreshChapterAggregateUseCase(self._context)
         chapter_trace, chapter_output, _ = refresh.execute(
@@ -844,6 +921,7 @@ class _ReviewActionBase:
         self._scene_use_case = GenerateSceneUseCase(context)
         self._refresh = RefreshChapterAggregateUseCase(context)
         self._loop_use_case = AdvanceLoopStateUseCase(context.db, context.world)
+        self._relationship_use_case = AdvanceRelationshipStateUseCase(context.db, context.world)
 
     def _load_review_scene(
         self,
@@ -948,6 +1026,7 @@ class ApproveSceneReviewUseCase(_ReviewActionBase):
             input_payload={},
         )
         self._loop_use_case.execute(self._context.book_id, approved_trace)
+        self._relationship_use_case.execute(self._context.book_id, approved_trace)
         self._refresh.execute(review["run_id"], review["chapter_number"])
         return updated_review
 
@@ -980,6 +1059,7 @@ class RetrySceneUseCase(_ReviewActionBase):
         )
         if not retried_trace.review_required:
             self._loop_use_case.execute(self._context.book_id, retried_trace)
+            self._relationship_use_case.execute(self._context.book_id, retried_trace)
         self._refresh.execute(review["run_id"], review["chapter_number"])
         return updated_review
 
@@ -1023,5 +1103,6 @@ class ApplyPatchUseCase(_ReviewActionBase):
         )
         if not patched_trace.review_required:
             self._loop_use_case.execute(self._context.book_id, patched_trace)
+            self._relationship_use_case.execute(self._context.book_id, patched_trace)
         self._refresh.execute(review["run_id"], review["chapter_number"])
         return updated_review

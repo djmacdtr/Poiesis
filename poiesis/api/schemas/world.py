@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from poiesis.application.blueprint_contracts import RelationshipBlueprintEdge, WorldBlueprint
+
 
 class WorldRule(BaseModel):
     """世界规则。"""
@@ -64,6 +66,8 @@ class CanonData(BaseModel):
     timeline: list[TimelineEvent] = []
     foreshadowing: list[Foreshadowing] = []
     story_state: dict[str, Any] = {}
+    world_blueprint_summary: WorldBlueprint | None = None
+    relationship_graph: list[RelationshipBlueprintEdge] = []
 
 
 class StagingChange(BaseModel):

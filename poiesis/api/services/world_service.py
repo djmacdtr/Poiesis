@@ -21,6 +21,8 @@ def get_canon(db: Database, book_id: int | None = None) -> dict[str, Any]:
         "timeline": list(canon["timeline"].values()),
         "foreshadowing": list(canon["foreshadowing"].values()),
         "story_state": snapshot["story_state"],
+        "world_blueprint_summary": snapshot.get("world_blueprint_summary") or None,
+        "relationship_graph": snapshot.get("relationship_graph") or [],
     }
 
 

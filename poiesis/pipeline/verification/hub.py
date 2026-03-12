@@ -10,6 +10,7 @@ from poiesis.pipeline.verification.blueprint_verifier import BlueprintVerifier
 from poiesis.pipeline.verification.budget_verifier import BudgetVerifier
 from poiesis.pipeline.verification.canon_verifier import CanonVerifier
 from poiesis.pipeline.verification.loop_verifier import LoopVerifier
+from poiesis.pipeline.verification.relationship_verifier import RelationshipVerifier
 from poiesis.pipeline.verification.result import VerificationResult
 from poiesis.pipeline.verification.semantic_verifier import LLMSemanticVerifier
 
@@ -28,6 +29,7 @@ class VerifierHub:
         self._canon_verifier = CanonVerifier()
         self._blueprint_verifier = BlueprintVerifier()
         self._loop_verifier = LoopVerifier()
+        self._relationship_verifier = RelationshipVerifier()
         self._llm_verifier = LLMSemanticVerifier(prompt_path=prompt_path, language=language)
 
     def verify(
@@ -56,6 +58,11 @@ class VerifierHub:
                 world=world,
                 required_loops=required_loops or [],
                 loop_updates=loop_updates or [],
+            ),
+            *self._relationship_verifier.verify(
+                content=content,
+                plan=plan,
+                world=world,
             ),
             *self._llm_verifier.verify(
                 chapter_number=chapter_number,

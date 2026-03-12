@@ -190,12 +190,24 @@ def _seed_blueprint(tmp_db: Database) -> None:
         affected_range=[1, 12],
         world_blueprint={
             "setting_summary": "裂隙世界",
+            "era_context": "诸门并立的乱世",
+            "social_order": "宗门与城邦共同维持秩序",
+            "historical_wounds": [],
+            "public_secrets": [],
+            "geography": [],
+            "power_system": {
+                "core_mechanics": "灵力通过裂隙流动",
+                "costs": [],
+                "limitations": [],
+                "advancement_path": [],
+                "symbols": [],
+            },
             "immutable_rules": [],
-            "power_system": "",
             "factions": [],
             "taboo_rules": [],
         },
         character_blueprints=[],
+        relationship_graph=[],
         roadmap=[
             {
                 "chapter_number": 1,
@@ -204,6 +216,7 @@ def _seed_blueprint(tmp_db: Database) -> None:
                 "core_conflict": "线索逼近",
                 "turning_point": "角色被迫表态",
                 "character_progress": [],
+                "relationship_progress": [],
                 "planned_loops": [{"loop_id": "loop-1", "title": "主线悬念"}],
                 "closure_function": "抛出钩子",
             }
@@ -216,8 +229,26 @@ def _seed_blueprint(tmp_db: Database) -> None:
         current_step="locked",
         selected_variant_id=variant["id"],
         active_revision_id=revision_id,
-        world_confirmed={"setting_summary": "裂隙世界", "immutable_rules": [], "power_system": "", "factions": [], "taboo_rules": []},
+        world_confirmed={
+            "setting_summary": "裂隙世界",
+            "era_context": "诸门并立的乱世",
+            "social_order": "宗门与城邦共同维持秩序",
+            "historical_wounds": [],
+            "public_secrets": [],
+            "geography": [],
+            "power_system": {
+                "core_mechanics": "灵力通过裂隙流动",
+                "costs": [],
+                "limitations": [],
+                "advancement_path": [],
+                "symbols": [],
+            },
+            "immutable_rules": [],
+            "factions": [],
+            "taboo_rules": [],
+        },
         character_confirmed=[],
+        relationship_graph_confirmed=[],
         roadmap_confirmed=[
             {
                 "chapter_number": 1,
@@ -226,6 +257,7 @@ def _seed_blueprint(tmp_db: Database) -> None:
                 "core_conflict": "线索逼近",
                 "turning_point": "角色被迫表态",
                 "character_progress": [],
+                "relationship_progress": [],
                 "planned_loops": [{"loop_id": "loop-1", "title": "主线悬念"}],
                 "closure_function": "抛出钩子",
             }

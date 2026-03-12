@@ -24,6 +24,8 @@ class WorldModel:
         self.archive: list[dict[str, Any]] = []
         self.story_state: dict[str, Any] = {}
         self.loop_state: list[dict[str, Any]] = []
+        self.world_blueprint_summary: dict[str, Any] = {}
+        self.relationship_graph: list[dict[str, Any]] = []
         # WorldModel 只持有当前使用的仓储实例，便于把持久化协调继续隔离在领域对象外。
         self._repository: WorldRepository | None = None
 
@@ -73,6 +75,8 @@ class WorldModel:
         self.archive = list(snapshot.get("archive") or [])
         self.story_state = dict(snapshot.get("story_state") or {})
         self.loop_state = list(snapshot.get("loop_state") or [])
+        self.world_blueprint_summary = dict(snapshot.get("world_blueprint_summary") or {})
+        self.relationship_graph = list(snapshot.get("relationship_graph") or [])
 
     def propose_change(self, change: dict[str, Any]) -> None:
         """把候选变更加入 staging 层。"""
@@ -211,6 +215,23 @@ class WorldModel:
                 lines.append(
                     f"- {loop.get('loop_id', '')}: {loop.get('title', '')} "
                     f"[{loop.get('status', '')}] ({'回收窗口' if zh_mode else 'due'}: {due})"
+                )
+
+        if self.world_blueprint_summary:
+            lines.append("\n=== 世界蓝图摘要 ===" if zh_mode else "\n=== World Blueprint Summary ===")
+            if self.world_blueprint_summary.get("setting_summary"):
+                lines.append(f"- {self.world_blueprint_summary.get('setting_summary', '')}")
+            power_system = dict(self.world_blueprint_summary.get("power_system") or {})
+            if power_system.get("core_mechanics"):
+                label = "力量体系" if zh_mode else "Power system"
+                lines.append(f"- {label}: {power_system.get('core_mechanics', '')}")
+
+        if self.relationship_graph:
+            lines.append("\n=== 人物关系 ===" if zh_mode else "\n=== Relationships ===")
+            for edge in self.relationship_graph[:12]:
+                lines.append(
+                    f"- {edge.get('source_character_id', '')} -> {edge.get('target_character_id', '')}: "
+                    f"{edge.get('relation_type', '')} / {edge.get('summary', '')}"
                 )
 
         return "\n".join(lines)

@@ -173,6 +173,7 @@ CREATE TABLE IF NOT EXISTS book_blueprint_revisions (
     affected_range_json JSON DEFAULT '[]',
     world_blueprint_json JSON DEFAULT '{}',
     character_blueprints_json JSON DEFAULT '[]',
+    relationship_graph_json JSON DEFAULT '[]',
     roadmap_json JSON DEFAULT '[]',
     blueprint_json JSON DEFAULT '{}',
     is_active INTEGER NOT NULL DEFAULT 0,
@@ -194,6 +195,8 @@ CREATE TABLE IF NOT EXISTS book_blueprints (
     world_confirmed_json JSON DEFAULT '{}',
     character_draft_json JSON DEFAULT '[]',
     character_confirmed_json JSON DEFAULT '[]',
+    relationship_graph_draft_json JSON DEFAULT '[]',
+    relationship_graph_confirmed_json JSON DEFAULT '[]',
     roadmap_draft_json JSON DEFAULT '[]',
     roadmap_confirmed_json JSON DEFAULT '[]',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -215,6 +218,42 @@ CREATE TABLE IF NOT EXISTS blueprint_world_rules (
     FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
 );
 
+CREATE TABLE IF NOT EXISTS blueprint_world_locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    role TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
+);
+
+CREATE TABLE IF NOT EXISTS blueprint_world_factions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    position TEXT DEFAULT '',
+    goal TEXT DEFAULT '',
+    methods_json JSON DEFAULT '[]',
+    public_image TEXT DEFAULT '',
+    hidden_truth TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
+);
+
+CREATE TABLE IF NOT EXISTS blueprint_power_system_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id INTEGER NOT NULL UNIQUE,
+    core_mechanics TEXT DEFAULT '',
+    costs_json JSON DEFAULT '[]',
+    limitations_json JSON DEFAULT '[]',
+    advancement_path_json JSON DEFAULT '[]',
+    symbols_json JSON DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
+);
+
 CREATE TABLE IF NOT EXISTS blueprint_characters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     revision_id INTEGER NOT NULL,
@@ -231,6 +270,25 @@ CREATE TABLE IF NOT EXISTS blueprint_characters (
     FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
 );
 
+CREATE TABLE IF NOT EXISTS blueprint_relationship_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id INTEGER NOT NULL,
+    edge_id TEXT NOT NULL,
+    source_character_id TEXT NOT NULL,
+    target_character_id TEXT NOT NULL,
+    relation_type TEXT DEFAULT '',
+    polarity TEXT DEFAULT '复杂',
+    intensity INTEGER NOT NULL DEFAULT 3,
+    visibility TEXT DEFAULT '半公开',
+    stability TEXT DEFAULT '稳定',
+    summary TEXT DEFAULT '',
+    hidden_truth TEXT DEFAULT '',
+    non_breakable_without_reveal INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(revision_id, edge_id),
+    FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
+);
+
 CREATE TABLE IF NOT EXISTS blueprint_chapter_roadmap (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     revision_id INTEGER NOT NULL,
@@ -240,6 +298,7 @@ CREATE TABLE IF NOT EXISTS blueprint_chapter_roadmap (
     core_conflict TEXT DEFAULT '',
     turning_point TEXT DEFAULT '',
     character_progress_json JSON DEFAULT '[]',
+    relationship_progress_json JSON DEFAULT '[]',
     planned_loops_json JSON DEFAULT '[]',
     closure_function TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -256,6 +315,113 @@ CREATE TABLE IF NOT EXISTS blueprint_revision_changes (
     affected_range_json JSON DEFAULT '[]',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
+);
+
+CREATE TABLE IF NOT EXISTS character_nodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    character_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    role TEXT DEFAULT '',
+    public_persona TEXT DEFAULT '',
+    core_motivation TEXT DEFAULT '',
+    fatal_flaw TEXT DEFAULT '',
+    non_negotiable_traits_json JSON DEFAULT '[]',
+    arc_outline_json JSON DEFAULT '[]',
+    faction_affiliation TEXT DEFAULT '',
+    status TEXT DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(book_id, character_id),
+    FOREIGN KEY (book_id) REFERENCES books(id)
+);
+
+CREATE TABLE IF NOT EXISTS relationship_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    edge_id TEXT NOT NULL,
+    source_character_id TEXT NOT NULL,
+    target_character_id TEXT NOT NULL,
+    relation_type TEXT DEFAULT '',
+    polarity TEXT DEFAULT '复杂',
+    intensity INTEGER NOT NULL DEFAULT 3,
+    visibility TEXT DEFAULT '半公开',
+    stability TEXT DEFAULT '稳定',
+    summary TEXT DEFAULT '',
+    hidden_truth TEXT DEFAULT '',
+    non_breakable_without_reveal INTEGER NOT NULL DEFAULT 0,
+    status TEXT DEFAULT 'confirmed',
+    latest_chapter INTEGER,
+    latest_scene_ref TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(book_id, edge_id),
+    FOREIGN KEY (book_id) REFERENCES books(id)
+);
+
+CREATE TABLE IF NOT EXISTS relationship_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    edge_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    chapter_number INTEGER,
+    scene_ref TEXT DEFAULT '',
+    summary TEXT DEFAULT '',
+    revealed_fact TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(book_id, event_id),
+    FOREIGN KEY (book_id) REFERENCES books(id)
+);
+
+CREATE TABLE IF NOT EXISTS relationship_pending_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    item_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    source_chapter INTEGER,
+    source_scene_ref TEXT DEFAULT '',
+    summary TEXT DEFAULT '',
+    character_json JSON DEFAULT '{}',
+    relationship_json JSON DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (book_id) REFERENCES books(id)
+);
+
+CREATE TABLE IF NOT EXISTS relationship_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    revision_number INTEGER NOT NULL,
+    relationship_graph_json JSON DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(book_id, revision_number),
+    FOREIGN KEY (book_id) REFERENCES books(id)
+);
+
+CREATE TABLE IF NOT EXISTS relationship_replan_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    edge_id TEXT NOT NULL,
+    request_reason TEXT DEFAULT '',
+    desired_change TEXT DEFAULT '',
+    conflict_report_json JSON DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (book_id) REFERENCES books(id)
+);
+
+CREATE TABLE IF NOT EXISTS relationship_replan_proposals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL,
+    proposal_id TEXT NOT NULL,
+    proposal_json JSON DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(request_id, proposal_id),
+    FOREIGN KEY (request_id) REFERENCES relationship_replan_requests(id)
 );
 
 CREATE TABLE IF NOT EXISTS runs (

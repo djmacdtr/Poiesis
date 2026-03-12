@@ -161,6 +161,25 @@ class WorldRepository:
             "published_at": str(latest.get("published_at") or ""),
         }
 
+    def get_world_blueprint_summary(self, db: Database, book_id: int = 1) -> dict[str, Any]:
+        """优先读取激活蓝图版本的世界蓝图，其次回退到当前工作态确认稿。"""
+        active = db.get_active_blueprint_revision(book_id)
+        if active and active.get("world_blueprint"):
+            return dict(active.get("world_blueprint") or {})
+        state = db.get_book_blueprint_state(book_id) or {}
+        return dict(state.get("world_confirmed") or state.get("world_draft") or {})
+
+    def list_relationship_graph(self, db: Database, book_id: int = 1) -> list[dict[str, Any]]:
+        """优先读取激活蓝图版本的关系图谱，避免工作态和执行态混用。"""
+        active = db.get_active_blueprint_revision(book_id)
+        if active:
+            revision_id = int(active.get("id") or 0)
+            if revision_id:
+                return db.list_blueprint_relationship_edges(revision_id)
+        state = db.get_book_blueprint_state(book_id) or {}
+        raw_edges = state.get("relationship_graph_confirmed") or state.get("relationship_graph_draft") or []
+        return [dict(item) for item in raw_edges]
+
     def load_world_state(self, db: Database, book_id: int = 1) -> dict[str, Any]:
         """读取某本书的 canon / staging / archive 快照。"""
         loop_state = self.list_loops(db, book_id=book_id)
@@ -179,4 +198,6 @@ class WorldRepository:
             "archive": self.list_staging(db, status="rejected", book_id=book_id),
             "story_state": story_state,
             "loop_state": loop_state,
+            "world_blueprint_summary": self.get_world_blueprint_summary(db, book_id=book_id),
+            "relationship_graph": self.list_relationship_graph(db, book_id=book_id),
         }

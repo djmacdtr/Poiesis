@@ -13,7 +13,9 @@ import type { BookItem, CanonData } from '@/types'
 
 /** 标签页配置 */
 const tabs = [
+  { key: 'world_blueprint', label: '世界蓝图' },
   { key: 'characters', label: '角色' },
+  { key: 'relationship_graph', label: '人物关系' },
   { key: 'world_rules', label: '世界规则' },
   { key: 'timeline', label: '时间线' },
   { key: 'foreshadowing', label: '伏笔' },
@@ -68,6 +70,15 @@ export default function Canon() {
 
   if (isLoading) return <LoadingSpinner text="加载世界设定…" />
   if (error) return <ErrorMessage message={(error as Error).message} />
+
+  const tabCounts: Record<TabKey, number> = {
+    world_blueprint: data?.world_blueprint_summary ? 1 : 0,
+    characters: data?.characters.length ?? 0,
+    relationship_graph: data?.relationship_graph?.length ?? 0,
+    world_rules: data?.world_rules.length ?? 0,
+    timeline: data?.timeline.length ?? 0,
+    foreshadowing: data?.foreshadowing.length ?? 0,
+  }
 
   return (
     <div className="space-y-5">
@@ -140,17 +151,146 @@ export default function Canon() {
             )}
           >
             {tab.label}
-            {data && (
-              <span className="ml-1.5 text-xs text-gray-400">
-                ({data[tab.key].length})
-              </span>
-            )}
+            <span className="ml-1.5 text-xs text-gray-400">({tabCounts[tab.key]})</span>
           </button>
         ))}
       </div>
 
       {/* 标签页内容 */}
       <div>
+        {activeTab === 'world_blueprint' && (
+          <div>
+            {!data?.world_blueprint_summary ? (
+              <EmptyState text="当前还没有可展示的世界蓝图，请先在蓝图工作台确认世界观。" />
+            ) : (
+              <div className="space-y-4">
+                <section className="rounded-xl border border-gray-200 bg-white p-5 space-y-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900">世界总览</h3>
+                    <p className="mt-2 text-sm text-gray-700">{data.world_blueprint_summary.setting_summary}</p>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="rounded-lg bg-stone-50 p-3">
+                      <p className="text-xs font-medium text-stone-500">时代背景</p>
+                      <p className="mt-2 text-sm text-stone-700">{data.world_blueprint_summary.era_context || '未填写'}</p>
+                    </div>
+                    <div className="rounded-lg bg-stone-50 p-3">
+                      <p className="text-xs font-medium text-stone-500">社会秩序</p>
+                      <p className="mt-2 text-sm text-stone-700">{data.world_blueprint_summary.social_order || '未填写'}</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-gray-200 bg-white p-5 space-y-4">
+                  <h3 className="text-sm font-semibold text-gray-900">力量体系</h3>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="rounded-lg bg-stone-50 p-3">
+                      <p className="text-xs font-medium text-stone-500">核心机制</p>
+                      <p className="mt-2 text-sm text-stone-700">{data.world_blueprint_summary.power_system.core_mechanics || '未填写'}</p>
+                    </div>
+                    <div className="rounded-lg bg-stone-50 p-3">
+                      <p className="text-xs font-medium text-stone-500">代价</p>
+                      <p className="mt-2 text-sm text-stone-700">{data.world_blueprint_summary.power_system.costs.join('；') || '未填写'}</p>
+                    </div>
+                    <div className="rounded-lg bg-stone-50 p-3">
+                      <p className="text-xs font-medium text-stone-500">限制</p>
+                      <p className="mt-2 text-sm text-stone-700">{data.world_blueprint_summary.power_system.limitations.join('；') || '未填写'}</p>
+                    </div>
+                    <div className="rounded-lg bg-stone-50 p-3">
+                      <p className="text-xs font-medium text-stone-500">成长路径</p>
+                      <p className="mt-2 text-sm text-stone-700">{data.world_blueprint_summary.power_system.advancement_path.join('；') || '未填写'}</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-gray-200 bg-white p-5 space-y-4">
+                  <h3 className="text-sm font-semibold text-gray-900">势力结构</h3>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {data.world_blueprint_summary.factions.map((faction) => (
+                      <article key={faction.name} className="rounded-lg border border-gray-200 p-4 space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <h4 className="text-sm font-semibold text-gray-900">{faction.name}</h4>
+                          <span className="text-xs rounded bg-gray-100 px-2 py-0.5 text-gray-500">{faction.position || '未设定位阶'}</span>
+                        </div>
+                        <p className="text-sm text-gray-700">目标：{faction.goal || '未填写'}</p>
+                        <p className="text-xs text-gray-500">公开形象：{faction.public_image || '未填写'}</p>
+                        <p className="text-xs text-amber-700">隐藏真相：{faction.hidden_truth || '未填写'}</p>
+                        <p className="text-xs text-gray-500">常用手段：{faction.methods.join('；') || '未填写'}</p>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-xl border border-gray-200 bg-white p-5 space-y-3">
+                    <h3 className="text-sm font-semibold text-gray-900">不可变规则</h3>
+                    <div className="space-y-3">
+                      {data.world_blueprint_summary.immutable_rules.map((rule) => (
+                        <div key={rule.key} className="rounded-lg bg-red-50 p-3 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="rounded bg-red-100 px-2 py-0.5 text-xs text-red-600">不可变</span>
+                            <span className="text-xs text-gray-500">{rule.category}</span>
+                          </div>
+                          <p className="text-sm font-medium text-gray-900">{rule.key}</p>
+                          <p className="text-sm text-gray-700">{rule.description}</p>
+                          <p className="text-xs text-gray-500">存在理由：{rule.rationale || '未填写'}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-gray-200 bg-white p-5 space-y-3">
+                    <h3 className="text-sm font-semibold text-gray-900">禁忌规则</h3>
+                    <div className="space-y-3">
+                      {data.world_blueprint_summary.taboo_rules.map((rule) => (
+                        <div key={rule.key} className="rounded-lg bg-amber-50 p-3 space-y-1">
+                          <p className="text-sm font-medium text-gray-900">{rule.key}</p>
+                          <p className="text-sm text-gray-700">{rule.description}</p>
+                          <p className="text-xs text-amber-700">触犯后果：{rule.consequence || '未填写'}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+
+                <section className="grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-xl border border-gray-200 bg-white p-5">
+                    <h3 className="text-sm font-semibold text-gray-900">关键地点</h3>
+                    <div className="mt-3 space-y-3">
+                      {data.world_blueprint_summary.geography.map((location) => (
+                        <div key={location.name} className="rounded-lg bg-stone-50 p-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-medium text-gray-900">{location.name}</p>
+                            <span className="text-xs text-gray-500">{location.role || '未设功能'}</span>
+                          </div>
+                          <p className="mt-2 text-sm text-gray-700">{location.description || '未填写'}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-gray-200 bg-white p-5 space-y-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-900">历史伤痕</h3>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {data.world_blueprint_summary.historical_wounds.map((item) => (
+                          <span key={item} className="rounded-full bg-rose-50 px-2.5 py-1 text-xs text-rose-700">{item}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-900">公开秘密</h3>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {data.world_blueprint_summary.public_secrets.map((item) => (
+                          <span key={item} className="rounded-full bg-indigo-50 px-2.5 py-1 text-xs text-indigo-700">{item}</span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* 角色列表 */}
         {activeTab === 'characters' && (
           <div>
@@ -172,6 +312,40 @@ export default function Canon() {
                     )}
                     <p className="text-xs text-gray-400">{formatDate(char.created_at)}</p>
                   </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'relationship_graph' && (
+          <div>
+            {!data?.relationship_graph?.length ? (
+              <EmptyState text="当前还没有人物关系图谱，请先在人物蓝图阶段确认关系网。" />
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2">
+                {data.relationship_graph.map((edge) => (
+                  <article key={edge.edge_id} className="rounded-xl border border-gray-200 bg-white p-4 space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold text-gray-900">
+                        {edge.source_character_id} → {edge.target_character_id}
+                      </h3>
+                      <span className="rounded bg-stone-100 px-2 py-0.5 text-xs text-stone-600">{edge.relation_type}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      <span className="rounded bg-sky-50 px-2 py-0.5 text-sky-700">倾向：{edge.polarity}</span>
+                      <span className="rounded bg-violet-50 px-2 py-0.5 text-violet-700">公开度：{edge.visibility}</span>
+                      <span className="rounded bg-amber-50 px-2 py-0.5 text-amber-700">稳定性：{edge.stability}</span>
+                      <span className="rounded bg-gray-100 px-2 py-0.5 text-gray-600">强度：{edge.intensity}</span>
+                    </div>
+                    <p className="text-sm text-gray-700">{edge.summary || '未填写关系摘要'}</p>
+                    {edge.hidden_truth && (
+                      <p className="text-xs text-amber-700">隐藏真相：{edge.hidden_truth}</p>
+                    )}
+                    {edge.non_breakable_without_reveal && (
+                      <p className="text-xs text-red-600">这条关系需要通过“揭示事件”才能被合法改写。</p>
+                    )}
+                  </article>
                 ))}
               </div>
             )}

@@ -127,6 +127,10 @@ class Database:
         self._ensure_column(conn, "book_concept_variants", "protagonist_arc_mode", "TEXT DEFAULT ''")
         self._ensure_column(conn, "book_concept_variants", "tone_signature", "TEXT DEFAULT ''")
         self._ensure_column(conn, "book_concept_variants", "diversity_note", "TEXT DEFAULT ''")
+        self._ensure_column(conn, "book_blueprints", "relationship_graph_draft_json", "JSON DEFAULT '[]'")
+        self._ensure_column(conn, "book_blueprints", "relationship_graph_confirmed_json", "JSON DEFAULT '[]'")
+        self._ensure_column(conn, "book_blueprint_revisions", "relationship_graph_json", "JSON DEFAULT '[]'")
+        self._ensure_column(conn, "blueprint_chapter_roadmap", "relationship_progress_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "story_state_snapshots", "blueprint_revision_id", "INTEGER")
         self._ensure_column(conn, "chapter_outputs", "blueprint_revision_id", "INTEGER")
         self._ensure_column(conn, "scene_patches", "before_text", "TEXT DEFAULT ''")
@@ -155,6 +159,201 @@ class Database:
                 result_payload_json JSON DEFAULT '{}',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (review_id) REFERENCES scene_reviews(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS blueprint_world_locations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                revision_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                role TEXT DEFAULT '',
+                description TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS blueprint_world_factions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                revision_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                position TEXT DEFAULT '',
+                goal TEXT DEFAULT '',
+                methods_json JSON DEFAULT '[]',
+                public_image TEXT DEFAULT '',
+                hidden_truth TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS blueprint_power_system_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                revision_id INTEGER NOT NULL UNIQUE,
+                core_mechanics TEXT DEFAULT '',
+                costs_json JSON DEFAULT '[]',
+                limitations_json JSON DEFAULT '[]',
+                advancement_path_json JSON DEFAULT '[]',
+                symbols_json JSON DEFAULT '[]',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS blueprint_relationship_edges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                revision_id INTEGER NOT NULL,
+                edge_id TEXT NOT NULL,
+                source_character_id TEXT NOT NULL,
+                target_character_id TEXT NOT NULL,
+                relation_type TEXT DEFAULT '',
+                polarity TEXT DEFAULT '复杂',
+                intensity INTEGER NOT NULL DEFAULT 3,
+                visibility TEXT DEFAULT '半公开',
+                stability TEXT DEFAULT '稳定',
+                summary TEXT DEFAULT '',
+                hidden_truth TEXT DEFAULT '',
+                non_breakable_without_reveal INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(revision_id, edge_id),
+                FOREIGN KEY (revision_id) REFERENCES book_blueprint_revisions(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS character_nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL,
+                character_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                role TEXT DEFAULT '',
+                public_persona TEXT DEFAULT '',
+                core_motivation TEXT DEFAULT '',
+                fatal_flaw TEXT DEFAULT '',
+                non_negotiable_traits_json JSON DEFAULT '[]',
+                arc_outline_json JSON DEFAULT '[]',
+                faction_affiliation TEXT DEFAULT '',
+                status TEXT DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(book_id, character_id),
+                FOREIGN KEY (book_id) REFERENCES books(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS relationship_edges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL,
+                edge_id TEXT NOT NULL,
+                source_character_id TEXT NOT NULL,
+                target_character_id TEXT NOT NULL,
+                relation_type TEXT DEFAULT '',
+                polarity TEXT DEFAULT '复杂',
+                intensity INTEGER NOT NULL DEFAULT 3,
+                visibility TEXT DEFAULT '半公开',
+                stability TEXT DEFAULT '稳定',
+                summary TEXT DEFAULT '',
+                hidden_truth TEXT DEFAULT '',
+                non_breakable_without_reveal INTEGER NOT NULL DEFAULT 0,
+                status TEXT DEFAULT 'confirmed',
+                latest_chapter INTEGER,
+                latest_scene_ref TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(book_id, edge_id),
+                FOREIGN KEY (book_id) REFERENCES books(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS relationship_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL,
+                edge_id TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                chapter_number INTEGER,
+                scene_ref TEXT DEFAULT '',
+                summary TEXT DEFAULT '',
+                revealed_fact TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(book_id, event_id),
+                FOREIGN KEY (book_id) REFERENCES books(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS relationship_pending_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL,
+                item_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                source_chapter INTEGER,
+                source_scene_ref TEXT DEFAULT '',
+                summary TEXT DEFAULT '',
+                character_json JSON DEFAULT '{}',
+                relationship_json JSON DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (book_id) REFERENCES books(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS relationship_revisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL,
+                revision_number INTEGER NOT NULL,
+                relationship_graph_json JSON DEFAULT '[]',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(book_id, revision_number),
+                FOREIGN KEY (book_id) REFERENCES books(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS relationship_replan_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL,
+                edge_id TEXT NOT NULL,
+                request_reason TEXT DEFAULT '',
+                desired_change TEXT DEFAULT '',
+                conflict_report_json JSON DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (book_id) REFERENCES books(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS relationship_replan_proposals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                proposal_id TEXT NOT NULL,
+                proposal_json JSON DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'draft',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(request_id, proposal_id),
+                FOREIGN KEY (request_id) REFERENCES relationship_replan_requests(id)
             )
             """
         )
@@ -209,6 +408,12 @@ class Database:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_scene_review_events_review_id ON scene_review_events(review_id)"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_character_nodes_book_id ON character_nodes(book_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_relationship_edges_book_id ON relationship_edges(book_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_relationship_events_book_id ON relationship_events(book_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_relationship_pending_book_id ON relationship_pending_items(book_id)"
         )
 
     def _ensure_default_book(self, conn: sqlite3.Connection) -> None:
@@ -736,6 +941,8 @@ class Database:
         world_confirmed: dict[str, Any] | None = None,
         character_draft: list[dict[str, Any]] | None = None,
         character_confirmed: list[dict[str, Any]] | None = None,
+        relationship_graph_draft: list[dict[str, Any]] | None = None,
+        relationship_graph_confirmed: list[dict[str, Any]] | None = None,
         roadmap_draft: list[dict[str, Any]] | None = None,
         roadmap_confirmed: list[dict[str, Any]] | None = None,
     ) -> int:
@@ -747,9 +954,10 @@ class Database:
                 INSERT INTO book_blueprints (
                     book_id, status, current_step, selected_variant_id, active_revision_id,
                     world_draft_json, world_confirmed_json, character_draft_json, character_confirmed_json,
+                    relationship_graph_draft_json, relationship_graph_confirmed_json,
                     roadmap_draft_json, roadmap_confirmed_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(book_id) DO UPDATE SET
                     status = excluded.status,
                     current_step = excluded.current_step,
@@ -759,6 +967,8 @@ class Database:
                     world_confirmed_json = excluded.world_confirmed_json,
                     character_draft_json = excluded.character_draft_json,
                     character_confirmed_json = excluded.character_confirmed_json,
+                    relationship_graph_draft_json = excluded.relationship_graph_draft_json,
+                    relationship_graph_confirmed_json = excluded.relationship_graph_confirmed_json,
                     roadmap_draft_json = excluded.roadmap_draft_json,
                     roadmap_confirmed_json = excluded.roadmap_confirmed_json,
                     updated_at = CURRENT_TIMESTAMP
@@ -781,6 +991,16 @@ class Database:
                         if character_confirmed is not None
                         else existing.get("character_confirmed") or []
                     ),
+                    json.dumps(
+                        relationship_graph_draft
+                        if relationship_graph_draft is not None
+                        else existing.get("relationship_graph_draft") or []
+                    ),
+                    json.dumps(
+                        relationship_graph_confirmed
+                        if relationship_graph_confirmed is not None
+                        else existing.get("relationship_graph_confirmed") or []
+                    ),
                     json.dumps(roadmap_draft if roadmap_draft is not None else existing.get("roadmap_draft") or []),
                     json.dumps(
                         roadmap_confirmed if roadmap_confirmed is not None else existing.get("roadmap_confirmed") or []
@@ -801,6 +1021,8 @@ class Database:
         item["world_confirmed"] = json.loads(item.pop("world_confirmed_json", "{}") or "{}")
         item["character_draft"] = json.loads(item.pop("character_draft_json", "[]") or "[]")
         item["character_confirmed"] = json.loads(item.pop("character_confirmed_json", "[]") or "[]")
+        item["relationship_graph_draft"] = json.loads(item.pop("relationship_graph_draft_json", "[]") or "[]")
+        item["relationship_graph_confirmed"] = json.loads(item.pop("relationship_graph_confirmed_json", "[]") or "[]")
         item["roadmap_draft"] = json.loads(item.pop("roadmap_draft_json", "[]") or "[]")
         item["roadmap_confirmed"] = json.loads(item.pop("roadmap_confirmed_json", "[]") or "[]")
         return item
@@ -816,6 +1038,7 @@ class Database:
         affected_range: list[int],
         world_blueprint: dict[str, Any],
         character_blueprints: list[dict[str, Any]],
+        relationship_graph: list[dict[str, Any]],
         roadmap: list[dict[str, Any]],
         is_active: bool,
     ) -> int:
@@ -825,6 +1048,7 @@ class Database:
             "selected_variant_id": selected_variant_id,
             "world": world_blueprint,
             "characters": character_blueprints,
+            "relationship_graph": relationship_graph,
             "roadmap": roadmap,
         }
         with self._cursor() as cur:
@@ -834,10 +1058,10 @@ class Database:
                 """
                 INSERT INTO book_blueprint_revisions (
                     book_id, revision_number, selected_variant_id, change_reason, change_summary,
-                    affected_range_json, world_blueprint_json, character_blueprints_json, roadmap_json,
+                    affected_range_json, world_blueprint_json, character_blueprints_json, relationship_graph_json, roadmap_json,
                     blueprint_json, is_active
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     book_id,
@@ -848,6 +1072,7 @@ class Database:
                     json.dumps(affected_range),
                     json.dumps(world_blueprint),
                     json.dumps(character_blueprints),
+                    json.dumps(relationship_graph),
                     json.dumps(roadmap),
                     json.dumps(blueprint_payload),
                     int(is_active),
@@ -856,6 +1081,7 @@ class Database:
             revision_id = cur.lastrowid or 0
         self.replace_blueprint_world_rules(revision_id, world_blueprint)
         self.replace_blueprint_characters(revision_id, character_blueprints)
+        self.replace_blueprint_relationship_edges(revision_id, relationship_graph)
         self.replace_blueprint_chapter_roadmap(revision_id, roadmap)
         if change_reason or change_summary:
             self.add_blueprint_revision_change(revision_id, change_reason, change_summary, affected_range)
@@ -896,6 +1122,7 @@ class Database:
         row["affected_range"] = json.loads(row.pop("affected_range_json", "[]") or "[]")
         row["world_blueprint"] = json.loads(row.pop("world_blueprint_json", "{}") or "{}")
         row["character_blueprints"] = json.loads(row.pop("character_blueprints_json", "[]") or "[]")
+        row["relationship_graph"] = json.loads(row.pop("relationship_graph_json", "[]") or "[]")
         row["roadmap"] = json.loads(row.pop("roadmap_json", "[]") or "[]")
         row["blueprint"] = json.loads(row.pop("blueprint_json", "{}") or "{}")
         row["is_active"] = bool(row.get("is_active"))
@@ -905,8 +1132,14 @@ class Database:
         """用当前世界观蓝图刷新版本下的规则快照。"""
         rules = list(world_blueprint.get("immutable_rules") or [])
         taboo_rules = list(world_blueprint.get("taboo_rules") or [])
+        geography = list(world_blueprint.get("geography") or [])
+        factions = list(world_blueprint.get("factions") or [])
+        power_system = dict(world_blueprint.get("power_system") or {})
         with self._cursor() as cur:
             cur.execute("DELETE FROM blueprint_world_rules WHERE revision_id = ?", (revision_id,))
+            cur.execute("DELETE FROM blueprint_world_locations WHERE revision_id = ?", (revision_id,))
+            cur.execute("DELETE FROM blueprint_world_factions WHERE revision_id = ?", (revision_id,))
+            cur.execute("DELETE FROM blueprint_power_system_snapshots WHERE revision_id = ?", (revision_id,))
             for rule in rules:
                 cur.execute(
                     """
@@ -921,6 +1154,18 @@ class Database:
                         str(rule.get("category") or "world"),
                     ),
                 )
+            for taboo in taboo_rules:
+                cur.execute(
+                    """
+                    INSERT INTO blueprint_world_rules (revision_id, rule_key, description, is_immutable, category)
+                    VALUES (?, ?, ?, 1, 'taboo')
+                    """,
+                    (
+                        revision_id,
+                        str(taboo.get("key") or ""),
+                        str(taboo.get("description") or ""),
+                    ),
+                )
             if world_blueprint.get("setting_summary"):
                 cur.execute(
                     """
@@ -929,21 +1174,69 @@ class Database:
                     """,
                     (revision_id, str(world_blueprint.get("setting_summary") or "")),
                 )
-            if world_blueprint.get("power_system"):
+            if world_blueprint.get("era_context"):
                 cur.execute(
                     """
                     INSERT INTO blueprint_world_rules (revision_id, rule_key, description, is_immutable, category)
-                    VALUES (?, 'power_system', ?, 1, 'power')
+                    VALUES (?, 'era_context', ?, 1, 'setting')
                     """,
-                    (revision_id, str(world_blueprint.get("power_system") or "")),
+                    (revision_id, str(world_blueprint.get("era_context") or "")),
                 )
-            for index, taboo in enumerate(taboo_rules, start=1):
+            if world_blueprint.get("social_order"):
                 cur.execute(
                     """
                     INSERT INTO blueprint_world_rules (revision_id, rule_key, description, is_immutable, category)
-                    VALUES (?, ?, ?, 1, 'taboo')
+                    VALUES (?, 'social_order', ?, 0, 'setting')
                     """,
-                    (revision_id, f"taboo_rule_{index}", str(taboo)),
+                    (revision_id, str(world_blueprint.get("social_order") or "")),
+                )
+            if power_system:
+                cur.execute(
+                    """
+                    INSERT INTO blueprint_power_system_snapshots (
+                        revision_id, core_mechanics, costs_json, limitations_json, advancement_path_json, symbols_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        revision_id,
+                        str(power_system.get("core_mechanics") or ""),
+                        json.dumps(power_system.get("costs") or []),
+                        json.dumps(power_system.get("limitations") or []),
+                        json.dumps(power_system.get("advancement_path") or []),
+                        json.dumps(power_system.get("symbols") or []),
+                    ),
+                )
+            for location in geography:
+                cur.execute(
+                    """
+                    INSERT INTO blueprint_world_locations (revision_id, name, role, description)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        revision_id,
+                        str(location.get("name") or ""),
+                        str(location.get("role") or ""),
+                        str(location.get("description") or ""),
+                    ),
+                )
+            for faction in factions:
+                cur.execute(
+                    """
+                    INSERT INTO blueprint_world_factions (
+                        revision_id, name, position, goal, methods_json, public_image, hidden_truth
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        revision_id,
+                        str(faction.get("name") or ""),
+                        str(faction.get("position") or ""),
+                        str(faction.get("goal") or ""),
+                        json.dumps(faction.get("methods") or []),
+                        str(faction.get("public_image") or ""),
+                        str(faction.get("hidden_truth") or ""),
+                    ),
                 )
 
     def list_blueprint_world_rules(self, revision_id: int) -> list[dict[str, Any]]:
@@ -955,6 +1248,48 @@ class Database:
             )
             rows = cur.fetchall()
         return [dict(row) for row in rows]
+
+    def list_blueprint_world_locations(self, revision_id: int) -> list[dict[str, Any]]:
+        """读取版本下的关键地点。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM blueprint_world_locations WHERE revision_id = ? ORDER BY id ASC",
+                (revision_id,),
+            )
+            rows = cur.fetchall()
+        return [dict(row) for row in rows]
+
+    def list_blueprint_world_factions(self, revision_id: int) -> list[dict[str, Any]]:
+        """读取版本下的势力结构。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM blueprint_world_factions WHERE revision_id = ? ORDER BY id ASC",
+                (revision_id,),
+            )
+            rows = cur.fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["methods"] = json.loads(item.pop("methods_json", "[]") or "[]")
+            result.append(item)
+        return result
+
+    def get_blueprint_power_system_snapshot(self, revision_id: int) -> dict[str, Any] | None:
+        """读取版本下的力量体系快照。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM blueprint_power_system_snapshots WHERE revision_id = ?",
+                (revision_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["costs"] = json.loads(item.pop("costs_json", "[]") or "[]")
+        item["limitations"] = json.loads(item.pop("limitations_json", "[]") or "[]")
+        item["advancement_path"] = json.loads(item.pop("advancement_path_json", "[]") or "[]")
+        item["symbols"] = json.loads(item.pop("symbols_json", "[]") or "[]")
+        return item
 
     def replace_blueprint_characters(self, revision_id: int, characters: list[dict[str, Any]]) -> None:
         """刷新版本下的人物蓝图快照。"""
@@ -982,6 +1317,36 @@ class Database:
                     ),
                 )
 
+    def replace_blueprint_relationship_edges(self, revision_id: int, edges: list[dict[str, Any]]) -> None:
+        """刷新版本下的人物关系图谱快照。"""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM blueprint_relationship_edges WHERE revision_id = ?", (revision_id,))
+            for item in edges:
+                cur.execute(
+                    """
+                    INSERT INTO blueprint_relationship_edges (
+                        revision_id, edge_id, source_character_id, target_character_id, relation_type,
+                        polarity, intensity, visibility, stability, summary, hidden_truth,
+                        non_breakable_without_reveal
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        revision_id,
+                        str(item.get("edge_id") or ""),
+                        str(item.get("source_character_id") or ""),
+                        str(item.get("target_character_id") or ""),
+                        str(item.get("relation_type") or ""),
+                        str(item.get("polarity") or "复杂"),
+                        int(item.get("intensity") or 3),
+                        str(item.get("visibility") or "半公开"),
+                        str(item.get("stability") or "稳定"),
+                        str(item.get("summary") or ""),
+                        str(item.get("hidden_truth") or ""),
+                        int(bool(item.get("non_breakable_without_reveal"))),
+                    ),
+                )
+
     def list_blueprint_characters(self, revision_id: int) -> list[dict[str, Any]]:
         """读取版本下的人物蓝图快照。"""
         with self._cursor() as cur:
@@ -1001,6 +1366,21 @@ class Database:
             result.append(item)
         return result
 
+    def list_blueprint_relationship_edges(self, revision_id: int) -> list[dict[str, Any]]:
+        """读取版本下的关系图谱快照。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM blueprint_relationship_edges WHERE revision_id = ? ORDER BY id ASC",
+                (revision_id,),
+            )
+            rows = cur.fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["non_breakable_without_reveal"] = bool(item.get("non_breakable_without_reveal"))
+            result.append(item)
+        return result
+
     def replace_blueprint_chapter_roadmap(self, revision_id: int, roadmap: list[dict[str, Any]]) -> None:
         """刷新版本下的章节路线快照。"""
         with self._cursor() as cur:
@@ -1010,9 +1390,9 @@ class Database:
                     """
                     INSERT INTO blueprint_chapter_roadmap (
                         revision_id, chapter_number, title, goal, core_conflict, turning_point,
-                        character_progress_json, planned_loops_json, closure_function
+                        character_progress_json, relationship_progress_json, planned_loops_json, closure_function
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         revision_id,
@@ -1022,6 +1402,7 @@ class Database:
                         str(item.get("core_conflict") or ""),
                         str(item.get("turning_point") or ""),
                         json.dumps(item.get("character_progress") or []),
+                        json.dumps(item.get("relationship_progress") or []),
                         json.dumps(item.get("planned_loops") or []),
                         str(item.get("closure_function") or ""),
                     ),
@@ -1051,6 +1432,7 @@ class Database:
 
     def _decode_blueprint_roadmap_row(self, row: dict[str, Any]) -> dict[str, Any]:
         row["character_progress"] = json.loads(row.pop("character_progress_json", "[]") or "[]")
+        row["relationship_progress"] = json.loads(row.pop("relationship_progress_json", "[]") or "[]")
         row["planned_loops"] = json.loads(row.pop("planned_loops_json", "[]") or "[]")
         return row
 
@@ -1086,6 +1468,362 @@ class Database:
             item["affected_range"] = json.loads(item.pop("affected_range_json", "[]") or "[]")
             result.append(item)
         return result
+
+    def replace_character_nodes(self, book_id: int, nodes: list[dict[str, Any]]) -> None:
+        """用当前确认版人物节点重建执行态人物图谱。"""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM character_nodes WHERE book_id = ?", (book_id,))
+            for item in nodes:
+                cur.execute(
+                    """
+                    INSERT INTO character_nodes (
+                        book_id, character_id, name, role, public_persona, core_motivation, fatal_flaw,
+                        non_negotiable_traits_json, arc_outline_json, faction_affiliation, status
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        book_id,
+                        str(item.get("character_id") or item.get("name") or ""),
+                        str(item.get("name") or ""),
+                        str(item.get("role") or ""),
+                        str(item.get("public_persona") or ""),
+                        str(item.get("core_motivation") or ""),
+                        str(item.get("fatal_flaw") or ""),
+                        json.dumps(item.get("non_negotiable_traits") or []),
+                        json.dumps(item.get("arc_outline") or []),
+                        str(item.get("faction_affiliation") or ""),
+                        str(item.get("status") or "active"),
+                    ),
+                )
+
+    def list_character_nodes(self, book_id: int) -> list[dict[str, Any]]:
+        """读取执行态人物节点。"""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM character_nodes WHERE book_id = ? ORDER BY id ASC", (book_id,))
+            rows = cur.fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["non_negotiable_traits"] = json.loads(item.pop("non_negotiable_traits_json", "[]") or "[]")
+            item["arc_outline"] = json.loads(item.pop("arc_outline_json", "[]") or "[]")
+            result.append(item)
+        return result
+
+    def get_character_node(self, book_id: int, character_id: str) -> dict[str, Any] | None:
+        """按 character_id 读取人物节点。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM character_nodes WHERE book_id = ? AND character_id = ?",
+                (book_id, character_id),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["non_negotiable_traits"] = json.loads(item.pop("non_negotiable_traits_json", "[]") or "[]")
+        item["arc_outline"] = json.loads(item.pop("arc_outline_json", "[]") or "[]")
+        return item
+
+    def replace_relationship_graph(self, book_id: int, edges: list[dict[str, Any]]) -> None:
+        """用当前确认版关系图谱重建执行态关系边。"""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM relationship_edges WHERE book_id = ?", (book_id,))
+            for item in edges:
+                cur.execute(
+                    """
+                    INSERT INTO relationship_edges (
+                        book_id, edge_id, source_character_id, target_character_id, relation_type,
+                        polarity, intensity, visibility, stability, summary, hidden_truth,
+                        non_breakable_without_reveal, status, latest_chapter, latest_scene_ref
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        book_id,
+                        str(item.get("edge_id") or ""),
+                        str(item.get("source_character_id") or ""),
+                        str(item.get("target_character_id") or ""),
+                        str(item.get("relation_type") or ""),
+                        str(item.get("polarity") or "复杂"),
+                        int(item.get("intensity") or 3),
+                        str(item.get("visibility") or "半公开"),
+                        str(item.get("stability") or "稳定"),
+                        str(item.get("summary") or ""),
+                        str(item.get("hidden_truth") or ""),
+                        int(bool(item.get("non_breakable_without_reveal"))),
+                        str(item.get("status") or "confirmed"),
+                        item.get("latest_chapter"),
+                        str(item.get("latest_scene_ref") or ""),
+                    ),
+                )
+
+    def upsert_relationship_edge(self, book_id: int, edge: dict[str, Any]) -> int:
+        """插入或更新执行态关系边。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO relationship_edges (
+                    book_id, edge_id, source_character_id, target_character_id, relation_type,
+                    polarity, intensity, visibility, stability, summary, hidden_truth,
+                    non_breakable_without_reveal, status, latest_chapter, latest_scene_ref
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(book_id, edge_id) DO UPDATE SET
+                    source_character_id = excluded.source_character_id,
+                    target_character_id = excluded.target_character_id,
+                    relation_type = excluded.relation_type,
+                    polarity = excluded.polarity,
+                    intensity = excluded.intensity,
+                    visibility = excluded.visibility,
+                    stability = excluded.stability,
+                    summary = excluded.summary,
+                    hidden_truth = excluded.hidden_truth,
+                    non_breakable_without_reveal = excluded.non_breakable_without_reveal,
+                    status = excluded.status,
+                    latest_chapter = excluded.latest_chapter,
+                    latest_scene_ref = excluded.latest_scene_ref,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    book_id,
+                    str(edge.get("edge_id") or ""),
+                    str(edge.get("source_character_id") or ""),
+                    str(edge.get("target_character_id") or ""),
+                    str(edge.get("relation_type") or ""),
+                    str(edge.get("polarity") or "复杂"),
+                    int(edge.get("intensity") or 3),
+                    str(edge.get("visibility") or "半公开"),
+                    str(edge.get("stability") or "稳定"),
+                    str(edge.get("summary") or ""),
+                    str(edge.get("hidden_truth") or ""),
+                    int(bool(edge.get("non_breakable_without_reveal"))),
+                    str(edge.get("status") or "confirmed"),
+                    edge.get("latest_chapter"),
+                    str(edge.get("latest_scene_ref") or ""),
+                ),
+            )
+            return cur.lastrowid or 0
+
+    def list_relationship_edges(self, book_id: int, include_pending: bool = True) -> list[dict[str, Any]]:
+        """读取执行态关系边。"""
+        with self._cursor() as cur:
+            if include_pending:
+                cur.execute("SELECT * FROM relationship_edges WHERE book_id = ? ORDER BY id ASC", (book_id,))
+            else:
+                cur.execute(
+                    "SELECT * FROM relationship_edges WHERE book_id = ? AND status = 'confirmed' ORDER BY id ASC",
+                    (book_id,),
+                )
+            rows = cur.fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["non_breakable_without_reveal"] = bool(item.get("non_breakable_without_reveal"))
+            result.append(item)
+        return result
+
+    def get_relationship_edge(self, book_id: int, edge_id: str) -> dict[str, Any] | None:
+        """按 edge_id 读取关系边。"""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM relationship_edges WHERE book_id = ? AND edge_id = ?",
+                (book_id, edge_id),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["non_breakable_without_reveal"] = bool(item.get("non_breakable_without_reveal"))
+        return item
+
+    def add_relationship_event(self, book_id: int, payload: dict[str, Any]) -> int:
+        """记录关系推进事件。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO relationship_events (
+                    book_id, edge_id, event_id, event_type, chapter_number, scene_ref, summary, revealed_fact
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    book_id,
+                    str(payload.get("edge_id") or ""),
+                    str(payload.get("event_id") or ""),
+                    str(payload.get("event_type") or ""),
+                    payload.get("chapter_number"),
+                    str(payload.get("scene_ref") or ""),
+                    str(payload.get("summary") or ""),
+                    str(payload.get("revealed_fact") or ""),
+                ),
+            )
+            return cur.lastrowid or 0
+
+    def list_relationship_events(self, book_id: int, edge_id: str | None = None) -> list[dict[str, Any]]:
+        """读取关系事件列表。"""
+        with self._cursor() as cur:
+            if edge_id:
+                cur.execute(
+                    "SELECT * FROM relationship_events WHERE book_id = ? AND edge_id = ? ORDER BY id ASC",
+                    (book_id, edge_id),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM relationship_events WHERE book_id = ? ORDER BY id ASC",
+                    (book_id,),
+                )
+            rows = cur.fetchall()
+        return [dict(row) for row in rows]
+
+    def add_relationship_pending_item(self, book_id: int, payload: dict[str, Any]) -> int:
+        """新增待确认人物或关系项。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO relationship_pending_items (
+                    book_id, item_type, status, source_chapter, source_scene_ref, summary,
+                    character_json, relationship_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    book_id,
+                    str(payload.get("item_type") or "character"),
+                    str(payload.get("status") or "pending"),
+                    payload.get("source_chapter"),
+                    str(payload.get("source_scene_ref") or ""),
+                    str(payload.get("summary") or ""),
+                    json.dumps(payload.get("character") or {}),
+                    json.dumps(payload.get("relationship") or {}),
+                ),
+            )
+            return cur.lastrowid or 0
+
+    def list_relationship_pending_items(self, book_id: int, status: str | None = None) -> list[dict[str, Any]]:
+        """读取待确认的人物/关系队列。"""
+        with self._cursor() as cur:
+            if status:
+                cur.execute(
+                    "SELECT * FROM relationship_pending_items WHERE book_id = ? AND status = ? ORDER BY id ASC",
+                    (book_id, status),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM relationship_pending_items WHERE book_id = ? ORDER BY id ASC",
+                    (book_id,),
+                )
+            rows = cur.fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["character"] = json.loads(item.pop("character_json", "{}") or "{}")
+            item["relationship"] = json.loads(item.pop("relationship_json", "{}") or "{}")
+            result.append(item)
+        return result
+
+    def get_relationship_pending_item(self, item_id: int) -> dict[str, Any] | None:
+        """读取单个待确认项。"""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM relationship_pending_items WHERE id = ?", (item_id,))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["character"] = json.loads(item.pop("character_json", "{}") or "{}")
+        item["relationship"] = json.loads(item.pop("relationship_json", "{}") or "{}")
+        return item
+
+    def update_relationship_pending_item_status(self, item_id: int, status: str) -> dict[str, Any] | None:
+        """更新待确认项状态。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                UPDATE relationship_pending_items
+                SET status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (status, item_id),
+            )
+        return self.get_relationship_pending_item(item_id)
+
+    def create_relationship_replan_request(self, book_id: int, payload: dict[str, Any]) -> int:
+        """创建关系重规划请求。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO relationship_replan_requests (
+                    book_id, edge_id, request_reason, desired_change, conflict_report_json, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    book_id,
+                    str(payload.get("edge_id") or ""),
+                    str(payload.get("request_reason") or ""),
+                    str(payload.get("desired_change") or ""),
+                    json.dumps(payload.get("conflict_report") or {}),
+                    str(payload.get("status") or "pending"),
+                ),
+            )
+            return cur.lastrowid or 0
+
+    def get_relationship_replan_request(self, request_id: int) -> dict[str, Any] | None:
+        """读取关系重规划请求。"""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM relationship_replan_requests WHERE id = ?", (request_id,))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["conflict_report"] = json.loads(item.pop("conflict_report_json", "{}") or "{}")
+        return item
+
+    def add_relationship_replan_proposal(self, request_id: int, proposal_id: str, payload: dict[str, Any]) -> int:
+        """保存关系重规划提案。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO relationship_replan_proposals (request_id, proposal_id, proposal_json, status)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    proposal_id,
+                    json.dumps(payload),
+                    str(payload.get("status") or "draft"),
+                ),
+            )
+            return cur.lastrowid or 0
+
+    def get_relationship_replan_proposal(self, request_id: int, proposal_id: str) -> dict[str, Any] | None:
+        """读取指定关系重规划提案。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM relationship_replan_proposals
+                WHERE request_id = ? AND proposal_id = ?
+                """,
+                (request_id, proposal_id),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["proposal"] = json.loads(item.pop("proposal_json", "{}") or "{}")
+        return item
+
+    def update_relationship_replan_status(self, request_id: int, status: str) -> None:
+        """更新关系重规划请求状态。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                UPDATE relationship_replan_requests
+                SET status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (status, request_id),
+            )
 
     # ------------------------------------------------------------------
     # Characters
