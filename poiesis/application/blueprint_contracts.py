@@ -32,6 +32,21 @@ class CreationIntent(BaseModel):
     forbidden_elements: list[str] = Field(default_factory=list)
     length_preference: str = ""
     target_experience: str = ""
+    variant_preference: str = ""
+
+
+class ConceptVariantFrame(BaseModel):
+    """候选方向骨架，先锁定分歧维度，再扩写成完整版本。"""
+
+    variant_no: int
+    variant_strategy: str = ""
+    core_driver: str = ""
+    conflict_source: str = ""
+    world_structure: str = ""
+    protagonist_arc_mode: str = ""
+    tone_signature: str = ""
+    ending_mode: str = ""
+    differentiators: list[str] = Field(default_factory=list)
 
 
 class ConceptVariant(BaseModel):
@@ -43,7 +58,14 @@ class ConceptVariant(BaseModel):
     world_pitch: str
     main_arc_pitch: str
     ending_pitch: str
+    variant_strategy: str = ""
+    core_driver: str = ""
+    conflict_source: str = ""
+    world_structure: str = ""
+    protagonist_arc_mode: str = ""
+    tone_signature: str = ""
     differentiators: list[str] = Field(default_factory=list)
+    diversity_note: str = ""
     selected: bool = False
 
 
@@ -137,4 +159,3 @@ class BlueprintReplanRequest(BaseModel):
     starting_chapter: int = 1
     reason: str = ""
     guidance: str = ""
-

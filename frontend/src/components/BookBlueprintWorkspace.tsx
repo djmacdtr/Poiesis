@@ -12,6 +12,7 @@ import {
   generateConceptVariants,
   generateRoadmap,
   generateWorldBlueprint,
+  regenerateConceptVariant,
   replanBlueprint,
   saveCreationIntent,
   selectConceptVariant,
@@ -51,6 +52,7 @@ function defaultIntent(): CreationIntent {
     forbidden_elements: [],
     length_preference: '12',
     target_experience: '',
+    variant_preference: '',
   }
 }
 
@@ -118,6 +120,15 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
     mutationFn: (variantId: number) => selectConceptVariant(bookId, variantId),
     onSuccess: async () => {
       toast.success('已选定候选方向，进入世界观阶段')
+      await refreshBlueprint()
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+
+  const regenerateVariantMutation = useMutation({
+    mutationFn: (variantId: number) => regenerateConceptVariant(bookId, variantId),
+    onSuccess: async () => {
+      toast.success('已重生成这一版候选方向')
       await refreshBlueprint()
     },
     onError: (error: Error) => toast.error(error.message),
@@ -283,6 +294,20 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
             />
           </div>
           <div>
+            <label className="block text-xs font-medium text-stone-500 mb-1">候选分歧偏好</label>
+            <select
+              value={intentDraft.variant_preference}
+              onChange={(e) => setIntentDraft((prev) => ({ ...prev, variant_preference: e.target.value }))}
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm bg-white"
+            >
+              <option value="">默认分歧策略</option>
+              <option value="人物差异优先">人物差异优先</option>
+              <option value="世界差异优先">世界差异优先</option>
+              <option value="结局差异优先">结局差异优先</option>
+              <option value="尽量风格拉开">尽量风格拉开</option>
+            </select>
+          </div>
+          <div>
             <label className="block text-xs font-medium text-stone-500 mb-1">禁用元素</label>
             <input
               value={forbiddenText}
@@ -327,10 +352,41 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
                 <h4 className="text-sm font-semibold text-stone-800">方向 {variant.variant_no}</h4>
                 {selectedVariantId === variant.id && <span className="text-xs text-emerald-700">已选中</span>}
               </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-stone-600">
+                <div className="rounded-lg bg-stone-50 px-2 py-2">
+                  <span className="text-stone-400">主驱动</span>
+                  <p className="mt-1 font-medium text-stone-700">{variant.core_driver || '未标注'}</p>
+                </div>
+                <div className="rounded-lg bg-stone-50 px-2 py-2">
+                  <span className="text-stone-400">策略</span>
+                  <p className="mt-1 font-medium text-stone-700">{variant.variant_strategy || '未标注'}</p>
+                </div>
+                <div className="rounded-lg bg-stone-50 px-2 py-2">
+                  <span className="text-stone-400">冲突源</span>
+                  <p className="mt-1 font-medium text-stone-700">{variant.conflict_source || '未标注'}</p>
+                </div>
+                <div className="rounded-lg bg-stone-50 px-2 py-2">
+                  <span className="text-stone-400">世界结构</span>
+                  <p className="mt-1 font-medium text-stone-700">{variant.world_structure || '未标注'}</p>
+                </div>
+                <div className="rounded-lg bg-stone-50 px-2 py-2">
+                  <span className="text-stone-400">主角弧线</span>
+                  <p className="mt-1 font-medium text-stone-700">{variant.protagonist_arc_mode || '未标注'}</p>
+                </div>
+                <div className="rounded-lg bg-stone-50 px-2 py-2">
+                  <span className="text-stone-400">气质</span>
+                  <p className="mt-1 font-medium text-stone-700">{variant.tone_signature || '未标注'}</p>
+                </div>
+              </div>
               <p className="mt-3 text-sm font-medium text-stone-800">{variant.hook}</p>
               <p className="mt-2 text-sm text-stone-600">{variant.world_pitch}</p>
               <p className="mt-2 text-sm text-stone-600">{variant.main_arc_pitch}</p>
               <p className="mt-2 text-sm text-stone-500">结局倾向：{variant.ending_pitch}</p>
+              {variant.diversity_note && (
+                <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  {variant.diversity_note}
+                </p>
+              )}
               <div className="mt-3 flex flex-wrap gap-2">
                 {variant.differentiators.map((item) => (
                   <span key={item} className="rounded-full bg-white px-2 py-1 text-xs text-stone-600">
@@ -338,13 +394,27 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
                   </span>
                 ))}
               </div>
-              <button
-                onClick={() => variant.id && selectVariantMutation.mutate(variant.id)}
-                disabled={!variant.id || selectVariantMutation.isPending}
-                className="mt-4 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-white disabled:opacity-50"
-              >
-                选择这一版
-              </button>
+              <div className="mt-4 grid gap-2">
+                <button
+                  onClick={() => variant.id && selectVariantMutation.mutate(variant.id)}
+                  disabled={!variant.id || selectVariantMutation.isPending}
+                  className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-white disabled:opacity-50"
+                >
+                  选择这一版
+                </button>
+                <button
+                  onClick={() => variant.id && regenerateVariantMutation.mutate(variant.id)}
+                  disabled={
+                    !variant.id ||
+                    Boolean(selectedVariantId) ||
+                    regenerateVariantMutation.isPending ||
+                    selectVariantMutation.isPending
+                  }
+                  className="w-full rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-700 hover:bg-stone-200 disabled:opacity-50"
+                >
+                  {regenerateVariantMutation.isPending ? '重生成中…' : '仅重生成这一版'}
+                </button>
+              </div>
             </article>
           ))}
         </div>

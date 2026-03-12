@@ -61,6 +61,7 @@ export function BookCreateModal({
   const [endingPreference, setEndingPreference] = useState('')
   const [forbiddenElements, setForbiddenElements] = useState('')
   const [lengthPreference, setLengthPreference] = useState('12')
+  const [variantPreference, setVariantPreference] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -80,6 +81,7 @@ export function BookCreateModal({
     setEndingPreference('')
     setForbiddenElements('')
     setLengthPreference('12')
+    setVariantPreference('')
     setError(null)
   }, [open, initialValues])
 
@@ -113,6 +115,7 @@ export function BookCreateModal({
       forbidden_elements: parseTags(forbiddenElements),
       length_preference: lengthPreference.trim(),
       target_experience: targetExperience.trim(),
+      variant_preference: variantPreference.trim(),
     }
     onConfirm({ book, intent })
   }
@@ -218,6 +221,20 @@ export function BookCreateModal({
                   placeholder="例如：12"
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
                 />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">候选分歧偏好</label>
+                <select
+                  value={variantPreference}
+                  onChange={(e) => setVariantPreference(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 bg-white"
+                >
+                  <option value="">默认分歧策略</option>
+                  <option value="人物差异优先">人物差异优先</option>
+                  <option value="世界差异优先">世界差异优先</option>
+                  <option value="结局差异优先">结局差异优先</option>
+                  <option value="尽量风格拉开">尽量风格拉开</option>
+                </select>
               </div>
               <div className="sm:col-span-2">
                 <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="create-book-style-prompt">
@@ -360,4 +377,3 @@ export function BookCreateModal({
     </ModalBase>
   )
 }
-

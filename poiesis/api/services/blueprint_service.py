@@ -22,6 +22,7 @@ from poiesis.application.blueprint_use_cases import (
     GenerateConceptVariantsUseCase,
     GenerateRoadmapUseCase,
     GenerateWorldBlueprintUseCase,
+    RegenerateConceptVariantUseCase,
     ReplanBlueprintUseCase,
     SaveCreationIntentUseCase,
     SelectConceptVariantUseCase,
@@ -69,6 +70,12 @@ def select_concept_variant(db: Database, config_path: str, book_id: int, variant
     """选择候选方向。"""
     context = _build_context(config_path, db, book_id)
     return SelectConceptVariantUseCase(context).execute(variant_id)
+
+
+def regenerate_concept_variant(db: Database, config_path: str, book_id: int, variant_id: int) -> BookBlueprint:
+    """只重生成单条候选方向。"""
+    context = _build_context(config_path, db, book_id)
+    return RegenerateConceptVariantUseCase(context).execute(variant_id)
 
 
 def generate_world_blueprint(

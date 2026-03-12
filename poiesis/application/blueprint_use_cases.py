@@ -142,6 +142,38 @@ class GenerateConceptVariantsUseCase:
         return build_book_blueprint(self._context.db, self._context.book_id)
 
 
+class RegenerateConceptVariantUseCase:
+    """只重生成单条候选方向，避免作者每次整组重来。"""
+
+    def __init__(self, context: BlueprintContext) -> None:
+        self._context = context
+
+    def execute(self, variant_id: int) -> BookBlueprint:
+        state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
+        if str(state.get("status") or "") != "concept_generated":
+            raise ValueError("只有在候选方向阶段才能重生成单条方向")
+        variant = self._context.db.get_concept_variant(variant_id)
+        if variant is None or int(variant["book_id"]) != self._context.book_id:
+            raise ValueError("候选方向不存在")
+        intent_row = self._context.db.get_creation_intent(self._context.book_id)
+        if intent_row is None:
+            raise ValueError("请先填写创作意图")
+
+        siblings = [
+            ConceptVariant.model_validate(item)
+            for item in self._context.db.list_concept_variants(self._context.book_id)
+            if int(item["id"]) != variant_id
+        ]
+        regenerated = self._context.planner.regenerate_concept_variant(
+            CreationIntent.model_validate(intent_row),
+            ConceptVariant.model_validate(variant),
+            siblings,
+            self._context.llm,
+        )
+        self._context.db.update_concept_variant(variant_id, regenerated.model_dump(mode="json"))
+        return build_book_blueprint(self._context.db, self._context.book_id)
+
+
 class SelectConceptVariantUseCase:
     """选定一个候选方向作为后续蓝图的基础。"""
 

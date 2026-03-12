@@ -119,6 +119,14 @@ class Database:
         self._ensure_column(conn, "scene_reviews", "closed_at", "TIMESTAMP")
         self._ensure_column(conn, "loops", "due_start_chapter", "INTEGER")
         self._ensure_column(conn, "loops", "due_end_chapter", "INTEGER")
+        self._ensure_column(conn, "book_creation_intents", "variant_preference", "TEXT DEFAULT ''")
+        self._ensure_column(conn, "book_concept_variants", "variant_strategy", "TEXT DEFAULT ''")
+        self._ensure_column(conn, "book_concept_variants", "core_driver", "TEXT DEFAULT ''")
+        self._ensure_column(conn, "book_concept_variants", "conflict_source", "TEXT DEFAULT ''")
+        self._ensure_column(conn, "book_concept_variants", "world_structure", "TEXT DEFAULT ''")
+        self._ensure_column(conn, "book_concept_variants", "protagonist_arc_mode", "TEXT DEFAULT ''")
+        self._ensure_column(conn, "book_concept_variants", "tone_signature", "TEXT DEFAULT ''")
+        self._ensure_column(conn, "book_concept_variants", "diversity_note", "TEXT DEFAULT ''")
         self._ensure_column(conn, "story_state_snapshots", "blueprint_revision_id", "INTEGER")
         self._ensure_column(conn, "chapter_outputs", "blueprint_revision_id", "INTEGER")
         self._ensure_column(conn, "scene_patches", "before_text", "TEXT DEFAULT ''")
@@ -571,9 +579,10 @@ class Database:
                 """
                 INSERT INTO book_creation_intents (
                     book_id, genre, themes_json, tone, protagonist_prompt, conflict_prompt,
-                    ending_preference, forbidden_elements_json, length_preference, target_experience
+                    ending_preference, forbidden_elements_json, length_preference, target_experience,
+                    variant_preference
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(book_id) DO UPDATE SET
                     genre = excluded.genre,
                     themes_json = excluded.themes_json,
@@ -584,6 +593,7 @@ class Database:
                     forbidden_elements_json = excluded.forbidden_elements_json,
                     length_preference = excluded.length_preference,
                     target_experience = excluded.target_experience,
+                    variant_preference = excluded.variant_preference,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -597,6 +607,7 @@ class Database:
                     json.dumps(payload.get("forbidden_elements") or []),
                     str(payload.get("length_preference") or ""),
                     str(payload.get("target_experience") or ""),
+                    str(payload.get("variant_preference") or ""),
                 ),
             )
             return cur.lastrowid or 0
@@ -622,9 +633,11 @@ class Database:
                     """
                     INSERT INTO book_concept_variants (
                         book_id, variant_no, hook, world_pitch, main_arc_pitch,
-                        ending_pitch, differentiators_json, selected
+                        ending_pitch, variant_strategy, core_driver, conflict_source,
+                        world_structure, protagonist_arc_mode, tone_signature,
+                        differentiators_json, diversity_note, selected
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         book_id,
@@ -633,10 +646,46 @@ class Database:
                         str(item.get("world_pitch") or ""),
                         str(item.get("main_arc_pitch") or ""),
                         str(item.get("ending_pitch") or ""),
+                        str(item.get("variant_strategy") or ""),
+                        str(item.get("core_driver") or ""),
+                        str(item.get("conflict_source") or ""),
+                        str(item.get("world_structure") or ""),
+                        str(item.get("protagonist_arc_mode") or ""),
+                        str(item.get("tone_signature") or ""),
                         json.dumps(item.get("differentiators") or []),
+                        str(item.get("diversity_note") or ""),
                         int(bool(item.get("selected"))),
                     ),
                 )
+
+    def update_concept_variant(self, variant_id: int, payload: dict[str, Any]) -> None:
+        """更新单条候选方向，用于单版重生成。"""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                UPDATE book_concept_variants
+                SET hook = ?, world_pitch = ?, main_arc_pitch = ?, ending_pitch = ?,
+                    variant_strategy = ?, core_driver = ?, conflict_source = ?,
+                    world_structure = ?, protagonist_arc_mode = ?, tone_signature = ?,
+                    differentiators_json = ?, diversity_note = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (
+                    str(payload.get("hook") or ""),
+                    str(payload.get("world_pitch") or ""),
+                    str(payload.get("main_arc_pitch") or ""),
+                    str(payload.get("ending_pitch") or ""),
+                    str(payload.get("variant_strategy") or ""),
+                    str(payload.get("core_driver") or ""),
+                    str(payload.get("conflict_source") or ""),
+                    str(payload.get("world_structure") or ""),
+                    str(payload.get("protagonist_arc_mode") or ""),
+                    str(payload.get("tone_signature") or ""),
+                    json.dumps(payload.get("differentiators") or []),
+                    str(payload.get("diversity_note") or ""),
+                    variant_id,
+                ),
+            )
 
     def list_concept_variants(self, book_id: int) -> list[dict[str, Any]]:
         """返回候选方向列表。"""

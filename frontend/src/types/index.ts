@@ -369,6 +369,7 @@ export interface CreationIntent {
   forbidden_elements: string[]
   length_preference: string
   target_experience: string
+  variant_preference: string
 }
 
 export interface ConceptVariant {
@@ -378,7 +379,14 @@ export interface ConceptVariant {
   world_pitch: string
   main_arc_pitch: string
   ending_pitch: string
+  variant_strategy: string
+  core_driver: string
+  conflict_source: string
+  world_structure: string
+  protagonist_arc_mode: string
+  tone_signature: string
   differentiators: string[]
+  diversity_note: string
   selected: boolean
 }
 

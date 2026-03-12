@@ -151,6 +151,21 @@ def select_concept_variant(
     return BookBlueprintResponse(**payload.model_dump(mode="json"))
 
 
+@router.post("/{book_id}/concept-variants/{variant_id}:regenerate", response_model=BookBlueprintResponse)
+def regenerate_concept_variant(
+    book_id: int,
+    variant_id: int,
+    db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
+) -> BookBlueprintResponse:
+    """只重生成单条候选方向。"""
+    try:
+        payload = blueprint_service.regenerate_concept_variant(db, _config_path(), book_id, variant_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BookBlueprintResponse(**payload.model_dump(mode="json"))
+
+
 @router.post("/{book_id}/blueprint/world:generate", response_model=BookBlueprintResponse)
 def generate_world_blueprint(
     book_id: int,

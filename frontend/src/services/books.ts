@@ -52,6 +52,11 @@ export function selectConceptVariant(bookId: number, variantId: number): Promise
   return post<BookBlueprint>(`/api/books/${bookId}/concept-variants/${variantId}/select`, {})
 }
 
+/** 仅重生成单条候选方向 */
+export function regenerateConceptVariant(bookId: number, variantId: number): Promise<BookBlueprint> {
+  return post<BookBlueprint>(`/api/books/${bookId}/concept-variants/${variantId}:regenerate`, {})
+}
+
 /** 生成世界观蓝图 */
 export function generateWorldBlueprint(bookId: number, payload: BlueprintGenerateRequest): Promise<BookBlueprint> {
   return post<BookBlueprint>(`/api/books/${bookId}/blueprint/world:generate`, payload)
