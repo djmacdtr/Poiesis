@@ -15,6 +15,7 @@ BlueprintStatus = Literal[
     "world_confirmed",
     "characters_ready",
     "characters_confirmed",
+    "story_arcs_ready",
     "roadmap_ready",
     "locked",
 ]
@@ -287,6 +288,9 @@ class StoryArcPlan(BaseModel):
     loop_progress: list[str] = Field(default_factory=list)
     timeline_milestones: list[str] = Field(default_factory=list)
     arc_climax: str = ""
+    status: Literal["draft", "expanded", "confirmed"] = "draft"
+    has_chapters: bool = False
+    expansion_issue_count: int = 0
 
 
 class RoadmapValidationIssue(BaseModel):
@@ -298,7 +302,15 @@ class RoadmapValidationIssue(BaseModel):
     chapter_number: int | None = None
     story_stage: str = ""
     arc_number: int | None = None
-    suggested_action: Literal["regenerate_stage", "edit_chapter", "review_stage"] = "review_stage"
+    scope: Literal["arc", "chapter", "global"] = "chapter"
+    suggested_action: Literal[
+        "expand_arc",
+        "regenerate_arc",
+        "edit_chapter",
+        "review_arc",
+        "review_stage",
+        "regenerate_stage",
+    ] = "review_arc"
 
 
 class ChapterRoadmapItem(BaseModel):
@@ -355,6 +367,7 @@ class BookBlueprint(BaseModel):
     relationship_pending: list[RelationshipPendingItem] = Field(default_factory=list)
     story_arcs_draft: list[StoryArcPlan] = Field(default_factory=list)
     story_arcs_confirmed: list[StoryArcPlan] = Field(default_factory=list)
+    expanded_arc_numbers: list[int] = Field(default_factory=list)
     roadmap_draft: list[ChapterRoadmapItem] = Field(default_factory=list)
     roadmap_confirmed: list[ChapterRoadmapItem] = Field(default_factory=list)
     roadmap_validation_issues: list[RoadmapValidationIssue] = Field(default_factory=list)

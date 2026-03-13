@@ -590,6 +590,9 @@ export interface StoryArcPlan {
   loop_progress: string[]
   timeline_milestones: string[]
   arc_climax: string
+  status: 'draft' | 'expanded' | 'confirmed'
+  has_chapters: boolean
+  expansion_issue_count: number
 }
 
 export interface RoadmapValidationIssue {
@@ -598,8 +601,15 @@ export interface RoadmapValidationIssue {
   message: string
   chapter_number: number | null
   story_stage: string
+  scope?: 'arc' | 'chapter' | 'global'
   arc_number?: number | null
-  suggested_action?: 'regenerate_stage' | 'edit_chapter' | 'review_stage'
+  suggested_action?:
+    | 'expand_arc'
+    | 'regenerate_arc'
+    | 'edit_chapter'
+    | 'review_arc'
+    | 'regenerate_stage'
+    | 'review_stage'
 }
 
 export interface ChapterRoadmapItem {
@@ -650,6 +660,7 @@ export interface BookBlueprint {
   relationship_pending: RelationshipPendingItem[]
   story_arcs_draft: StoryArcPlan[]
   story_arcs_confirmed: StoryArcPlan[]
+  expanded_arc_numbers: number[]
   roadmap_draft: ChapterRoadmapItem[]
   roadmap_confirmed: ChapterRoadmapItem[]
   roadmap_validation_issues: RoadmapValidationIssue[]

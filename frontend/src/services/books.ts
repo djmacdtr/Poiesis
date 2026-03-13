@@ -109,6 +109,29 @@ export function generateRoadmap(bookId: number, payload: BlueprintGenerateReques
   return post<BookBlueprint>(`/api/books/${bookId}/blueprint/roadmap:generate`, payload)
 }
 
+/** 首次只生成阶段骨架 */
+export function generateStoryArcs(bookId: number, payload: BlueprintGenerateRequest): Promise<BookBlueprint> {
+  return post<BookBlueprint>(`/api/books/${bookId}/blueprint/story-arcs:generate`, payload)
+}
+
+/** 展开单个阶段的章节 */
+export function expandStoryArc(
+  bookId: number,
+  arcNumber: number,
+  payload: BlueprintGenerateRequest,
+): Promise<BookBlueprint> {
+  return post<BookBlueprint>(`/api/books/${bookId}/blueprint/story-arcs/${arcNumber}:expand`, payload)
+}
+
+/** 只重生成阶段骨架 */
+export function regenerateStoryArc(
+  bookId: number,
+  arcNumber: number,
+  payload: BlueprintGenerateRequest,
+): Promise<BookBlueprint> {
+  return post<BookBlueprint>(`/api/books/${bookId}/blueprint/story-arcs/${arcNumber}:regenerate`, payload)
+}
+
 /** 只重生成某个阶段的章节路线 */
 export function regenerateRoadmapStage(
   bookId: number,

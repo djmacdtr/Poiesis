@@ -199,6 +199,7 @@ CREATE TABLE IF NOT EXISTS book_blueprints (
     relationship_graph_confirmed_json JSON DEFAULT '[]',
     story_arcs_draft_json JSON DEFAULT '[]',
     story_arcs_confirmed_json JSON DEFAULT '[]',
+    expanded_arc_numbers_json JSON DEFAULT '[]',
     roadmap_draft_json JSON DEFAULT '[]',
     roadmap_confirmed_json JSON DEFAULT '[]',
     roadmap_validation_issues_json JSON DEFAULT '[]',

@@ -39,6 +39,71 @@ class BlueprintContext:
     planner: RoadmapPlanner
 
 
+def _normalize_expanded_arc_numbers(raw: object, story_arcs: list[StoryArcPlan]) -> list[int]:
+    """只保留有效阶段编号，避免前端和状态层出现脏数据。"""
+    valid_numbers = {item.arc_number for item in story_arcs}
+    values = raw if isinstance(raw, list) else []
+    return sorted(
+        {
+            int(item)
+            for item in values
+            if isinstance(item, (int, float, str)) and str(item).isdigit() and int(item) in valid_numbers
+        }
+    )
+
+
+def _decorate_story_arcs(
+    story_arcs: list[StoryArcPlan],
+    roadmap: list[ChapterRoadmapItem],
+    issues: list[RoadmapValidationIssue],
+    expanded_arc_numbers: list[int],
+    *,
+    confirmed: bool,
+) -> list[StoryArcPlan]:
+    """根据当前展开状态和问题数，给阶段骨架补工作台状态字段。"""
+    decorated: list[StoryArcPlan] = []
+    for arc in story_arcs:
+        has_chapters = arc.arc_number in expanded_arc_numbers and any(
+            item.chapter_number >= arc.start_chapter and item.chapter_number <= arc.end_chapter for item in roadmap
+        )
+        issue_count = sum(1 for item in issues if item.arc_number == arc.arc_number)
+        status = "confirmed" if confirmed and has_chapters else "expanded" if has_chapters else "draft"
+        decorated.append(
+            arc.model_copy(
+                update={
+                    "status": status,
+                    "has_chapters": has_chapters,
+                    "expansion_issue_count": issue_count,
+                }
+            )
+        )
+    return decorated
+
+
+def _build_unexpanded_arc_issues(
+    story_arcs: list[StoryArcPlan],
+    expanded_arc_numbers: list[int],
+) -> list[RoadmapValidationIssue]:
+    """为未展开阶段补充动作型提示，便于前端直接给出入口。"""
+    issues: list[RoadmapValidationIssue] = []
+    for arc in story_arcs:
+        if arc.arc_number in expanded_arc_numbers:
+            continue
+        issues.append(
+            RoadmapValidationIssue(
+                severity="warning",
+                type="arc_not_expanded",
+                message=f"阶段“{arc.title}”尚未展开章节，请先展开本阶段再继续锁定整书蓝图。",
+                chapter_number=arc.start_chapter,
+                story_stage=arc.title,
+                arc_number=arc.arc_number,
+                scope="arc",
+                suggested_action="expand_arc",
+            )
+        )
+    return issues
+
+
 def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
     """把当前蓝图工作态和版本快照组装成统一响应。"""
     state = db.get_book_blueprint_state(book_id) or {}
@@ -68,12 +133,46 @@ def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
     ]
     roadmap_draft = planner.normalize_roadmap_payload(state.get("roadmap_draft") or [])
     roadmap_confirmed = planner.normalize_roadmap_payload(state.get("roadmap_confirmed") or [])
-    story_arcs_draft = planner.derive_story_arcs_from_roadmap(roadmap_draft)
-    story_arcs_confirmed = planner.derive_story_arcs_from_roadmap(roadmap_confirmed)
-    roadmap_issues = planner.verify_roadmap(
-        story_arcs_draft or story_arcs_confirmed,
-        roadmap_draft or roadmap_confirmed,
-    ) if (roadmap_draft or roadmap_confirmed) else []
+    raw_story_arcs_draft = state.get("story_arcs_draft") or []
+    raw_story_arcs_confirmed = state.get("story_arcs_confirmed") or []
+    story_arcs_draft = planner.normalize_story_arcs_payload(raw_story_arcs_draft)
+    story_arcs_confirmed = planner.normalize_story_arcs_payload(raw_story_arcs_confirmed)
+    if not story_arcs_draft and roadmap_draft:
+        story_arcs_draft = planner.derive_story_arcs_from_roadmap(roadmap_draft)
+    if not story_arcs_confirmed and roadmap_confirmed:
+        story_arcs_confirmed = planner.derive_story_arcs_from_roadmap(roadmap_confirmed)
+    base_story_arcs = story_arcs_confirmed or story_arcs_draft
+    base_roadmap = roadmap_confirmed or roadmap_draft
+    expanded_arc_numbers = _normalize_expanded_arc_numbers(state.get("expanded_arc_numbers"), base_story_arcs)
+    if not expanded_arc_numbers and base_story_arcs and base_roadmap:
+        expanded_arc_numbers = [
+            arc.arc_number
+            for arc in base_story_arcs
+            if any(item.chapter_number >= arc.start_chapter and item.chapter_number <= arc.end_chapter for item in base_roadmap)
+        ]
+    roadmap_issues = (
+        planner.verify_roadmap(base_story_arcs, base_roadmap)
+        if (base_story_arcs and base_roadmap)
+        else []
+    )
+    roadmap_issues = [
+        *roadmap_issues,
+        *_build_unexpanded_arc_issues(base_story_arcs, expanded_arc_numbers),
+    ]
+    decorated_story_arcs_draft = _decorate_story_arcs(
+        story_arcs_draft,
+        roadmap_draft,
+        roadmap_issues,
+        expanded_arc_numbers,
+        confirmed=False,
+    )
+    decorated_story_arcs_confirmed = _decorate_story_arcs(
+        story_arcs_confirmed,
+        roadmap_confirmed,
+        roadmap_issues,
+        expanded_arc_numbers,
+        confirmed=bool(roadmap_confirmed),
+    )
 
     return BookBlueprint(
         book_id=book_id,
@@ -86,6 +185,7 @@ def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
                 "world_confirmed",
                 "characters_ready",
                 "characters_confirmed",
+                "story_arcs_ready",
                 "roadmap_ready",
                 "locked",
             ],
@@ -121,10 +221,13 @@ def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
         ]
         if hasattr(db, "list_relationship_pending_items")
         else [],
-        story_arcs_draft=[StoryArcPlan.model_validate(item.model_dump(mode="json")) for item in story_arcs_draft],
-        story_arcs_confirmed=[
-            StoryArcPlan.model_validate(item.model_dump(mode="json")) for item in story_arcs_confirmed
+        story_arcs_draft=[
+            StoryArcPlan.model_validate(item.model_dump(mode="json")) for item in decorated_story_arcs_draft
         ],
+        story_arcs_confirmed=[
+            StoryArcPlan.model_validate(item.model_dump(mode="json")) for item in decorated_story_arcs_confirmed
+        ],
+        expanded_arc_numbers=expanded_arc_numbers,
         roadmap_draft=roadmap_draft,
         roadmap_confirmed=roadmap_confirmed,
         roadmap_validation_issues=[
@@ -320,7 +423,7 @@ class _BlueprintLayerBase:
     def _length_to_chapter_count(self, intent: CreationIntent) -> int:
         raw = intent.length_preference.strip()
         if raw.isdigit():
-            return max(6, min(int(raw), 60))
+            return max(6, min(int(raw), 80))
         if "短" in raw:
             return 8
         if "长" in raw or "宏大" in raw:
@@ -524,15 +627,15 @@ class GenerateCharacterBlueprintUseCase(_BlueprintLayerBase):
         return build_book_blueprint(self._context.db, self._context.book_id)
 
 
-class GenerateRoadmapUseCase(_BlueprintLayerBase):
-    """生成章节路线草稿。"""
+class GenerateStoryArcsUseCase(_BlueprintLayerBase):
+    """首次只生成整书阶段骨架，不立即展开章节。"""
 
     def execute(self, feedback: str = "") -> BookBlueprint:
         intent = self._require_intent()
         variant = self._require_selected_variant()
         world = self._require_world_confirmed()
         characters = self._require_character_confirmed()
-        story_arcs, roadmap, issues = self._context.planner.generate_structured_roadmap(
+        story_arcs = self._context.planner.generate_story_arcs_only(
             intent=intent,
             variant=variant,
             world=world,
@@ -543,17 +646,22 @@ class GenerateRoadmapUseCase(_BlueprintLayerBase):
         )
         self._context.db.upsert_book_blueprint_state(
             self._context.book_id,
-            status="roadmap_ready",
+            status="story_arcs_ready",
             current_step="roadmap",
             story_arcs_draft=[item.model_dump(mode="json") for item in story_arcs],
-            roadmap_draft=[item.model_dump(mode="json") for item in roadmap],
-            roadmap_validation_issues=[item.model_dump(mode="json") for item in issues],
+            expanded_arc_numbers=[],
+            roadmap_draft=[],
+            roadmap_validation_issues=[],
         )
         return build_book_blueprint(self._context.db, self._context.book_id)
 
 
-class RegenerateRoadmapStageUseCase(_BlueprintLayerBase):
-    """只重生成一个阶段，作为路线工作台的主修复入口。"""
+class GenerateRoadmapUseCase(GenerateStoryArcsUseCase):
+    """兼容旧命名，首次生成时只返回阶段骨架。"""
+
+
+class ExpandStoryArcUseCase(_BlueprintLayerBase):
+    """展开单个阶段的章节，作为阶段工作台的主入口。"""
 
     def execute(self, arc_number: int, feedback: str = "") -> BookBlueprint:
         intent = self._require_intent()
@@ -561,65 +669,121 @@ class RegenerateRoadmapStageUseCase(_BlueprintLayerBase):
         world = self._require_world_confirmed()
         characters = self._require_character_confirmed()
         state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
-        current_roadmap = self._context.planner.normalize_roadmap_payload(
-            state.get("roadmap_draft") or state.get("roadmap_confirmed") or []
+        story_arcs = self._context.planner.normalize_story_arcs_payload(
+            state.get("story_arcs_draft") or state.get("story_arcs_confirmed") or []
         )
-        if not current_roadmap:
-            raise ValueError("当前还没有章节路线，请先生成整书路线。")
-        story_arcs = self._context.planner.derive_story_arcs_from_roadmap(current_roadmap)
+        if not story_arcs:
+            raise ValueError("当前还没有阶段骨架，请先生成阶段骨架。")
+        expanded_arc_numbers = _normalize_expanded_arc_numbers(state.get("expanded_arc_numbers"), story_arcs)
+        missing_previous = [item.arc_number for item in story_arcs if item.arc_number < arc_number and item.arc_number not in expanded_arc_numbers]
+        if missing_previous:
+            raise ValueError(f"请先按顺序展开前序阶段：第 {missing_previous[0]} 幕。")
         target_arc = next((item for item in story_arcs if item.arc_number == arc_number), None)
         if target_arc is None:
             raise ValueError(f"第 {arc_number} 幕不存在。")
-
+        current_roadmap = self._context.planner.normalize_roadmap_payload(
+            state.get("roadmap_draft") or state.get("roadmap_confirmed") or []
+        )
         preserved_before = [item for item in current_roadmap if item.chapter_number < target_arc.start_chapter]
         preserved_after = [item for item in current_roadmap if item.chapter_number > target_arc.end_chapter]
-        current_issues = self._context.planner.verify_roadmap(story_arcs, current_roadmap)
-        target_issue_messages = [
-            item.message
-            for item in current_issues
-            if item.arc_number == arc_number or item.story_stage == target_arc.title
-        ]
-        regeneration_feedback = "；".join(
-            part
-            for part in [
-                feedback.strip(),
-                f"请重点修复当前阶段的问题：{'；'.join(target_issue_messages)}" if target_issue_messages else "",
-            ]
-            if part
-        )
-        regenerated_stage, arc_issues = self._context.planner.regenerate_story_arc(
+        expanded_stage, arc_issues = self._context.planner.expand_story_arc_into_chapters(
             intent=intent,
             variant=variant,
             world=world,
             characters=characters,
             llm=self._context.llm,
             story_arc=target_arc,
-            feedback=regeneration_feedback,
+            feedback=feedback,
             existing_roadmap=preserved_before,
         )
         if any(item.severity == "fatal" for item in arc_issues):
             detail = "；".join(item.message for item in arc_issues if item.severity == "fatal")
-            raise ValueError(f"阶段重生成失败：{detail}")
+            raise ValueError(f"阶段展开失败：{detail}")
 
-        merged = [*preserved_before, *regenerated_stage, *preserved_after]
-        merged_arcs = self._context.planner.derive_story_arcs_from_roadmap(merged)
-        merged_issues = self._context.planner.verify_roadmap(merged_arcs, merged)
-        merged_arc_issues = [
-            item for item in merged_issues if item.arc_number == arc_number or item.story_stage == target_arc.title
+        merged = [*preserved_before, *expanded_stage, *preserved_after]
+        next_expanded_arc_numbers = sorted(set([*expanded_arc_numbers, arc_number]))
+        merged_issues = self._context.planner.verify_roadmap(story_arcs, merged)
+        merged_arcs = [
+            arc.model_copy(
+                update={
+                    "status": "expanded" if arc.arc_number in next_expanded_arc_numbers else "draft",
+                    "has_chapters": arc.arc_number in next_expanded_arc_numbers,
+                    "expansion_issue_count": sum(1 for item in merged_issues if item.arc_number == arc.arc_number),
+                }
+            )
+            for arc in story_arcs
         ]
-        if any(item.severity == "fatal" for item in merged_arc_issues):
-            detail = "；".join(item.message for item in merged_arc_issues if item.severity == "fatal")
-            raise ValueError(f"阶段重生成失败：{detail}")
+        status = "roadmap_ready" if len(next_expanded_arc_numbers) == len(story_arcs) and story_arcs else "story_arcs_ready"
 
         self._context.db.upsert_book_blueprint_state(
             self._context.book_id,
-            status=str(state.get("status") or "roadmap_ready"),
+            status=status,
             current_step="roadmap",
             story_arcs_draft=[item.model_dump(mode="json") for item in merged_arcs],
+            expanded_arc_numbers=next_expanded_arc_numbers,
             roadmap_draft=[item.model_dump(mode="json") for item in merged],
             roadmap_validation_issues=[item.model_dump(mode="json") for item in merged_issues],
         )
         return build_book_blueprint(self._context.db, self._context.book_id)
+
+
+class RegenerateStoryArcUseCase(_BlueprintLayerBase):
+    """只重生成阶段骨架，不直接覆盖章节。"""
+
+    def execute(self, arc_number: int, feedback: str = "") -> BookBlueprint:
+        intent = self._require_intent()
+        variant = self._require_selected_variant()
+        world = self._require_world_confirmed()
+        characters = self._require_character_confirmed()
+        state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
+        story_arcs = self._context.planner.normalize_story_arcs_payload(
+            state.get("story_arcs_draft") or state.get("story_arcs_confirmed") or []
+        )
+        if not story_arcs:
+            raise ValueError("当前还没有阶段骨架，请先生成阶段骨架。")
+        expanded_arc_numbers = _normalize_expanded_arc_numbers(state.get("expanded_arc_numbers"), story_arcs)
+        expanded_later = [number for number in expanded_arc_numbers if number > arc_number]
+        if expanded_later:
+            raise ValueError(f"第 {arc_number} 幕之后已存在已展开阶段，请先处理后续阶段或重新生成整书阶段骨架。")
+        current_roadmap = self._context.planner.normalize_roadmap_payload(
+            state.get("roadmap_draft") or state.get("roadmap_confirmed") or []
+        )
+        target_arc = next((item for item in story_arcs if item.arc_number == arc_number), None)
+        if target_arc is None:
+            raise ValueError(f"第 {arc_number} 幕不存在。")
+        regenerated_arcs = self._context.planner.regenerate_story_arc_skeleton(
+            intent=intent,
+            variant=variant,
+            world=world,
+            characters=characters,
+            llm=self._context.llm,
+            story_arcs=story_arcs,
+            arc_number=arc_number,
+            feedback=feedback,
+            chapter_count=self._length_to_chapter_count(intent),
+            existing_roadmap=[item for item in current_roadmap if item.chapter_number < target_arc.start_chapter],
+        )
+        preserved_roadmap = [
+            item
+            for item in current_roadmap
+            if item.chapter_number < target_arc.start_chapter or item.chapter_number > target_arc.end_chapter
+        ]
+        next_expanded_arc_numbers = [number for number in expanded_arc_numbers if number != arc_number]
+        issues = self._context.planner.verify_roadmap(regenerated_arcs, preserved_roadmap) if preserved_roadmap else _build_unexpanded_arc_issues(regenerated_arcs, next_expanded_arc_numbers)
+        self._context.db.upsert_book_blueprint_state(
+            self._context.book_id,
+            status="story_arcs_ready",
+            current_step="roadmap",
+            story_arcs_draft=[item.model_dump(mode="json") for item in regenerated_arcs],
+            expanded_arc_numbers=next_expanded_arc_numbers,
+            roadmap_draft=[item.model_dump(mode="json") for item in preserved_roadmap],
+            roadmap_validation_issues=[item.model_dump(mode="json") for item in issues],
+        )
+        return build_book_blueprint(self._context.db, self._context.book_id)
+
+
+class RegenerateRoadmapStageUseCase(ExpandStoryArcUseCase):
+    """兼容旧命名，当前仍按“重新展开阶段章节”处理。"""
 
 
 class ConfirmBlueprintLayerUseCase(_BlueprintLayerBase):
@@ -672,8 +836,19 @@ class ConfirmBlueprintLayerUseCase(_BlueprintLayerBase):
 
         raw_roadmap = payload if isinstance(payload, list) else state.get("roadmap_draft") or []
         roadmap = self._context.planner.normalize_roadmap_payload(raw_roadmap)
-        story_arcs = self._context.planner.derive_story_arcs_from_roadmap(roadmap)
+        story_arcs = self._context.planner.normalize_story_arcs_payload(
+            state.get("story_arcs_draft") or state.get("story_arcs_confirmed") or []
+        )
+        if not story_arcs:
+            raise ValueError("请先生成阶段骨架。")
+        expanded_arc_numbers = _normalize_expanded_arc_numbers(state.get("expanded_arc_numbers"), story_arcs)
+        if len(expanded_arc_numbers) != len(story_arcs):
+            missing_arcs = [str(item.arc_number) for item in story_arcs if item.arc_number not in expanded_arc_numbers]
+            raise ValueError(f"仍有阶段未展开章节：第 {'、'.join(missing_arcs)} 幕。")
         roadmap_issues = self._context.planner.verify_roadmap(story_arcs, roadmap)
+        fatal_issues = [item.message for item in roadmap_issues if item.severity == "fatal"]
+        if fatal_issues:
+            raise ValueError(f"当前章节路线仍存在严重问题：{'；'.join(fatal_issues[:3])}")
         revision_id = self._create_revision(
             roadmap=roadmap,
             change_reason="初次锁定整书蓝图",
@@ -687,6 +862,7 @@ class ConfirmBlueprintLayerUseCase(_BlueprintLayerBase):
             current_step="locked",
             active_revision_id=revision_id,
             story_arcs_confirmed=[item.model_dump(mode="json") for item in story_arcs],
+            expanded_arc_numbers=expanded_arc_numbers,
             roadmap_confirmed=[item.model_dump(mode="json") for item in roadmap],
             roadmap_validation_issues=[item.model_dump(mode="json") for item in roadmap_issues],
         )

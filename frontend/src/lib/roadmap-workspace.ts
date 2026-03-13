@@ -8,7 +8,64 @@ function dedupe(values: string[]): string[] {
   return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean)))
 }
 
-export function deriveStoryArcsFromRoadmapDraft(roadmap: ChapterRoadmapItem[]): StoryArcPlan[] {
+function sortArcs(arcs: StoryArcPlan[]): StoryArcPlan[] {
+  return [...arcs].sort((left, right) => left.arc_number - right.arc_number)
+}
+
+export function deriveStoryArcsFromRoadmapDraft(
+  roadmap: ChapterRoadmapItem[],
+  baseStoryArcs: StoryArcPlan[] = [],
+  expandedArcNumbers: number[] = [],
+): StoryArcPlan[] {
+  if (baseStoryArcs.length > 0) {
+    const grouped = new Map<string, ChapterRoadmapItem[]>()
+    roadmap.forEach((item) => {
+      const rows = grouped.get(item.story_stage.trim()) ?? []
+      rows.push(item)
+      grouped.set(item.story_stage.trim(), rows)
+    })
+    return sortArcs(
+      baseStoryArcs.map((arc) => {
+        const rows = grouped.get(arc.title.trim()) ?? []
+        const ordered = [...rows].sort((left, right) => left.chapter_number - right.chapter_number)
+        return {
+          ...arc,
+          main_progress: ordered.length > 0 ? dedupe(ordered.map((item) => item.story_progress)) : arc.main_progress,
+          relationship_progress:
+            ordered.length > 0 ? dedupe(ordered.flatMap((item) => item.relationship_progress)) : arc.relationship_progress,
+          loop_progress:
+            ordered.length > 0
+              ? dedupe(
+                  ordered.flatMap((item) =>
+                    item.planned_loops
+                      .map((loop) => String(loop.title ?? loop.summary ?? loop.loop_id ?? ''))
+                      .filter(Boolean),
+                  ),
+                )
+              : arc.loop_progress,
+          timeline_milestones:
+            ordered.length > 0 ? dedupe(ordered.map((item) => item.timeline_anchor)) : arc.timeline_milestones,
+          arc_climax:
+            ordered.length > 0
+              ? ordered
+                  .slice()
+                  .reverse()
+                  .find((item) => ['反转', '揭示', '收束', '决战前夜'].includes(item.chapter_function) && item.turning_point)
+                  ?.turning_point ??
+                ordered.at(-1)?.turning_point ??
+                arc.arc_climax
+              : arc.arc_climax,
+          status:
+            arc.status === 'confirmed'
+              ? 'confirmed'
+              : expandedArcNumbers.includes(arc.arc_number) || ordered.length > 0
+                ? 'expanded'
+                : 'draft',
+          has_chapters: expandedArcNumbers.includes(arc.arc_number) || ordered.length > 0,
+        }
+      }),
+    )
+  }
   if (roadmap.length === 0) {
     return []
   }
@@ -44,6 +101,9 @@ export function deriveStoryArcsFromRoadmapDraft(roadmap: ChapterRoadmapItem[]): 
           ?.turning_point ??
         ordered.at(-1)?.turning_point ??
         '',
+      status: 'expanded',
+      has_chapters: true,
+      expansion_issue_count: 0,
     }
   })
 }
@@ -51,6 +111,7 @@ export function deriveStoryArcsFromRoadmapDraft(roadmap: ChapterRoadmapItem[]): 
 export function buildLocalRoadmapIssues(
   storyArcs: StoryArcPlan[],
   roadmap: ChapterRoadmapItem[],
+  expandedArcNumbers: number[] = [],
 ): RoadmapValidationIssue[] {
   const issues: RoadmapValidationIssue[] = []
   const stageArcMap = new Map(storyArcs.map((arc) => [arc.title, arc.arc_number]))
@@ -62,6 +123,10 @@ export function buildLocalRoadmapIssues(
 
   roadmap.forEach((item) => {
     const arcNumber = stageArcMap.get(item.story_stage) ?? null
+    if (arcNumber !== null && expandedArcNumbers.length > 0 && !expandedArcNumbers.includes(arcNumber)) {
+      previous = item
+      return
+    }
     if (!item.story_progress.trim()) {
       issues.push({
         severity: 'fatal',
@@ -87,7 +152,7 @@ export function buildLocalRoadmapIssues(
           chapter_number: item.chapter_number,
           story_stage: item.story_stage,
           arc_number: arcNumber,
-          suggested_action: 'regenerate_stage',
+          suggested_action: 'regenerate_arc',
         })
       }
       if (item.timeline_anchor && item.timeline_anchor === previous.timeline_anchor) {
@@ -103,7 +168,7 @@ export function buildLocalRoadmapIssues(
           chapter_number: item.chapter_number,
           story_stage: item.story_stage,
           arc_number: arcNumber,
-          suggested_action: 'review_stage',
+          suggested_action: 'review_arc',
         })
       }
     }
@@ -120,7 +185,7 @@ export function buildLocalRoadmapIssues(
         chapter_number: item.chapter_number,
         story_stage: item.story_stage,
         arc_number: arcNumber,
-        suggested_action: 'review_stage',
+        suggested_action: 'review_arc',
       })
     }
     if (item.planned_loops.length === 0) {
@@ -136,7 +201,7 @@ export function buildLocalRoadmapIssues(
         chapter_number: item.chapter_number,
         story_stage: item.story_stage,
         arc_number: arcNumber,
-        suggested_action: 'review_stage',
+        suggested_action: 'review_arc',
       })
     }
     previous = item
@@ -155,7 +220,7 @@ export function buildLocalRoadmapIssues(
         chapter_number: arc.end_chapter,
         story_stage: arc.title,
         arc_number: arc.arc_number,
-        suggested_action: 'regenerate_stage',
+        suggested_action: 'regenerate_arc',
       })
     }
     if (chapters.length >= 3 && !chapters.some((item) => ['反转', '揭示', '收束', '决战前夜'].includes(item.chapter_function))) {
@@ -166,7 +231,7 @@ export function buildLocalRoadmapIssues(
         chapter_number: arc.end_chapter,
         story_stage: arc.title,
         arc_number: arc.arc_number,
-        suggested_action: 'review_stage',
+        suggested_action: 'review_arc',
       })
     }
   })
@@ -183,11 +248,17 @@ export function buildLocalRoadmapIssues(
 }
 
 export function summarizeRoadmapLockState(
+  storyArcs: StoryArcPlan[],
+  expandedArcNumbers: number[],
   roadmapIssues: RoadmapValidationIssue[],
   roadmap: ChapterRoadmapItem[],
 ): { canLock: boolean; reasons: string[] } {
   const fatalIssues = roadmapIssues.filter((item) => item.severity === 'fatal')
   const reasons = fatalIssues.map((item) => item.message)
+  const missingArcs = storyArcs.filter((item) => !expandedArcNumbers.includes(item.arc_number))
+  if (missingArcs.length > 0) {
+    reasons.push(`仍有阶段未展开章节：第 ${missingArcs.map((item) => item.arc_number).join('、')} 幕。`)
+  }
   const missingFunction = roadmap.find((item) => !item.chapter_function.trim())
   if (missingFunction) {
     reasons.push(`第 ${missingFunction.chapter_number} 章缺少章节功能。`)
@@ -197,7 +268,7 @@ export function summarizeRoadmapLockState(
     reasons.push(`第 ${missingProgress.chapter_number} 章缺少主线推进。`)
   }
   return {
-    canLock: reasons.length === 0,
+    canLock: reasons.length === 0 && storyArcs.length > 0,
     reasons,
   }
 }

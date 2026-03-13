@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from difflib import SequenceMatcher
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from poiesis.application.blueprint_contracts import (
     ChapterRoadmapItem,
@@ -47,6 +47,21 @@ class RoadmapPlanner:
         self._roadmap_verifier = RoadmapVerifier()
         # 当模型直接返回章节列表而非阶段弧线时，先暂存本轮章节，避免重复再调一次 LLM。
         self._prefetched_roadmap: list[ChapterRoadmapItem] | None = None
+
+    def _safe_int(self, value: object, fallback: int) -> int:
+        """把阶段骨架中的数值字段稳妥转成整数，避免旧草稿或模型脏数据再次炸掉。"""
+        if isinstance(value, bool):
+            return fallback
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                return fallback
+        return fallback
 
     def generate_concept_variants(self, intent: CreationIntent, llm: LLMClient) -> list[ConceptVariant]:
         """根据作者高层意图生成 3 版带结构分歧的候选方向。"""
@@ -126,19 +141,21 @@ class RoadmapPlanner:
         feedback: str = "",
     ) -> WorldBlueprint:
         """围绕已选候选方向扩写世界观蓝图。"""
-        skeleton = llm.complete_json(
-            self._build_world_skeleton_prompt(intent, variant, feedback),
-            system="你是资深世界观架构师。必须返回合法 JSON，并优先输出结构化世界蓝图。",
-        )
-        if not isinstance(skeleton, dict):
-            skeleton = {}
-        rules = llm.complete_json(
-            self._build_world_rules_prompt(intent, variant, skeleton, feedback),
-            system="你是资深世界规则设计师。必须返回合法 JSON，并把规则写成可持续约束正文的结构。",
-        )
-        if not isinstance(rules, dict):
-            rules = {}
+        skeleton: dict[str, Any] = {}
+        rules: dict[str, Any] = {}
         try:
+            skeleton = llm.complete_json(
+                self._build_world_skeleton_prompt(intent, variant, feedback),
+                system="你是资深世界观架构师。必须返回合法 JSON，并优先输出结构化世界蓝图。",
+            )
+            if not isinstance(skeleton, dict):
+                skeleton = {}
+            rules = llm.complete_json(
+                self._build_world_rules_prompt(intent, variant, skeleton, feedback),
+                system="你是资深世界规则设计师。必须返回合法 JSON，并把规则写成可持续约束正文的结构。",
+            )
+            if not isinstance(rules, dict):
+                rules = {}
             return self._normalize_world_blueprint(intent, variant, skeleton, rules)
         except ValueError as exc:
             logger.exception(
@@ -170,11 +187,12 @@ class RoadmapPlanner:
         feedback: str = "",
     ) -> list[CharacterBlueprint]:
         """基于世界观生成核心人物组。"""
-        raw = llm.complete_json(
-            self._build_character_prompt(intent, variant, world, feedback),
-            system="你是资深人物策划。必须返回合法 JSON，且人物必须适配长篇连载推进。",
-        )
+        raw: Any = {}
         try:
+            raw = llm.complete_json(
+                self._build_character_prompt(intent, variant, world, feedback),
+                system="你是资深人物策划。必须返回合法 JSON，且人物必须适配长篇连载推进。",
+            )
             characters = self.normalize_character_blueprints_payload(raw)
             if characters:
                 return characters
@@ -220,11 +238,12 @@ class RoadmapPlanner:
         feedback: str = "",
     ) -> list[RelationshipBlueprintEdge]:
         """基于人物蓝图和世界观生成正式关系边。"""
-        raw = llm.complete_json(
-            self._build_relationship_prompt(intent, variant, world, characters, feedback),
-            system="你是资深人物关系编剧。必须返回合法 JSON，并显式输出人物关系边。",
-        )
+        raw: Any = {}
         try:
+            raw = llm.complete_json(
+                self._build_relationship_prompt(intent, variant, world, characters, feedback),
+                system="你是资深人物关系编剧。必须返回合法 JSON，并显式输出人物关系边。",
+            )
             edges = self._normalize_relationship_edges(raw, characters)
         except ValueError as exc:
             logger.exception(
@@ -288,6 +307,101 @@ class RoadmapPlanner:
         )
         return roadmap
 
+    def generate_story_arcs_only(
+        self,
+        *,
+        intent: CreationIntent,
+        variant: ConceptVariant,
+        world: WorldBlueprint,
+        characters: list[CharacterBlueprint],
+        llm: LLMClient,
+        feedback: str = "",
+        starting_chapter: int = 1,
+        chapter_count: int = 12,
+        existing_roadmap: list[ChapterRoadmapItem] | None = None,
+    ) -> list[StoryArcPlan]:
+        """只生成整书阶段骨架，不立即展开章节。"""
+        self._prefetched_roadmap = None
+        story_arcs = self._generate_story_arcs(
+            intent=intent,
+            variant=variant,
+            world=world,
+            characters=characters,
+            llm=llm,
+            feedback=feedback,
+            starting_chapter=starting_chapter,
+            chapter_count=chapter_count,
+            existing_roadmap=existing_roadmap or [],
+        )
+        for arc in story_arcs:
+            arc.status = "draft"
+            arc.has_chapters = False
+            arc.expansion_issue_count = 0
+        return story_arcs
+
+    def expand_story_arc_into_chapters(
+        self,
+        *,
+        intent: CreationIntent,
+        variant: ConceptVariant,
+        world: WorldBlueprint,
+        characters: list[CharacterBlueprint],
+        llm: LLMClient,
+        story_arc: StoryArcPlan,
+        feedback: str = "",
+        existing_roadmap: list[ChapterRoadmapItem] | None = None,
+    ) -> tuple[list[ChapterRoadmapItem], list[RoadmapValidationIssue]]:
+        """只展开单个阶段的章节，并返回该阶段局部校验结果。"""
+        chapters, issues = self.regenerate_story_arc(
+            intent=intent,
+            variant=variant,
+            world=world,
+            characters=characters,
+            llm=llm,
+            story_arc=story_arc,
+            feedback=feedback,
+            existing_roadmap=existing_roadmap or [],
+        )
+        return chapters, issues
+
+    def regenerate_story_arc_skeleton(
+        self,
+        *,
+        intent: CreationIntent,
+        variant: ConceptVariant,
+        world: WorldBlueprint,
+        characters: list[CharacterBlueprint],
+        llm: LLMClient,
+        story_arcs: list[StoryArcPlan],
+        arc_number: int,
+        feedback: str = "",
+        starting_chapter: int = 1,
+        chapter_count: int = 12,
+        existing_roadmap: list[ChapterRoadmapItem] | None = None,
+    ) -> list[StoryArcPlan]:
+        """重生成整书阶段骨架后，仅替换目标阶段。"""
+        regenerated = self.generate_story_arcs_only(
+            intent=intent,
+            variant=variant,
+            world=world,
+            characters=characters,
+            llm=llm,
+            feedback=feedback,
+            starting_chapter=starting_chapter,
+            chapter_count=chapter_count,
+            existing_roadmap=existing_roadmap or [],
+        )
+        replacement = next((item for item in regenerated if item.arc_number == arc_number), None)
+        if replacement is None:
+            raise ValueError(f"阶段骨架重生成失败：未返回第 {arc_number} 幕。")
+        merged: list[StoryArcPlan] = []
+        for arc in story_arcs:
+            if arc.arc_number == arc_number:
+                merged.append(replacement)
+            else:
+                merged.append(arc)
+        return merged
+
     def regenerate_story_arc(
         self,
         *,
@@ -327,6 +441,14 @@ class RoadmapPlanner:
                 },
             )
             raise ValueError(self._build_roadmap_stage_regeneration_error_message(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "阶段重生成时模型服务异常",
+                extra={
+                    "story_arc": story_arc.model_dump(mode="json"),
+                },
+            )
+            raise ValueError(self._build_roadmap_stage_regeneration_exception_message(exc)) from exc
         arc_issues = [
             issue
             for issue in self.verify_roadmap([story_arc], chapters)
@@ -455,6 +577,41 @@ class RoadmapPlanner:
             )
         return arcs
 
+    def normalize_story_arcs_payload(
+        self,
+        payload: list[dict[str, object]] | list[StoryArcPlan] | None,
+    ) -> list[StoryArcPlan]:
+        """把已存储的阶段骨架规范化为正式协议。"""
+        normalized: list[StoryArcPlan] = []
+        for index, item in enumerate(payload or [], start=1):
+            if isinstance(item, StoryArcPlan):
+                arc = item.model_copy(deep=True)
+            else:
+                raw = cast(dict[str, object], item)
+                arc_number = self._safe_int(raw.get("arc_number"), index)
+                start_chapter = self._safe_int(raw.get("start_chapter"), index)
+                end_chapter = self._safe_int(raw.get("end_chapter"), start_chapter)
+                expansion_issue_count = self._safe_int(raw.get("expansion_issue_count"), 0)
+                arc = StoryArcPlan.model_validate(
+                    {
+                        "arc_number": arc_number,
+                        "title": str(raw.get("title") or f"第 {index} 幕"),
+                        "purpose": str(raw.get("purpose") or ""),
+                        "start_chapter": start_chapter,
+                        "end_chapter": end_chapter,
+                        "main_progress": self._normalize_string_list(raw.get("main_progress")),
+                        "relationship_progress": self._normalize_string_list(raw.get("relationship_progress")),
+                        "loop_progress": self._normalize_string_list(raw.get("loop_progress")),
+                        "timeline_milestones": self._normalize_string_list(raw.get("timeline_milestones")),
+                        "arc_climax": str(raw.get("arc_climax") or ""),
+                        "status": str(raw.get("status") or "draft"),
+                        "has_chapters": bool(raw.get("has_chapters")),
+                        "expansion_issue_count": expansion_issue_count,
+                    }
+                )
+            normalized.append(arc)
+        return normalized
+
     def verify_roadmap(
         self,
         story_arcs: list[StoryArcPlan],
@@ -476,6 +633,7 @@ class RoadmapPlanner:
         existing_roadmap: list[ChapterRoadmapItem],
     ) -> list[StoryArcPlan]:
         """先生成阶段弧线，再由每个阶段展开成章节。"""
+        raw: Any = {}
         try:
             raw = llm.complete_json(
                 self._build_story_arc_prompt(
@@ -523,7 +681,7 @@ class RoadmapPlanner:
                     "story_arc_preview": raw,
                 },
             )
-            raise ValueError("章节路线生成失败：阶段结构输出不符合要求，请重试。") from exc
+            raise ValueError(self._build_roadmap_generation_exception_message(exc)) from exc
 
         return self._build_fallback_story_arcs(starting_chapter, chapter_count)
 
@@ -545,6 +703,7 @@ class RoadmapPlanner:
             return prefetched
         roadmap: list[ChapterRoadmapItem] = []
         for arc in story_arcs:
+            raw: Any = {}
             try:
                 raw = llm.complete_json(
                     self._build_arc_chapter_prompt(
@@ -572,6 +731,15 @@ class RoadmapPlanner:
                     },
                 )
                 raise ValueError(self._build_roadmap_generation_error_message(exc)) from exc
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "阶段章节生成出现未预期错误",
+                    extra={
+                        "story_arc": arc.model_dump(mode="json"),
+                        "chapter_preview": raw,
+                    },
+                )
+                raise ValueError(self._build_roadmap_generation_exception_message(exc)) from exc
             for chapter in chapters:
                 chapter.story_stage = arc.title
                 if not chapter.timeline_anchor and arc.timeline_milestones:
@@ -1820,6 +1988,20 @@ class RoadmapPlanner:
         if "planned_loops" in text:
             return "阶段重生成失败：计划线索字段格式不正确。"
         return "阶段重生成失败：章节结构输出不符合要求，请重试。"
+
+    def _build_roadmap_stage_regeneration_exception_message(self, exc: Exception) -> str:
+        """把阶段重生成中的模型服务异常压缩成用户可读提示。"""
+        text = str(exc)
+        if "InternalServerError" in text or "Error code: 500" in text or "50507" in text:
+            return "阶段重生成失败：模型服务暂时异常，请稍后重试。"
+        return "阶段重生成失败：生成服务暂时异常，请稍后重试。"
+
+    def _build_roadmap_generation_exception_message(self, exc: Exception) -> str:
+        """把模型服务异常压缩成用户可读提示。"""
+        text = str(exc)
+        if "InternalServerError" in text or "Error code: 500" in text or "50507" in text:
+            return "章节路线生成失败：模型服务暂时异常，请稍后重试。"
+        return "章节路线生成失败：生成服务暂时异常，请稍后重试。"
 
     def _build_world_skeleton_prompt(
         self,

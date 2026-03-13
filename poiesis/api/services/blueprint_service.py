@@ -29,14 +29,17 @@ from poiesis.application.blueprint_use_cases import (
     ConfirmRelationshipPendingUseCase,
     ConfirmRelationshipReplanUseCase,
     CreateRelationshipReplanUseCase,
+    ExpandStoryArcUseCase,
     GenerateCharacterBlueprintUseCase,
     GenerateConceptVariantsUseCase,
     GenerateRoadmapUseCase,
+    GenerateStoryArcsUseCase,
     GenerateWorldBlueprintUseCase,
     GetRelationshipGraphUseCase,
     ListRelationshipPendingUseCase,
     RegenerateConceptVariantUseCase,
     RegenerateRoadmapStageUseCase,
+    RegenerateStoryArcUseCase,
     RejectRelationshipPendingUseCase,
     RelationshipConflictError,
     ReplanBlueprintUseCase,
@@ -153,6 +156,29 @@ def generate_roadmap(
     return GenerateRoadmapUseCase(context).execute(feedback)
 
 
+def generate_story_arcs(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    feedback: str = "",
+) -> BookBlueprint:
+    """首次只生成整书阶段骨架。"""
+    context = _build_context(config_path, db, book_id)
+    return GenerateStoryArcsUseCase(context).execute(feedback)
+
+
+def expand_story_arc(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    arc_number: int,
+    feedback: str = "",
+) -> BookBlueprint:
+    """展开某一幕对应的章节。"""
+    context = _build_context(config_path, db, book_id)
+    return ExpandStoryArcUseCase(context).execute(arc_number, feedback)
+
+
 def regenerate_roadmap_stage(
     db: Database,
     config_path: str,
@@ -163,6 +189,18 @@ def regenerate_roadmap_stage(
     """只重生成某个阶段覆盖的章节范围。"""
     context = _build_context(config_path, db, book_id)
     return RegenerateRoadmapStageUseCase(context).execute(arc_number, feedback)
+
+
+def regenerate_story_arc(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    arc_number: int,
+    feedback: str = "",
+) -> BookBlueprint:
+    """只重生成某一幕的阶段骨架。"""
+    context = _build_context(config_path, db, book_id)
+    return RegenerateStoryArcUseCase(context).execute(arc_number, feedback)
 
 
 def confirm_blueprint_layer(

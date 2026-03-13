@@ -243,6 +243,53 @@ def generate_roadmap(
     return BookBlueprintResponse(**payload.model_dump(mode="json"))
 
 
+@router.post("/{book_id}/blueprint/story-arcs:generate", response_model=BookBlueprintResponse)
+def generate_story_arcs(
+    book_id: int,
+    body: BlueprintLayerGenerateRequest,
+    db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
+) -> BookBlueprintResponse:
+    """首次只生成整书阶段骨架。"""
+    try:
+        payload = blueprint_service.generate_story_arcs(db, _config_path(), book_id, body.feedback)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BookBlueprintResponse(**payload.model_dump(mode="json"))
+
+
+@router.post("/{book_id}/blueprint/story-arcs/{arc_number}:expand", response_model=BookBlueprintResponse)
+def expand_story_arc(
+    book_id: int,
+    arc_number: int,
+    body: RegenerateRoadmapStageRequest,
+    db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
+) -> BookBlueprintResponse:
+    """展开某一幕的章节。"""
+    try:
+        payload = blueprint_service.expand_story_arc(db, _config_path(), book_id, arc_number, body.feedback)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BookBlueprintResponse(**payload.model_dump(mode="json"))
+
+
+@router.post("/{book_id}/blueprint/story-arcs/{arc_number}:regenerate", response_model=BookBlueprintResponse)
+def regenerate_story_arc(
+    book_id: int,
+    arc_number: int,
+    body: RegenerateRoadmapStageRequest,
+    db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
+) -> BookBlueprintResponse:
+    """只重生成某一幕的阶段骨架。"""
+    try:
+        payload = blueprint_service.regenerate_story_arc(db, _config_path(), book_id, arc_number, body.feedback)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BookBlueprintResponse(**payload.model_dump(mode="json"))
+
+
 @router.post("/{book_id}/blueprint/roadmap/stages/{arc_number}:regenerate", response_model=BookBlueprintResponse)
 def regenerate_roadmap_stage(
     book_id: int,

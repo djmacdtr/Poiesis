@@ -783,12 +783,25 @@ def test_blueprint_creation_flow_can_lock_book_blueprint(tmp_db: Database, monke
     assert confirm_char.status_code == 200
     assert confirm_char.json()["status"] == "characters_confirmed"
 
-    roadmap_resp = client.post(
-        f"/api/books/{book_id}/blueprint/roadmap:generate",
+    story_arcs_resp = client.post(
+        f"/api/books/{book_id}/blueprint/story-arcs:generate",
         json={"feedback": "前三章开局更强"},
     )
-    assert roadmap_resp.status_code == 200
-    assert roadmap_resp.json()["status"] == "roadmap_ready"
+    assert story_arcs_resp.status_code == 200
+    assert story_arcs_resp.json()["status"] == "story_arcs_ready"
+    arc_numbers = [item["arc_number"] for item in story_arcs_resp.json()["story_arcs_draft"]]
+    assert arc_numbers
+
+    first_confirm = client.post(f"/api/books/{book_id}/blueprint/roadmap:confirm", json={})
+    assert first_confirm.status_code == 400
+    assert "仍有阶段未展开章节" in first_confirm.json()["detail"]
+
+    for arc_number in arc_numbers:
+        expanded = client.post(
+            f"/api/books/{book_id}/blueprint/story-arcs/{arc_number}:expand",
+            json={"feedback": f"展开第 {arc_number} 幕"},
+        )
+        assert expanded.status_code == 200
 
     confirm_roadmap = client.post(f"/api/books/{book_id}/blueprint/roadmap:confirm", json={})
     assert confirm_roadmap.status_code == 200
@@ -1066,16 +1079,26 @@ def test_roadmap_generate_api_normalizes_half_structured_payload(tmp_db: Databas
         ],
     )
 
-    roadmap_resp = client.post(
-        f"/api/books/{book_id}/blueprint/roadmap:generate",
+    arcs_resp = client.post(
+        f"/api/books/{book_id}/blueprint/story-arcs:generate",
         json={"feedback": "前三章开局更猛"},
     )
 
-    assert roadmap_resp.status_code == 200
-    body = roadmap_resp.json()
+    assert arcs_resp.status_code == 200
+    arcs_body = arcs_resp.json()
+    assert arcs_body["story_arcs_draft"][0]["title"] == "血月旧案开启"
+    assert arcs_body["expanded_arc_numbers"] == []
+    assert arcs_body["roadmap_draft"] == []
+
+    expand_resp = client.post(
+        f"/api/books/{book_id}/blueprint/story-arcs/1:expand",
+        json={"feedback": "第一幕前三章开局更猛"},
+    )
+
+    assert expand_resp.status_code == 200
+    body = expand_resp.json()
     payload = body["roadmap_draft"]
-    assert body["story_arcs_draft"][0]["title"] == "血月旧案开启"
-    assert body["roadmap_validation_issues"] == []
+    assert body["expanded_arc_numbers"] == [1]
     assert payload[0]["story_stage"] == "血月旧案开启"
     assert payload[0]["timeline_anchor"] == "入秋初夜"
     assert payload[0]["story_progress"] == "父母旧案与血月门第一次产生明确联系"

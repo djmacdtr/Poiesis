@@ -27,9 +27,10 @@ import {
   createRelationshipReplan,
   generateCharacterBlueprint,
   generateConceptVariants,
-  generateRoadmap,
+  generateStoryArcs,
   generateWorldBlueprint,
-  regenerateRoadmapStage,
+  expandStoryArc,
+  regenerateStoryArc,
   regenerateConceptVariant,
   rejectRelationshipPending,
   replanBlueprint,
@@ -490,12 +491,12 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
     onError: (error: Error) => toast.error(error.message),
   })
 
-  const generateRoadmapMutation = useMutation({
-    mutationFn: () => generateRoadmap(bookId, { feedback: roadmapFeedback }),
+  const generateStoryArcsMutation = useMutation({
+    mutationFn: () => generateStoryArcs(bookId, { feedback: roadmapFeedback }),
     onSuccess: async (payload) => {
       setRoadmapDraft(payload.roadmap_draft)
       setRoadmapError('')
-      toast.success('章节路线草稿已生成')
+      toast.success('阶段骨架已生成，请按阶段逐个展开章节')
       await refreshBlueprint()
     },
     onError: (error: Error) => {
@@ -504,9 +505,9 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
     },
   })
 
-  const regenerateRoadmapStageMutation = useMutation({
+  const expandStoryArcMutation = useMutation({
     mutationFn: ({ arcNumber, feedback }: { arcNumber: number; feedback: string }) =>
-      regenerateRoadmapStage(bookId, arcNumber, { feedback }),
+      expandStoryArc(bookId, arcNumber, { feedback }),
     onMutate: ({ arcNumber }) => {
       setPendingRoadmapArcNumber(arcNumber)
     },
@@ -518,7 +519,33 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
         [variables.arcNumber]: '',
       }))
       setActiveRoadmapArcNumber(variables.arcNumber)
-      toast.success(`第 ${variables.arcNumber} 幕已按新要求重生成`)
+      toast.success(`第 ${variables.arcNumber} 幕章节已展开`)
+      await refreshBlueprint()
+    },
+    onError: (error: Error) => {
+      setRoadmapError(error.message)
+      toast.error(error.message)
+    },
+    onSettled: () => {
+      setPendingRoadmapArcNumber(null)
+    },
+  })
+
+  const regenerateStoryArcMutation = useMutation({
+    mutationFn: ({ arcNumber, feedback }: { arcNumber: number; feedback: string }) =>
+      regenerateStoryArc(bookId, arcNumber, { feedback }),
+    onMutate: ({ arcNumber }) => {
+      setPendingRoadmapArcNumber(arcNumber)
+    },
+    onSuccess: async (payload, variables) => {
+      setRoadmapDraft(payload.roadmap_draft)
+      setRoadmapError('')
+      setRoadmapArcFeedbackByNumber((prev) => ({
+        ...prev,
+        [variables.arcNumber]: '',
+      }))
+      setActiveRoadmapArcNumber(variables.arcNumber)
+      toast.success(`第 ${variables.arcNumber} 幕阶段骨架已重生成`)
       await refreshBlueprint()
     },
     onError: (error: Error) => {
@@ -556,26 +583,29 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
 
   const selectedVariantId = blueprint?.selected_variant_id
   const canGenerateCharacters = Boolean(blueprint?.world_confirmed)
-  const canGenerateRoadmap = Boolean(blueprint?.world_confirmed && blueprint?.character_confirmed.length)
+  const canGenerateStoryArcs = Boolean(blueprint?.world_confirmed && blueprint?.character_confirmed.length)
   const revisions = blueprint?.revisions ?? []
   const roadmapToShow = blueprint?.roadmap_confirmed.length ? blueprint.roadmap_confirmed : roadmapDraft
+  const expandedArcNumbers = blueprint?.expanded_arc_numbers ?? []
   const baseStoryArcsToShow = blueprint?.story_arcs_confirmed.length
     ? blueprint.story_arcs_confirmed
     : blueprint?.story_arcs_draft ?? []
   const roadmapDraftDirty =
     serializeBlueprintValue(roadmapDraft) !==
     serializeBlueprintValue(blueprint?.roadmap_confirmed.length ? blueprint?.roadmap_confirmed : blueprint?.roadmap_draft ?? [])
-  const localStoryArcsToShow = useMemo(() => deriveStoryArcsFromRoadmapDraft(roadmapToShow), [roadmapToShow])
-  const storyArcsToShow =
-    roadmapDraftDirty && localStoryArcsToShow.length > 0 ? localStoryArcsToShow : baseStoryArcsToShow
+  const localStoryArcsToShow = useMemo(
+    () => deriveStoryArcsFromRoadmapDraft(roadmapToShow, baseStoryArcsToShow, expandedArcNumbers),
+    [baseStoryArcsToShow, expandedArcNumbers, roadmapToShow],
+  )
+  const storyArcsToShow = localStoryArcsToShow.length > 0 ? localStoryArcsToShow : baseStoryArcsToShow
   const localRoadmapIssues = useMemo(
-    () => buildLocalRoadmapIssues(storyArcsToShow, roadmapToShow),
-    [storyArcsToShow, roadmapToShow],
+    () => buildLocalRoadmapIssues(storyArcsToShow, roadmapToShow, expandedArcNumbers),
+    [expandedArcNumbers, roadmapToShow, storyArcsToShow],
   )
   const roadmapIssues = roadmapDraftDirty ? localRoadmapIssues : blueprint?.roadmap_validation_issues ?? []
   const roadmapLockState = useMemo(
-    () => summarizeRoadmapLockState(roadmapIssues, roadmapToShow),
-    [roadmapIssues, roadmapToShow],
+    () => summarizeRoadmapLockState(storyArcsToShow, expandedArcNumbers, roadmapIssues, roadmapToShow),
+    [expandedArcNumbers, roadmapIssues, roadmapToShow, storyArcsToShow],
   )
   const intentIsSaved = serializeBlueprintValue(intentDraft) === serializeBlueprintValue(blueprint?.intent ?? defaultIntent())
   const worldIsConfirmed =
@@ -590,16 +620,18 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
     serializeBlueprintValue(relationshipGraphDraft) === serializeBlueprintValue(blueprint?.relationship_graph_confirmed ?? [])
   const roadmapIsLocked =
     (blueprint?.roadmap_confirmed?.length ?? 0) > 0 &&
+    storyArcsToShow.length > 0 &&
     serializeBlueprintValue(roadmapDraft) === serializeBlueprintValue(blueprint?.roadmap_confirmed ?? [])
   const totalFatalRoadmapIssues = roadmapIssues.filter((item) => item.severity === 'fatal').length
   const totalWarningRoadmapIssues = roadmapIssues.filter((item) => item.severity === 'warning').length
   const canLockRoadmap =
-    roadmapDraft.length > 0 &&
+    storyArcsToShow.length > 0 &&
     !confirmRoadmapMutation.isPending &&
     !roadmapIsLocked &&
     roadmapLockState.canLock &&
-    !generateRoadmapMutation.isPending &&
-    !regenerateRoadmapStageMutation.isPending
+    !generateStoryArcsMutation.isPending &&
+    !expandStoryArcMutation.isPending &&
+    !regenerateStoryArcMutation.isPending
   const activeRevisionLabel = useMemo(() => {
     const active = revisions.find((item) => item.is_active)
     return active ? `v${active.revision_number}` : '未锁定'
@@ -746,9 +778,14 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
     setActiveRoadmapArcNumber(arcNumber)
   }
 
+  const handleStoryArcExpand = (arcNumber: number) => {
+    const feedback = roadmapArcFeedbackByNumber[arcNumber] ?? ''
+    expandStoryArcMutation.mutate({ arcNumber, feedback })
+  }
+
   const handleRoadmapArcRegenerate = (arcNumber: number) => {
     const feedback = roadmapArcFeedbackByNumber[arcNumber] ?? ''
-    regenerateRoadmapStageMutation.mutate({ arcNumber, feedback })
+    regenerateStoryArcMutation.mutate({ arcNumber, feedback })
   }
 
   const updateSelectedCharacter = (patch: Partial<CharacterBlueprint>) => {
@@ -2208,7 +2245,7 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-base font-semibold text-stone-800">章节路线</h3>
-            <p className="mt-1 text-sm text-stone-500">先生成整书阶段与章节路线，后续优先按阶段修正，再按章节细修。</p>
+            <p className="mt-1 text-sm text-stone-500">先生成阶段骨架，再逐幕展开章节。结构问题优先按阶段处理，章节卡片只负责细修。</p>
           </div>
           <span
             className={`rounded-full px-2 py-1 text-xs font-medium ${
@@ -2232,17 +2269,17 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
         ) : null}
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => generateRoadmapMutation.mutate()}
-            disabled={!canGenerateRoadmap || generateRoadmapMutation.isPending || roadmapIsLocked}
+            onClick={() => generateStoryArcsMutation.mutate()}
+            disabled={!canGenerateStoryArcs || generateStoryArcsMutation.isPending || roadmapIsLocked}
             className="rounded-lg bg-emerald-600 px-4 py-2 text-sm text-white hover:bg-emerald-700 disabled:opacity-50"
           >
-            {generateRoadmapMutation.isPending
+            {generateStoryArcsMutation.isPending
               ? '生成中…'
               : roadmapIsLocked
-                ? '章节路线已锁定'
-                : roadmapToShow.length > 0
-                  ? '重新生成整书阶段与章节路线'
-                  : '生成整书阶段与章节路线'}
+                ? '阶段骨架已锁定'
+                : storyArcsToShow.length > 0
+                  ? '重新生成阶段骨架'
+                  : '生成阶段骨架'}
           </button>
           <button
             onClick={() => confirmRoadmapMutation.mutate()}
@@ -2255,11 +2292,13 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
         <div className="grid gap-3 md:grid-cols-4">
           <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3">
             <p className="text-xs font-medium text-stone-500">整书概览</p>
-            <p className="mt-1 text-lg font-semibold text-stone-800">{roadmapToShow.length} 章</p>
+            <p className="mt-1 text-lg font-semibold text-stone-800">
+              {storyArcsToShow.length > 0 ? Math.max(...storyArcsToShow.map((item) => item.end_chapter)) : 0} 章
+            </p>
           </div>
           <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3">
-            <p className="text-xs font-medium text-stone-500">阶段数量</p>
-            <p className="mt-1 text-lg font-semibold text-stone-800">{storyArcsToShow.length} 幕</p>
+            <p className="text-xs font-medium text-stone-500">阶段展开</p>
+            <p className="mt-1 text-lg font-semibold text-stone-800">{expandedArcNumbers.length}/{storyArcsToShow.length} 幕</p>
           </div>
           <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
             <p className="text-xs font-medium text-rose-500">严重问题</p>
@@ -2286,7 +2325,7 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <h4 className="text-sm font-semibold text-stone-800">阶段工作台</h4>
-              <span className="text-xs text-stone-500">先判断哪一幕出了问题，再决定是否进入章节细修</span>
+              <span className="text-xs text-stone-500">先展开并判断哪一幕出了问题，再决定是否进入章节细修</span>
             </div>
             <div className="grid gap-3 xl:grid-cols-2">
               {storyArcsToShow.map((arc) => {
@@ -2316,13 +2355,24 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
                           <span className="rounded-full bg-rose-100 px-2 py-1 text-xs font-medium text-rose-700">需重做</span>
                         ) : warningCount > 0 ? (
                           <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-700">需优化</span>
-                        ) : (
+                        ) : arc.has_chapters ? (
                           <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">
-                            结构稳定
+                            已展开
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-stone-200 px-2 py-1 text-xs font-medium text-stone-700">
+                            待展开
                           </span>
                         )}
                         <span className="rounded-full bg-white px-2 py-1 text-xs text-stone-500">
                           第 {arc.start_chapter}-{arc.end_chapter} 章
+                        </span>
+                        <span
+                          className={`rounded-full px-2 py-1 text-xs font-medium ${
+                            arc.has_chapters ? 'bg-indigo-100 text-indigo-700' : 'bg-stone-100 text-stone-600'
+                          }`}
+                        >
+                          {arc.has_chapters ? '章节已规划' : '仅有阶段骨架'}
                         </span>
                       </div>
                     </div>
@@ -2394,17 +2444,26 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
                       <button
                         type="button"
                         onClick={() => toggleRoadmapArc(arc.arc_number)}
+                        disabled={!arc.has_chapters}
                         className="rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-100"
                       >
-                        {isActive ? '收起章节' : '查看本阶段章节'}
+                        {!arc.has_chapters ? '尚未展开章节' : isActive ? '收起章节' : '查看本阶段章节'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleStoryArcExpand(arc.arc_number)}
+                        disabled={isPending || expandStoryArcMutation.isPending || arc.has_chapters}
+                        className="rounded-lg bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-700 disabled:opacity-50"
+                      >
+                        {isPending && !arc.has_chapters ? '展开中…' : arc.has_chapters ? '本阶段已展开' : '展开本阶段章节'}
                       </button>
                       <button
                         type="button"
                         onClick={() => handleRoadmapArcRegenerate(arc.arc_number)}
-                        disabled={isPending || regenerateRoadmapStageMutation.isPending}
+                        disabled={isPending || regenerateStoryArcMutation.isPending}
                         className="rounded-lg bg-amber-600 px-3 py-2 text-sm text-white hover:bg-amber-700 disabled:opacity-50"
                       >
-                        {isPending ? '重生成中…' : '重生成本阶段'}
+                        {isPending ? '重生成中…' : '重生成本阶段骨架'}
                       </button>
                     </div>
                   </article>
@@ -2458,23 +2517,34 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
                         查看所属阶段
                       </button>
                     ) : null}
-                    {issue.arc_number && issue.suggested_action === 'regenerate_stage' ? (
+                    {issue.arc_number &&
+                    ['regenerate_stage', 'regenerate_arc'].includes(issue.suggested_action ?? '') ? (
                       <button
                         type="button"
                         onClick={() => handleRoadmapArcRegenerate(issue.arc_number!)}
                         disabled={pendingRoadmapArcNumber === issue.arc_number}
                         className="rounded-lg bg-current/90 px-3 py-1.5 text-xs text-white disabled:opacity-60"
                       >
-                        {pendingRoadmapArcNumber === issue.arc_number ? '重生成中…' : '重生成本阶段'}
+                        {pendingRoadmapArcNumber === issue.arc_number ? '重生成中…' : '重生成本阶段骨架'}
                       </button>
                     ) : null}
-                    {issue.arc_number && issue.suggested_action === 'review_stage' ? (
+                    {issue.arc_number && ['review_stage', 'review_arc'].includes(issue.suggested_action ?? '') ? (
                       <button
                         type="button"
                         onClick={() => jumpToRoadmapArc(issue.arc_number!)}
                         className="rounded-lg bg-current/90 px-3 py-1.5 text-xs text-white"
                       >
                         查看所属阶段
+                      </button>
+                    ) : null}
+                    {issue.arc_number && issue.suggested_action === 'expand_arc' ? (
+                      <button
+                        type="button"
+                        onClick={() => handleStoryArcExpand(issue.arc_number!)}
+                        disabled={pendingRoadmapArcNumber === issue.arc_number}
+                        className="rounded-lg bg-current/90 px-3 py-1.5 text-xs text-white disabled:opacity-60"
+                      >
+                        {pendingRoadmapArcNumber === issue.arc_number ? '展开中…' : '展开本阶段章节'}
                       </button>
                     ) : null}
                   </div>
@@ -2775,14 +2845,14 @@ export function BookBlueprintWorkspace({ bookId, blueprint }: BookBlueprintWorks
               ) : null}
             </article>
           )})}
-          {roadmapToShow.length === 0 && (
+          {storyArcsToShow.length === 0 && (
             <div className="rounded-xl border border-dashed border-stone-300 px-4 py-6 text-sm text-stone-500">
-              还没有章节路线。请先确认世界观和人物蓝图，再生成整书章节走向。
+              还没有阶段骨架。请先确认世界观和人物蓝图，再生成整书阶段结构。
             </div>
           )}
-          {roadmapToShow.length > 0 && visibleRoadmapChapters.length === 0 ? (
+          {storyArcsToShow.length > 0 && visibleRoadmapChapters.length === 0 ? (
             <div className="rounded-xl border border-dashed border-stone-300 px-4 py-6 text-sm text-stone-500">
-              请先在上方选择一个阶段，再查看该阶段的章节细修内容。
+              请先展开某一幕的章节，再进入该阶段的章节细修。
             </div>
           ) : null}
         </div>
