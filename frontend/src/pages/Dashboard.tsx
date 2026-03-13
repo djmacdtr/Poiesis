@@ -15,6 +15,7 @@ import { WordTrendChart } from '@/components/WordTrendChart'
 import { LoadingSpinner, ErrorMessage } from '@/components/Feedback'
 import { fetchDashboardStats, fetchWordCountTrend } from '@/services/stats'
 import { fetchBooks } from '@/services/books'
+import { formatLanguageLabel, formatStylePresetLabel } from '@/lib/display-labels'
 import { formatWordCount } from '@/lib/utils'
 import type { BookItem } from '@/types'
 
@@ -68,12 +69,6 @@ export default function Dashboard() {
   if (statsLoading) return <LoadingSpinner text="加载统计数据…" />
   if (statsError) return <ErrorMessage message={(statsError as Error).message} />
 
-  const formatLanguage = (language: string) => {
-    if (language === 'zh-CN') return '中文'
-    if (language === 'en-US') return '英文'
-    return language
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3">
@@ -85,7 +80,7 @@ export default function Dashboard() {
         >
           {books.map((book) => (
             <option key={book.id} value={book.id}>
-              {book.name}（{formatLanguage(book.language)} / {book.style_preset}）
+              {book.name}（{formatLanguageLabel(book.language)} / {formatStylePresetLabel(book.style_preset)}）
             </option>
           ))}
         </select>

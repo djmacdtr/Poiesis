@@ -4,9 +4,11 @@
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AppShell } from '@/components/AppShell'
+import { ActiveBookProvider } from '@/contexts/ActiveBookContext'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'))
+const WorkspacePage = lazy(() => import('@/pages/Workspace'))
 const RunBoard = lazy(() => import('@/pages/RunBoard'))
 const SceneRunDetail = lazy(() => import('@/pages/SceneRunDetail'))
 const ReviewQueue = lazy(() => import('@/pages/ReviewQueue'))
@@ -63,7 +65,9 @@ function AppRoutes() {
             </RequireAuth>
           }
         >
-          <Route index element={<Dashboard />} />
+          <Route index element={<Navigate to="/workspace" replace />} />
+          <Route path="workspace" element={<WorkspacePage />} />
+          <Route path="dashboard" element={<Dashboard />} />
           <Route path="runs" element={<RunBoard />} />
           <Route path="runs/:runId" element={<SceneRunDetail />} />
           <Route path="reviews" element={<ReviewQueue />} />
@@ -83,7 +87,9 @@ function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
+        <ActiveBookProvider>
+          <AppRoutes />
+        </ActiveBookProvider>
       </AuthProvider>
     </BrowserRouter>
   )

@@ -6,55 +6,8 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { Eye, EyeOff } from 'lucide-react'
+import { PoiesisLogo } from '@/components/PoiesisLogo'
 import { useAuth } from '@/contexts/AuthContext'
-
-/** Poiesis 品牌 SVG 图标（钢笔 + 羽毛 + 书卷） */
-function PoiesisLogo({ size = 64 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 64 64"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-label="Poiesis Logo"
-    >
-      {/* 外圆 */}
-      <circle cx="32" cy="32" r="30" stroke="currentColor" strokeWidth="1.5" strokeOpacity="0.3" />
-      {/* 内圆 */}
-      <circle cx="32" cy="32" r="22" stroke="currentColor" strokeWidth="1" strokeOpacity="0.15" />
-
-      {/* 羽毛笔主干 */}
-      <path
-        d="M20 46 Q28 30 44 18"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-      {/* 笔尖 */}
-      <path
-        d="M44 18 L41 23 L46 21 Z"
-        fill="currentColor"
-        fillOpacity="0.8"
-      />
-      {/* 羽毛纹理线条 */}
-      <path d="M28 38 Q34 28 42 20" stroke="currentColor" strokeWidth="0.8" strokeOpacity="0.4" strokeLinecap="round" />
-      <path d="M25 41 Q32 30 41 21" stroke="currentColor" strokeWidth="0.6" strokeOpacity="0.25" strokeLinecap="round" />
-      <path d="M31 35 Q36 26 43 19" stroke="currentColor" strokeWidth="0.6" strokeOpacity="0.25" strokeLinecap="round" />
-
-      {/* 书卷底部装饰 */}
-      <path
-        d="M16 48 Q22 44 28 46 Q34 48 40 44 Q46 40 48 44"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-        strokeOpacity="0.5"
-      />
-      {/* 墨滴 */}
-      <circle cx="20" cy="46" r="2" fill="currentColor" fillOpacity="0.6" />
-    </svg>
-  )
-}
 
 /** 左侧背景装饰：水墨意境 SVG */
 function InkBackground() {

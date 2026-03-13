@@ -590,8 +590,13 @@ export interface StoryArcPlan {
   loop_progress: string[]
   timeline_milestones: string[]
   arc_climax: string
-  status: 'draft' | 'expanded' | 'confirmed'
+  status: 'draft' | 'in_progress' | 'completed' | 'confirmed'
   has_chapters: boolean
+  generated_chapter_count: number
+  chapter_target_count: number
+  next_chapter_number: number | null
+  can_generate_next_chapter: boolean
+  blocking_arc_number: number | null
   expansion_issue_count: number
 }
 
@@ -604,12 +609,10 @@ export interface RoadmapValidationIssue {
   scope?: 'arc' | 'chapter' | 'global'
   arc_number?: number | null
   suggested_action?:
-    | 'expand_arc'
-    | 'regenerate_arc'
+    | 'generate_next_chapter'
+    | 'regenerate_last_chapter'
     | 'edit_chapter'
     | 'review_arc'
-    | 'regenerate_stage'
-    | 'review_stage'
 }
 
 export interface ChapterRoadmapItem {
@@ -622,14 +625,83 @@ export interface ChapterRoadmapItem {
   core_conflict: string
   turning_point: string
   story_progress: string
+  key_events: string[]
+  chapter_tasks: PlannedTaskItem[]
   character_progress: string[]
+  relationship_beats: PlannedRelationshipBeat[]
   relationship_progress: string[]
   new_reveals: string[]
+  world_updates: string[]
   status_shift: string[]
   chapter_function: string
   anti_repeat_signature: string
-  planned_loops: Array<Record<string, unknown>>
+  planned_loops: PlannedLoopItem[]
   closure_function: string
+}
+
+export interface PlannedTaskItem {
+  task_id: string
+  summary: string
+  status: 'new' | 'in_progress' | 'resolved' | 'failed'
+  related_characters: string[]
+  due_end_chapter: number | null
+}
+
+export interface PlannedRelationshipBeat {
+  source_character: string
+  target_character: string
+  summary: string
+}
+
+/**
+ * 章节路线中的显式伏笔项。
+ * due_end_chapter 被提升为必填，是为了避免蓝图阶段不断堆积“无限期悬而未决”的线索。
+ */
+export interface PlannedLoopItem {
+  loop_id: string
+  title: string
+  summary: string
+  status: 'open' | 'progressed' | 'resolved'
+  priority: number
+  due_start_chapter: number | null
+  due_end_chapter: number
+  related_characters: string[]
+  resolution_requirements: string[]
+}
+
+export interface BlueprintContinuityEvent {
+  chapter_number: number
+  story_stage: string
+  timeline_anchor: string
+  kind: 'main_progress' | 'key_event' | 'reveal' | 'world_update'
+  summary: string
+}
+
+export interface BlueprintRelationshipState {
+  source_character: string
+  target_character: string
+  latest_summary: string
+  source_chapter: number | null
+}
+
+export interface BlueprintContinuityLoop {
+  loop_id: string
+  label?: string | null
+  summary?: string | null
+  title?: string | null
+  status?: string | null
+  due_end_chapter?: number | null
+  payoff_due_chapter?: number | null
+}
+
+export interface BlueprintContinuityState {
+  last_planned_chapter: number
+  open_tasks: PlannedTaskItem[]
+  resolved_tasks: PlannedTaskItem[]
+  active_loops: BlueprintContinuityLoop[]
+  recent_events: BlueprintContinuityEvent[]
+  relationship_states: BlueprintRelationshipState[]
+  world_updates: string[]
 }
 
 export interface BlueprintRevision {
@@ -663,6 +735,7 @@ export interface BookBlueprint {
   expanded_arc_numbers: number[]
   roadmap_draft: ChapterRoadmapItem[]
   roadmap_confirmed: ChapterRoadmapItem[]
+  continuity_state: BlueprintContinuityState
   roadmap_validation_issues: RoadmapValidationIssue[]
   revisions: BlueprintRevision[]
 }

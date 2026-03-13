@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { RelationshipGraphPanel } from '@/components/relationship-graph/RelationshipGraphPanel'
+import { useActiveBook, resolveActiveBookId } from '@/contexts/ActiveBookContext'
 import { buildCharacterNodesFromCanon, buildRelationshipGraphViewModel } from '@/lib/relationship-graph'
 import { fetchCanon } from '@/services/world'
 import { fetchBooks } from '@/services/books'
@@ -32,19 +33,11 @@ const foreshadowingColor: Record<string, string> = {
   resolved: 'bg-green-100 text-green-700',
   dropped: 'bg-gray-100 text-gray-500',
 }
-const ACTIVE_BOOK_ID_KEY = 'poiesis.activeBookId'
-
 export default function Canon() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const { activeBookId, setActiveBookId } = useActiveBook()
   const [activeTab, setActiveTab] = useState<TabKey>('characters')
   const [graphSelection, setGraphSelection] = useState<RelationshipGraphSelection>(null)
-  const [activeBookId, setActiveBookId] = useState<number>(() => {
-    const fromQuery = Number(searchParams.get('book') || '')
-    if (Number.isFinite(fromQuery) && fromQuery > 0) return fromQuery
-    if (typeof window === 'undefined') return 1
-    const raw = window.localStorage.getItem(ACTIVE_BOOK_ID_KEY)
-    return raw ? Number(raw) || 1 : 1
-  })
 
   const { data: books = [] } = useQuery<BookItem[]>({
     queryKey: ['books'],
@@ -53,23 +46,24 @@ export default function Canon() {
   })
 
   const { data, isLoading, error } = useQuery<CanonData>({
-    queryKey: ['canon', activeBookId],
-    queryFn: () => fetchCanon(activeBookId),
+    queryKey: ['canon', resolveActiveBookId(activeBookId, books)],
+    queryFn: () => fetchCanon(resolveActiveBookId(activeBookId, books)),
+    enabled: books.length > 0,
   })
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem(ACTIVE_BOOK_ID_KEY, String(activeBookId))
-    setSearchParams({ book: String(activeBookId) }, { replace: true })
-  }, [activeBookId, setSearchParams])
-
-  useEffect(() => {
     if (books.length === 0) return
-    const exists = books.some((item) => item.id === activeBookId)
-    if (exists) return
-    const next = books.find((item) => item.is_default)?.id ?? books[0].id
-    setActiveBookId(next)
-  }, [activeBookId, books])
+    const fromQuery = Number(searchParams.get('book') || '')
+    const targetBookId =
+      Number.isFinite(fromQuery) && fromQuery > 0 ? resolveActiveBookId(fromQuery, books) : resolveActiveBookId(activeBookId, books)
+    if (targetBookId !== activeBookId) {
+      setActiveBookId(targetBookId)
+      return
+    }
+    if (searchParams.get('book') !== String(targetBookId)) {
+      setSearchParams({ book: String(targetBookId) }, { replace: true })
+    }
+  }, [activeBookId, books, searchParams, setActiveBookId, setSearchParams])
 
   if (isLoading) return <LoadingSpinner text="加载世界设定…" />
   if (error) return <ErrorMessage message={(error as Error).message} />
@@ -99,17 +93,7 @@ export default function Canon() {
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold text-gray-800">世界设定（Canon）</h2>
-        <select
-          value={activeBookId}
-          onChange={(e) => setActiveBookId(Number(e.target.value))}
-          className="min-w-56 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
-        >
-          {books.map((book) => (
-            <option key={book.id} value={book.id}>
-              {book.name}（{book.language} / {book.style_preset}）
-            </option>
-          ))}
-        </select>
+        <p className="text-sm text-gray-500">当前作品由左侧导航统一切换</p>
       </div>
 
       <section className="grid gap-4 md:grid-cols-4">

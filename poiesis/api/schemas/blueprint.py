@@ -37,12 +37,6 @@ class BlueprintLayerGenerateRequest(BaseModel):
     feedback: str = ""
 
 
-class RegenerateRoadmapStageRequest(BaseModel):
-    """重生成某个阶段时的微调提示。"""
-
-    feedback: str = ""
-
-
 class SelectConceptVariantResponse(BookBlueprint):
     """选择候选方向后的聚合响应。"""
 

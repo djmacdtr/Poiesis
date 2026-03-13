@@ -132,6 +132,7 @@ class Database:
         self._ensure_column(conn, "book_blueprints", "story_arcs_draft_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "book_blueprints", "story_arcs_confirmed_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "book_blueprints", "expanded_arc_numbers_json", "JSON DEFAULT '[]'")
+        self._ensure_column(conn, "book_blueprints", "blueprint_continuity_state_json", "JSON DEFAULT '{}'")
         self._ensure_column(conn, "book_blueprints", "roadmap_validation_issues_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "book_blueprint_revisions", "relationship_graph_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "blueprint_chapter_roadmap", "relationship_progress_json", "JSON DEFAULT '[]'")
@@ -952,6 +953,7 @@ class Database:
         expanded_arc_numbers: list[int] | None = None,
         roadmap_draft: list[dict[str, Any]] | None = None,
         roadmap_confirmed: list[dict[str, Any]] | None = None,
+        blueprint_continuity_state: dict[str, Any] | None = None,
         roadmap_validation_issues: list[dict[str, Any]] | None = None,
     ) -> int:
         """保存蓝图工作态，供控制台逐层确认。"""
@@ -964,9 +966,9 @@ class Database:
                     world_draft_json, world_confirmed_json, character_draft_json, character_confirmed_json,
                     relationship_graph_draft_json, relationship_graph_confirmed_json,
                     story_arcs_draft_json, story_arcs_confirmed_json, expanded_arc_numbers_json,
-                    roadmap_draft_json, roadmap_confirmed_json, roadmap_validation_issues_json
+                    roadmap_draft_json, roadmap_confirmed_json, blueprint_continuity_state_json, roadmap_validation_issues_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(book_id) DO UPDATE SET
                     status = excluded.status,
                     current_step = excluded.current_step,
@@ -983,6 +985,7 @@ class Database:
                     expanded_arc_numbers_json = excluded.expanded_arc_numbers_json,
                     roadmap_draft_json = excluded.roadmap_draft_json,
                     roadmap_confirmed_json = excluded.roadmap_confirmed_json,
+                    blueprint_continuity_state_json = excluded.blueprint_continuity_state_json,
                     roadmap_validation_issues_json = excluded.roadmap_validation_issues_json,
                     updated_at = CURRENT_TIMESTAMP
                 """,
@@ -1030,6 +1033,11 @@ class Database:
                         roadmap_confirmed if roadmap_confirmed is not None else existing.get("roadmap_confirmed") or []
                     ),
                     json.dumps(
+                        blueprint_continuity_state
+                        if blueprint_continuity_state is not None
+                        else existing.get("blueprint_continuity_state") or {}
+                    ),
+                    json.dumps(
                         roadmap_validation_issues
                         if roadmap_validation_issues is not None
                         else existing.get("roadmap_validation_issues") or []
@@ -1057,6 +1065,7 @@ class Database:
         item["expanded_arc_numbers"] = json.loads(item.pop("expanded_arc_numbers_json", "[]") or "[]")
         item["roadmap_draft"] = json.loads(item.pop("roadmap_draft_json", "[]") or "[]")
         item["roadmap_confirmed"] = json.loads(item.pop("roadmap_confirmed_json", "[]") or "[]")
+        item["blueprint_continuity_state"] = json.loads(item.pop("blueprint_continuity_state_json", "{}") or "{}")
         item["roadmap_validation_issues"] = json.loads(item.pop("roadmap_validation_issues_json", "[]") or "[]")
         return item
 

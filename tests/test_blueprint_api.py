@@ -9,6 +9,7 @@ from poiesis.application.blueprint_contracts import (
     CharacterBlueprint,
     ConceptVariant,
     CreationIntent,
+    StoryArcPlan,
     WorldBlueprint,
 )
 from poiesis.application.blueprint_use_cases import BlueprintContext, build_book_blueprint
@@ -589,13 +590,13 @@ def test_roadmap_planner_generate_roadmap_normalizes_half_structured_payload() -
     assert len(roadmap) == 1
     assert roadmap[0].character_progress == ["林寒第一次主动追查父母之死", "苏璃开始意识到门内有人隐瞒真相"]
     assert roadmap[0].relationship_progress == ["林寒与苏璃建立初步信任", "林寒开始怀疑赵无极的真实立场"]
-    assert roadmap[0].planned_loops[0]["title"] == "残谱异动"
-    assert roadmap[0].planned_loops[0]["due_start_chapter"] == 1
-    assert roadmap[0].planned_loops[1]["loop_id"] == "chapter-1-loop-2"
+    assert roadmap[0].planned_loops[0].title == "残谱异动"
+    assert roadmap[0].planned_loops[0].due_start_chapter == 1
+    assert roadmap[0].planned_loops[1].loop_id == "chapter-1-loop-2"
 
 
-def test_roadmap_stage_regenerate_api_returns_updated_blueprint(tmp_db: Database, monkeypatch) -> None:
-    """阶段重生成接口应返回更新后的阶段草稿与路线警示。"""
+def test_arc_last_chapter_regenerate_api_returns_updated_blueprint(tmp_db: Database, monkeypatch) -> None:
+    """末章重生成接口应返回更新后的路线草稿。"""
     from poiesis.api.services import blueprint_service
 
     book_id = tmp_db.create_book("阶段重生成测试", "zh-CN", "literary_cn", "", "localized_zh")
@@ -632,7 +633,14 @@ def test_roadmap_stage_regenerate_api_returns_updated_blueprint(tmp_db: Database
                 "relationship_progress": ["与苏璃建立初步信任"],
                 "new_reveals": ["残谱并未失传"],
                 "status_shift": ["主角不再只是旁观者"],
-                "planned_loops": [{"title": "残谱异动"}],
+                "planned_loops": [
+                    {
+                        "title": "残谱异动",
+                        "summary": "残谱第一次异动，提示旧案仍在暗处发酵。",
+                        "status": "open",
+                        "due_end_chapter": 3,
+                    }
+                ],
                 "chapter_function": "开局",
                 "anti_repeat_signature": "卷入旧案",
                 "closure_function": "抛出钩子",
@@ -641,9 +649,17 @@ def test_roadmap_stage_regenerate_api_returns_updated_blueprint(tmp_db: Database
         roadmap_validation_issues=[],
     )
 
-    def _fake_regenerate(db: Database, config_path: str, target_book_id: int, arc_number: int, feedback: str = ""):
+    def _fake_regenerate(
+        db: Database,
+        config_path: str,
+        target_book_id: int,
+        arc_number: int,
+        chapter_number: int,
+        feedback: str = "",
+    ):
         assert target_book_id == book_id
         assert arc_number == 1
+        assert chapter_number == 1
         assert "升级" in feedback
         tmp_db.upsert_book_blueprint_state(
             book_id,
@@ -678,7 +694,14 @@ def test_roadmap_stage_regenerate_api_returns_updated_blueprint(tmp_db: Database
                     "relationship_progress": ["与苏璃形成并肩关系"],
                     "new_reveals": ["幕后势力来自天机阁"],
                     "status_shift": ["主角不再被动应对"],
-                    "planned_loops": [{"title": "天机阁暗线"}],
+                    "planned_loops": [
+                        {
+                            "title": "天机阁暗线",
+                            "summary": "暗线第一次显形，提示天机阁已介入旧案。",
+                            "status": "open",
+                            "due_end_chapter": 3,
+                        }
+                    ],
                     "chapter_function": "升级",
                     "anti_repeat_signature": "局势升级",
                     "closure_function": "推动进入下一章",
@@ -688,11 +711,11 @@ def test_roadmap_stage_regenerate_api_returns_updated_blueprint(tmp_db: Database
         )
         return build_book_blueprint(tmp_db, book_id)
 
-    monkeypatch.setattr(blueprint_service, "regenerate_roadmap_stage", _fake_regenerate)
+    monkeypatch.setattr(blueprint_service, "regenerate_arc_chapter", _fake_regenerate)
     client = _make_client(tmp_db)
 
     response = client.post(
-        f"/api/books/{book_id}/blueprint/roadmap/stages/1:regenerate",
+        f"/api/books/{book_id}/blueprint/story-arcs/1/chapters/1:regenerate",
         json={"feedback": "请让第一幕更早出现局势升级"},
     )
 
@@ -700,17 +723,79 @@ def test_roadmap_stage_regenerate_api_returns_updated_blueprint(tmp_db: Database
     payload = response.json()
     assert payload["story_arcs_draft"][0]["title"] == "第一幕：局势升级"
     assert payload["roadmap_draft"][0]["chapter_function"] == "升级"
-    assert payload["roadmap_validation_issues"] == []
+    assert payload["roadmap_validation_issues"][0]["suggested_action"] == "generate_next_chapter"
 
 
 def test_blueprint_creation_flow_can_lock_book_blueprint(tmp_db: Database, monkeypatch) -> None:
     """从创作意图到整书蓝图锁定，应形成完整的工作流。"""
     from poiesis.api.services import blueprint_service
 
+    class _BlueprintFlowLLM(MockLLMClient):
+        def _complete_json(self, prompt: str, system: str | None = None, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
+            if "返回 JSON：{chapter:" in prompt:
+                chapter_no = 1
+                for token in prompt.splitlines():
+                    if "目标章号：第 " in token:
+                        chapter_no = int(token.split("目标章号：第 ", 1)[1].split(" 章", 1)[0])
+                        break
+                stage = "第 1 幕"
+                for token in prompt.splitlines():
+                    if token.startswith("当前阶段："):
+                        if '"title":' in token:
+                            stage = token.split('"title": "', 1)[1].split('"', 1)[0]
+                        break
+                return {
+                    "chapter": {
+                        "chapter_number": chapter_no,
+                        "title": f"第 {chapter_no} 章",
+                        "story_stage": stage,
+                        "timeline_anchor": f"第 {chapter_no} 日",
+                        "depends_on_chapters": [] if chapter_no == 1 else [chapter_no - 1],
+                        "goal": f"推进第 {chapter_no} 章主线",
+                        "core_conflict": f"第 {chapter_no} 章外部压力逼近",
+                        "turning_point": f"第 {chapter_no} 章出现新的转折",
+                        "story_progress": f"第 {chapter_no} 章主线发生新变化",
+                        "key_events": [f"第 {chapter_no} 章关键事件"],
+                        "chapter_tasks": [
+                            {
+                                "task_id": f"chapter-task-{chapter_no}",
+                                "summary": f"第 {chapter_no} 章局部任务",
+                                "status": "new",
+                                "related_characters": [],
+                                "due_end_chapter": chapter_no + 100,
+                            }
+                        ],
+                        "character_progress": [f"角色在第 {chapter_no} 章发生变化"],
+                        "relationship_beats": [
+                            {
+                                "source_character": "主角",
+                                "target_character": "师妹",
+                                "summary": f"第 {chapter_no} 章关系推进",
+                            }
+                        ],
+                        "relationship_progress": [f"关系在第 {chapter_no} 章前进"],
+                        "new_reveals": [f"第 {chapter_no} 章揭示新信息"],
+                        "world_updates": [f"第 {chapter_no} 章世界局势更新"],
+                        "status_shift": [f"第 {chapter_no} 章局势变化"],
+                        "chapter_function": "推进" if chapter_no % 2 else "揭示",
+                        "anti_repeat_signature": f"chapter-{chapter_no}",
+                        "planned_loops": [
+                            {
+                                "title": f"线索{chapter_no}",
+                                "summary": f"第 {chapter_no} 章引入的新线索，要求在后续章节明确回收。",
+                                "status": "resolved",
+                                "due_end_chapter": chapter_no,
+                            }
+                        ],
+                        "closure_function": "抛出下一章钩子",
+                    }
+                }
+            return super()._complete_json(prompt, system=system, **kwargs)
+
     def _fake_context(config_path: str, db: Database, book_id: int) -> BlueprintContext:  # noqa: ARG001
         return BlueprintContext(
             db=db,
-            llm=MockLLMClient(json_response={}),
+            llm=_BlueprintFlowLLM(json_response={}),
             book_id=book_id,
             planner=RoadmapPlanner(),
         )
@@ -794,14 +879,17 @@ def test_blueprint_creation_flow_can_lock_book_blueprint(tmp_db: Database, monke
 
     first_confirm = client.post(f"/api/books/{book_id}/blueprint/roadmap:confirm", json={})
     assert first_confirm.status_code == 400
-    assert "仍有阶段未展开章节" in first_confirm.json()["detail"]
+    assert "仍有阶段未完成章节生成" in first_confirm.json()["detail"]
 
     for arc_number in arc_numbers:
-        expanded = client.post(
-            f"/api/books/{book_id}/blueprint/story-arcs/{arc_number}:expand",
-            json={"feedback": f"展开第 {arc_number} 幕"},
-        )
-        assert expanded.status_code == 200
+        while True:
+            expanded = client.post(
+                f"/api/books/{book_id}/blueprint/story-arcs/{arc_number}:expand",
+                json={"feedback": f"生成第 {arc_number} 幕下一章"},
+            )
+            assert expanded.status_code == 200
+            if arc_number in expanded.json()["expanded_arc_numbers"]:
+                break
 
     confirm_roadmap = client.post(f"/api/books/{book_id}/blueprint/roadmap:confirm", json={})
     assert confirm_roadmap.status_code == 200
@@ -983,7 +1071,20 @@ def test_roadmap_generate_api_normalizes_half_structured_payload(tmp_db: Databas
                         "status_shift": "主角不再只是被动逃避",
                         "chapter_function": "开局",
                         "anti_repeat_signature": "血月旧案开启:卷入主线",
-                        "planned_loops": ["残谱异动", "天机令纹路闪现"],
+                        "planned_loops": [
+                            {
+                                "title": "残谱异动",
+                                "summary": "残谱第一次在主角面前异动，提示旧案仍在暗中发酵。",
+                                "status": "open",
+                                "due_end_chapter": 3,
+                            },
+                            {
+                                "title": "天机令纹路闪现",
+                                "summary": "天机令的纹路短暂显现，暗示幕后势力已提前介入。",
+                                "status": "open",
+                                "due_end_chapter": 6,
+                            },
+                        ],
                         "closure_function": "抛出下一章钩子",
                     }
                 ]
@@ -1098,15 +1199,22 @@ def test_roadmap_generate_api_normalizes_half_structured_payload(tmp_db: Databas
     assert expand_resp.status_code == 200
     body = expand_resp.json()
     payload = body["roadmap_draft"]
-    assert body["expanded_arc_numbers"] == [1]
+    assert body["expanded_arc_numbers"] == []
+    assert body["story_arcs_draft"][0]["generated_chapter_count"] == 1
+    assert body["story_arcs_draft"][0]["chapter_target_count"] == 12
+    assert body["story_arcs_draft"][0]["next_chapter_number"] == 2
     assert payload[0]["story_stage"] == "血月旧案开启"
     assert payload[0]["timeline_anchor"] == "入秋初夜"
     assert payload[0]["story_progress"] == "父母旧案与血月门第一次产生明确联系"
+    assert payload[0]["key_events"] == ["主角第一次看见残谱异动"]
+    assert payload[0]["chapter_tasks"][0]["task_id"] == "chapter-1-task-1"
     assert payload[0]["chapter_function"] == "开局"
     assert payload[0]["character_progress"] == ["林寒第一次主动追查父母之死", "苏璃发现门内气氛异常"]
     assert payload[0]["relationship_progress"] == ["林寒与苏璃建立初步信任", "林寒开始怀疑赵无极"]
     assert payload[0]["planned_loops"][0]["title"] == "残谱异动"
     assert payload[0]["planned_loops"][1]["loop_id"] == "chapter-1-loop-2"
+    assert body["continuity_state"]["open_tasks"][0]["task_id"] == "chapter-1-task-1"
+    assert body["continuity_state"]["recent_events"][0]["summary"] == "父母旧案与血月门第一次产生明确联系"
 
 
 def test_build_book_blueprint_normalizes_stored_half_structured_roadmap(tmp_db: Database) -> None:
@@ -1134,8 +1242,149 @@ def test_build_book_blueprint_normalizes_stored_half_structured_roadmap(tmp_db: 
     blueprint = build_book_blueprint(tmp_db, book_id)
 
     assert blueprint.roadmap_draft[0].chapter_number == 3
+    assert blueprint.roadmap_draft[0].key_events == ["裂碑渡异动暴露残谱踪迹"]
+    assert blueprint.roadmap_draft[0].chapter_tasks[0].summary == "推进调查"
     assert blueprint.roadmap_draft[0].character_progress == ["林寒开始主动追查", "苏璃第一次公开站队"]
-    assert blueprint.roadmap_draft[0].planned_loops[0]["title"] == "裂碑渡异动"
+    assert blueprint.roadmap_draft[0].planned_loops[0].title == "裂碑渡异动"
+    assert blueprint.continuity_state.open_tasks[0].task_id == "chapter-3-task-1"
+
+
+def test_build_book_blueprint_blocks_future_arc_generation_and_expand_api_rejects_it(
+    tmp_db: Database,
+    monkeypatch,
+) -> None:
+    """前序阶段未完成时，后续阶段必须被标记为不可生成，并且接口会直接拒绝。"""
+    from poiesis.api.services import blueprint_service
+
+    client = _make_client(tmp_db)
+    book_id = tmp_db.create_book("顺序门禁测试", "zh-CN", "literary_cn", "", "localized_zh")
+    tmp_db.upsert_creation_intent(
+        book_id,
+        {
+            "genre": "武侠",
+            "themes": ["成长"],
+            "tone": "冷峻",
+            "protagonist_prompt": "被卷入旧案的少年",
+            "conflict_prompt": "追查父母之死与残谱",
+            "ending_preference": "代价胜利",
+            "forbidden_elements": [],
+            "length_preference": "24",
+            "target_experience": "层层揭晓",
+            "variant_preference": "世界差异优先",
+        },
+    )
+    tmp_db.replace_concept_variants(
+        book_id,
+        [
+            {
+                "variant_no": 1,
+                "hook": "裂碑夜雨",
+                "world_pitch": "表层江湖平静，暗网秩序暗流涌动。",
+                "main_arc_pitch": "主角在旧案追查中不断被迫介入各方势力的博弈。",
+                "ending_pitch": "代价胜利",
+            }
+        ],
+    )
+    variant_id = tmp_db.list_concept_variants(book_id)[0]["id"]
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="story_arcs_ready",
+        current_step="roadmap",
+        selected_variant_id=variant_id,
+        world_confirmed=WorldBlueprint(setting_summary="暗网江湖浮出水面。").model_dump(mode="json"),
+        character_confirmed=[
+            CharacterBlueprint(name="林寒", role="主角").model_dump(mode="json"),
+            CharacterBlueprint(name="苏璃", role="师妹").model_dump(mode="json"),
+        ],
+        story_arcs_draft=[
+            StoryArcPlan(
+                arc_number=1,
+                title="血月旧案开启",
+                purpose="卷入主线",
+                start_chapter=1,
+                end_chapter=12,
+            ).model_dump(mode="json"),
+            StoryArcPlan(
+                arc_number=2,
+                title="天机令迷雾",
+                purpose="追查真相",
+                start_chapter=13,
+                end_chapter=24,
+            ).model_dump(mode="json"),
+        ],
+        roadmap_draft=[
+            {
+                "chapter_number": 1,
+                "title": "裂碑夜雨",
+                "story_stage": "血月旧案开启",
+                "timeline_anchor": "入秋初夜",
+                "depends_on_chapters": [],
+                "goal": "让主角卷入主线",
+                "core_conflict": "主角想置身事外，但黑市逼近",
+                "turning_point": "残谱异动",
+                "story_progress": "主角第一次确认旧案并非巧合",
+                "key_events": ["主角第一次看见残谱异动"],
+                "chapter_tasks": [
+                    {
+                        "task_id": "trace-blood-moon",
+                        "summary": "追查血月门与父母旧案的联系",
+                        "status": "new",
+                        "related_characters": ["林寒"],
+                        "due_end_chapter": 3,
+                    }
+                ],
+                "character_progress": ["林寒开始主动追查"],
+                "relationship_beats": [
+                    {"source_character": "林寒", "target_character": "苏璃", "summary": "双方建立初步互信"}
+                ],
+                "relationship_progress": ["林寒与苏璃建立初步互信"],
+                "new_reveals": ["残谱会对主角血脉产生共鸣"],
+                "world_updates": ["江湖黑市重新围绕残谱活跃"],
+                "status_shift": ["主角不再只是旁观者"],
+                "chapter_function": "开局",
+                "anti_repeat_signature": "血月旧案开启:卷入主线",
+                "planned_loops": [
+                    {
+                        "loop_id": "loop-1",
+                        "title": "残谱异动",
+                        "summary": "残谱对主角血脉产生共鸣",
+                        "status": "open",
+                        "priority": 1,
+                        "due_start_chapter": 1,
+                        "due_end_chapter": 3,
+                        "related_characters": ["林寒"],
+                        "resolution_requirements": ["揭示血脉来源"],
+                    }
+                ],
+                "closure_function": "抛出下一章钩子",
+            }
+        ],
+        expanded_arc_numbers=[],
+    )
+
+    def _fake_context(config_path: str, db: Database, target_book_id: int) -> BlueprintContext:  # noqa: ARG001
+        return BlueprintContext(
+            db=db,
+            llm=MockLLMClient(json_response={}),
+            book_id=target_book_id,
+            planner=RoadmapPlanner(),
+        )
+
+    monkeypatch.setattr(blueprint_service, "_build_context", _fake_context)
+
+    detail = client.get(f"/api/books/{book_id}/blueprint")
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["story_arcs_draft"][0]["can_generate_next_chapter"] is True
+    assert payload["story_arcs_draft"][1]["can_generate_next_chapter"] is False
+    assert payload["story_arcs_draft"][1]["blocking_arc_number"] == 1
+
+    blocked = client.post(
+        f"/api/books/{book_id}/blueprint/story-arcs/2:expand",
+        json={"feedback": "直接生成第二幕"},
+    )
+    assert blocked.status_code == 400
+    assert "请先完成前序阶段：第 1 幕" in blocked.json()["detail"]
 
 
 def test_build_book_blueprint_derives_story_arcs_and_roadmap_warnings(tmp_db: Database) -> None:

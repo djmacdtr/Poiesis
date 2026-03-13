@@ -114,7 +114,7 @@ export function generateStoryArcs(bookId: number, payload: BlueprintGenerateRequ
   return post<BookBlueprint>(`/api/books/${bookId}/blueprint/story-arcs:generate`, payload)
 }
 
-/** 展开单个阶段的章节 */
+/** 顺序生成单个阶段的下一章 */
 export function expandStoryArc(
   bookId: number,
   arcNumber: number,
@@ -132,13 +132,17 @@ export function regenerateStoryArc(
   return post<BookBlueprint>(`/api/books/${bookId}/blueprint/story-arcs/${arcNumber}:regenerate`, payload)
 }
 
-/** 只重生成某个阶段的章节路线 */
-export function regenerateRoadmapStage(
+/** 只重生成某个阶段中的最后一章 */
+export function regenerateArcChapter(
   bookId: number,
   arcNumber: number,
+  chapterNumber: number,
   payload: BlueprintGenerateRequest,
 ): Promise<BookBlueprint> {
-  return post<BookBlueprint>(`/api/books/${bookId}/blueprint/roadmap/stages/${arcNumber}:regenerate`, payload)
+  return post<BookBlueprint>(
+    `/api/books/${bookId}/blueprint/story-arcs/${arcNumber}/chapters/${chapterNumber}:regenerate`,
+    payload,
+  )
 }
 
 /** 确认章节路线 */

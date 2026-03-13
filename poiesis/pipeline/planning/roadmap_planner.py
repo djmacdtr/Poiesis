@@ -8,6 +8,10 @@ from difflib import SequenceMatcher
 from typing import Any, Literal, cast
 
 from poiesis.application.blueprint_contracts import (
+    BlueprintContinuityEvent,
+    BlueprintContinuityLoop,
+    BlueprintContinuityState,
+    BlueprintRelationshipState,
     ChapterRoadmapItem,
     CharacterBlueprint,
     ConceptVariant,
@@ -16,6 +20,9 @@ from poiesis.application.blueprint_contracts import (
     FactionBlueprint,
     ImmutableRuleBlueprint,
     LocationBlueprint,
+    PlannedLoopItem,
+    PlannedRelationshipBeat,
+    PlannedTaskItem,
     PowerSystemBlueprint,
     RelationshipBlueprintEdge,
     RoadmapValidationIssue,
@@ -336,8 +343,168 @@ class RoadmapPlanner:
         for arc in story_arcs:
             arc.status = "draft"
             arc.has_chapters = False
+            arc.generated_chapter_count = 0
+            arc.chapter_target_count = max(1, arc.end_chapter - arc.start_chapter + 1)
+            arc.next_chapter_number = arc.start_chapter
             arc.expansion_issue_count = 0
         return story_arcs
+
+    def generate_next_arc_chapter(
+        self,
+        *,
+        intent: CreationIntent,
+        variant: ConceptVariant,
+        world: WorldBlueprint,
+        characters: list[CharacterBlueprint],
+        llm: LLMClient,
+        story_arc: StoryArcPlan,
+        feedback: str = "",
+        existing_roadmap: list[ChapterRoadmapItem] | None = None,
+    ) -> ChapterRoadmapItem:
+        """只为当前阶段顺序生成下一章。"""
+        roadmap = existing_roadmap or []
+        progress = self.summarize_story_arc_progress(story_arc, roadmap)
+        next_chapter_number = cast(int | None, progress["next_chapter_number"])
+        if next_chapter_number is None:
+            raise ValueError(f"第 {story_arc.arc_number} 幕已经完成，不能继续生成章节。")
+        chapter_context = self._build_single_arc_chapter_context(story_arc, roadmap)
+        previous_chapter = cast(ChapterRoadmapItem | None, chapter_context["previous_chapter"])
+        prior_story_facts = cast(list[dict[str, object]], chapter_context["prior_story_facts"])
+        continuity_state = cast(dict[str, object], chapter_context["continuity_state"])
+        current_arc_chapters = cast(list[dict[str, object]], chapter_context["current_arc_chapters"])
+        remaining_main_progress = cast(list[str], chapter_context["remaining_main_progress"])
+        remaining_relationship_progress = cast(list[str], chapter_context["remaining_relationship_progress"])
+        remaining_loop_progress = cast(list[str], chapter_context["remaining_loop_progress"])
+        remaining_timeline_milestones = cast(list[str], chapter_context["remaining_timeline_milestones"])
+        raw: Any = {}
+        try:
+            raw = llm.complete_json(
+                self._build_single_arc_chapter_prompt(
+                    intent=intent,
+                    variant=variant,
+                    world=world,
+                    characters=characters,
+                    feedback=feedback,
+                    story_arc=story_arc,
+                    chapter_number=next_chapter_number,
+                    previous_chapter=previous_chapter,
+                    prior_story_facts=prior_story_facts,
+                    continuity_state=continuity_state,
+                    current_arc_chapters=current_arc_chapters,
+                    remaining_main_progress=remaining_main_progress,
+                    remaining_relationship_progress=remaining_relationship_progress,
+                    remaining_loop_progress=remaining_loop_progress,
+                    remaining_timeline_milestones=remaining_timeline_milestones,
+                    mode="generate",
+                ),
+                system="你是长篇小说总编剧。你必须只生成当前阶段的下一章，并严格承接上一章结果。",
+            )
+            chapter = self.normalize_single_roadmap_payload(
+                raw,
+                fallback_chapter_number=next_chapter_number,
+                strict_loop_constraints=True,
+                fallback_stage_end_chapter=story_arc.end_chapter,
+                fallback_max_chapter=story_arc.end_chapter,
+            )
+        except ValueError as exc:
+            logger.exception(
+                "单章生成时章节 JSON 归一化失败",
+                extra={"story_arc": story_arc.model_dump(mode="json"), "chapter_preview": raw},
+            )
+            raise ValueError(self._build_single_chapter_generation_error_message(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "单章生成时模型服务异常",
+                extra={"story_arc": story_arc.model_dump(mode="json"), "chapter_preview": raw},
+            )
+            raise ValueError(self._build_single_chapter_generation_exception_message(exc)) from exc
+        return self._finalize_generated_arc_chapter(
+            chapter=chapter,
+            story_arc=story_arc,
+            roadmap=roadmap,
+            chapter_number=next_chapter_number,
+        )
+
+    def regenerate_last_arc_chapter(
+        self,
+        *,
+        intent: CreationIntent,
+        variant: ConceptVariant,
+        world: WorldBlueprint,
+        characters: list[CharacterBlueprint],
+        llm: LLMClient,
+        story_arc: StoryArcPlan,
+        chapter_number: int,
+        feedback: str = "",
+        existing_roadmap: list[ChapterRoadmapItem] | None = None,
+    ) -> ChapterRoadmapItem:
+        """只重生成当前阶段最后一章。"""
+        roadmap = existing_roadmap or []
+        arc_chapters = self.get_arc_chapters(story_arc, roadmap)
+        if not arc_chapters:
+            raise ValueError("当前阶段还没有已生成章节，请先生成下一章。")
+        last_chapter = arc_chapters[-1]
+        if last_chapter.chapter_number != chapter_number:
+            raise ValueError("只允许重生成当前阶段最后一章，避免破坏后续章节连续性。")
+        prior_roadmap = [item for item in roadmap if item.chapter_number < chapter_number]
+        chapter_context = self._build_single_arc_chapter_context(story_arc, prior_roadmap)
+        previous_chapter = cast(ChapterRoadmapItem | None, chapter_context["previous_chapter"])
+        prior_story_facts = cast(list[dict[str, object]], chapter_context["prior_story_facts"])
+        continuity_state = cast(dict[str, object], chapter_context["continuity_state"])
+        current_arc_chapters = cast(list[dict[str, object]], chapter_context["current_arc_chapters"])
+        remaining_main_progress = cast(list[str], chapter_context["remaining_main_progress"])
+        remaining_relationship_progress = cast(list[str], chapter_context["remaining_relationship_progress"])
+        remaining_loop_progress = cast(list[str], chapter_context["remaining_loop_progress"])
+        remaining_timeline_milestones = cast(list[str], chapter_context["remaining_timeline_milestones"])
+        raw: Any = {}
+        try:
+            raw = llm.complete_json(
+                self._build_single_arc_chapter_prompt(
+                    intent=intent,
+                    variant=variant,
+                    world=world,
+                    characters=characters,
+                    feedback=feedback,
+                    story_arc=story_arc,
+                    chapter_number=chapter_number,
+                    previous_chapter=previous_chapter,
+                    prior_story_facts=prior_story_facts,
+                    continuity_state=continuity_state,
+                    current_arc_chapters=current_arc_chapters,
+                    remaining_main_progress=remaining_main_progress,
+                    remaining_relationship_progress=remaining_relationship_progress,
+                    remaining_loop_progress=remaining_loop_progress,
+                    remaining_timeline_milestones=remaining_timeline_milestones,
+                    mode="regenerate",
+                    current_chapter=last_chapter,
+                ),
+                system="你是长篇小说总编剧。你必须只重写当前阶段最后一章，并保持前文连续性。",
+            )
+            chapter = self.normalize_single_roadmap_payload(
+                raw,
+                fallback_chapter_number=chapter_number,
+                strict_loop_constraints=True,
+                fallback_stage_end_chapter=story_arc.end_chapter,
+                fallback_max_chapter=story_arc.end_chapter,
+            )
+        except ValueError as exc:
+            logger.exception(
+                "单章重生成时章节 JSON 归一化失败",
+                extra={"story_arc": story_arc.model_dump(mode="json"), "chapter_preview": raw},
+            )
+            raise ValueError(self._build_single_chapter_regeneration_error_message(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "单章重生成时模型服务异常",
+                extra={"story_arc": story_arc.model_dump(mode="json"), "chapter_preview": raw},
+            )
+            raise ValueError(self._build_single_chapter_regeneration_exception_message(exc)) from exc
+        return self._finalize_generated_arc_chapter(
+            chapter=chapter,
+            story_arc=story_arc,
+            roadmap=prior_roadmap,
+            chapter_number=chapter_number,
+        )
 
     def expand_story_arc_into_chapters(
         self,
@@ -556,10 +723,9 @@ class RoadmapPlanner:
                     ),
                     loop_progress=list(
                         dict.fromkeys(
-                            str(loop.get("title") or loop.get("summary") or loop.get("loop_id") or "")
+                            str(loop.title or loop.summary or loop.loop_id or "")
                             for item in ordered
                             for loop in item.planned_loops
-                            if isinstance(loop, dict)
                         )
                     ),
                     timeline_milestones=list(
@@ -573,6 +739,11 @@ class RoadmapPlanner:
                         ),
                         ordered[-1].turning_point,
                     ),
+                    status="completed",
+                    has_chapters=bool(ordered),
+                    generated_chapter_count=len(ordered),
+                    chapter_target_count=len(ordered),
+                    next_chapter_number=None,
                 )
             )
         return arcs
@@ -604,21 +775,270 @@ class RoadmapPlanner:
                         "loop_progress": self._normalize_string_list(raw.get("loop_progress")),
                         "timeline_milestones": self._normalize_string_list(raw.get("timeline_milestones")),
                         "arc_climax": str(raw.get("arc_climax") or ""),
-                        "status": str(raw.get("status") or "draft"),
+                        "status": self._normalize_story_arc_status(raw.get("status"), bool(raw.get("has_chapters"))),
                         "has_chapters": bool(raw.get("has_chapters")),
+                        "generated_chapter_count": self._safe_int(raw.get("generated_chapter_count"), 0),
+                        "chapter_target_count": self._safe_int(
+                            raw.get("chapter_target_count"),
+                            max(1, end_chapter - start_chapter + 1),
+                        ),
+                        "next_chapter_number": self._normalize_optional_positive_int(
+                            raw.get("next_chapter_number"),
+                            default=start_chapter,
+                        ),
+                        "can_generate_next_chapter": self._normalize_boolean(
+                            raw.get("can_generate_next_chapter"),
+                            default=False,
+                        ),
+                        "blocking_arc_number": self._normalize_optional_positive_int(
+                            raw.get("blocking_arc_number"),
+                            default=None,
+                        ),
                         "expansion_issue_count": expansion_issue_count,
                     }
                 )
             normalized.append(arc)
         return normalized
 
+    def get_arc_chapters(
+        self,
+        story_arc: StoryArcPlan,
+        roadmap: list[ChapterRoadmapItem],
+    ) -> list[ChapterRoadmapItem]:
+        """返回某一阶段已生成的章节，并按章号排序。"""
+        return sorted(
+            [
+                item
+                for item in roadmap
+                if story_arc.start_chapter <= item.chapter_number <= story_arc.end_chapter
+            ],
+            key=lambda item: item.chapter_number,
+        )
+
+    def summarize_story_arc_progress(
+        self,
+        story_arc: StoryArcPlan,
+        roadmap: list[ChapterRoadmapItem],
+        *,
+        confirmed: bool = False,
+    ) -> dict[str, object]:
+        """根据已生成章节汇总阶段进度。"""
+        chapters = self.get_arc_chapters(story_arc, roadmap)
+        chapter_target_count = max(1, story_arc.end_chapter - story_arc.start_chapter + 1)
+        existing_numbers = {item.chapter_number for item in chapters}
+        next_chapter_number = next(
+            (
+                number
+                for number in range(story_arc.start_chapter, story_arc.end_chapter + 1)
+                if number not in existing_numbers
+            ),
+            None,
+        )
+        generated_chapter_count = len(existing_numbers)
+        completed = next_chapter_number is None
+        status: Literal["draft", "in_progress", "completed", "confirmed"]
+        if confirmed and completed:
+            status = "confirmed"
+        elif completed:
+            status = "completed"
+        elif generated_chapter_count > 0:
+            status = "in_progress"
+        else:
+            status = "draft"
+        return {
+            "generated_chapter_count": generated_chapter_count,
+            "chapter_target_count": chapter_target_count,
+            "next_chapter_number": next_chapter_number,
+            "completed": completed,
+            "status": status,
+            "has_chapters": generated_chapter_count > 0,
+        }
+
+    def decorate_story_arcs_for_workspace(
+        self,
+        story_arcs: list[StoryArcPlan],
+        roadmap: list[ChapterRoadmapItem],
+        issues: list[RoadmapValidationIssue],
+        completed_arc_numbers: list[int],
+        *,
+        confirmed: bool,
+    ) -> list[StoryArcPlan]:
+        """统一计算阶段卡片的进度与门禁字段，避免前后端各自猜测可点击状态。"""
+        decorated: list[StoryArcPlan] = []
+        earliest_incomplete_arc: int | None = None
+        progress_by_arc: dict[int, dict[str, object]] = {}
+
+        for arc in sorted(story_arcs, key=lambda item: item.arc_number):
+            progress = self.summarize_story_arc_progress(arc, roadmap, confirmed=confirmed)
+            progress_by_arc[arc.arc_number] = progress
+            if not bool(progress["completed"]) and earliest_incomplete_arc is None:
+                earliest_incomplete_arc = arc.arc_number
+
+        for arc in story_arcs:
+            progress = progress_by_arc[arc.arc_number]
+            issue_count = sum(1 for item in issues if item.arc_number == arc.arc_number)
+            can_generate_next_chapter = (
+                not bool(progress["completed"]) and earliest_incomplete_arc == arc.arc_number
+            )
+            blocking_arc_number = None
+            if not can_generate_next_chapter and not bool(progress["completed"]):
+                blocking_arc_number = earliest_incomplete_arc
+            decorated.append(
+                arc.model_copy(
+                    update={
+                        "status": progress["status"],
+                        "has_chapters": progress["has_chapters"],
+                        "generated_chapter_count": progress["generated_chapter_count"],
+                        "chapter_target_count": progress["chapter_target_count"],
+                        "next_chapter_number": progress["next_chapter_number"],
+                        "can_generate_next_chapter": can_generate_next_chapter,
+                        "blocking_arc_number": blocking_arc_number,
+                        "expansion_issue_count": issue_count,
+                    }
+                )
+            )
+        return decorated
+
+    def rebuild_continuity_state(self, roadmap: list[ChapterRoadmapItem]) -> BlueprintContinuityState:
+        """从 roadmap_draft 全量重建连续性工作态。
+
+        这里故意不把连续性状态当成独立真源，而是把它视为路线草稿的物化摘要。
+        这样无论是单章生成、重生成还是手动细修，都可以通过一次全量重建消掉脏状态。
+        """
+        ordered = sorted(roadmap, key=lambda item: item.chapter_number)
+        tasks: dict[str, PlannedTaskItem] = {}
+        loops: dict[str, PlannedLoopItem] = {}
+        relationship_states: dict[tuple[str, str], BlueprintRelationshipState] = {}
+        recent_events: list[BlueprintContinuityEvent] = []
+        world_updates: list[str] = []
+
+        for chapter in ordered:
+            if chapter.story_progress.strip():
+                recent_events.append(
+                    BlueprintContinuityEvent(
+                        chapter_number=chapter.chapter_number,
+                        story_stage=chapter.story_stage,
+                        timeline_anchor=chapter.timeline_anchor,
+                        kind="main_progress",
+                        summary=chapter.story_progress,
+                    )
+                )
+            for event in chapter.key_events:
+                if event.strip():
+                    recent_events.append(
+                        BlueprintContinuityEvent(
+                            chapter_number=chapter.chapter_number,
+                            story_stage=chapter.story_stage,
+                            timeline_anchor=chapter.timeline_anchor,
+                            kind="key_event",
+                            summary=event,
+                        )
+                    )
+            for reveal in chapter.new_reveals:
+                if reveal.strip():
+                    recent_events.append(
+                        BlueprintContinuityEvent(
+                            chapter_number=chapter.chapter_number,
+                            story_stage=chapter.story_stage,
+                            timeline_anchor=chapter.timeline_anchor,
+                            kind="reveal",
+                            summary=reveal,
+                        )
+                    )
+            for update in chapter.world_updates:
+                normalized_update = update.strip()
+                if not normalized_update:
+                    continue
+                recent_events.append(
+                    BlueprintContinuityEvent(
+                        chapter_number=chapter.chapter_number,
+                        story_stage=chapter.story_stage,
+                        timeline_anchor=chapter.timeline_anchor,
+                        kind="world_update",
+                        summary=normalized_update,
+                    )
+                )
+                if normalized_update not in world_updates:
+                    world_updates.append(normalized_update)
+
+            for task in chapter.chapter_tasks:
+                tasks[task.task_id] = task.model_copy()
+            for raw_loop in chapter.planned_loops:
+                loop_id = raw_loop.loop_id.strip()
+                if not loop_id:
+                    continue
+                loops[loop_id] = raw_loop.model_copy()
+            for beat in chapter.relationship_beats:
+                key = (beat.source_character, beat.target_character)
+                relationship_states[key] = BlueprintRelationshipState(
+                    source_character=beat.source_character,
+                    target_character=beat.target_character,
+                    latest_summary=beat.summary,
+                    source_chapter=chapter.chapter_number,
+                )
+
+        open_tasks = [
+            task
+            for task in tasks.values()
+            if task.status in {"new", "in_progress"}
+        ]
+        resolved_tasks = [
+            task
+            for task in tasks.values()
+            if task.status in {"resolved", "failed"}
+        ]
+        active_loops = [
+            BlueprintContinuityLoop(
+                loop_id=loop.loop_id,
+                label=loop.title or loop.summary or loop.loop_id,
+                title=loop.title,
+                summary=loop.summary,
+                status=loop.status,
+                due_end_chapter=loop.due_end_chapter,
+                payoff_due_chapter=loop.due_end_chapter,
+            )
+            for loop in loops.values()
+            if loop.status != "resolved"
+        ]
+        return BlueprintContinuityState(
+            last_planned_chapter=ordered[-1].chapter_number if ordered else 0,
+            open_tasks=sorted(open_tasks, key=lambda item: item.task_id),
+            resolved_tasks=sorted(resolved_tasks, key=lambda item: item.task_id),
+            active_loops=sorted(active_loops, key=lambda item: item.loop_id),
+            recent_events=recent_events[-12:],
+            relationship_states=sorted(
+                relationship_states.values(),
+                key=lambda item: (item.source_chapter or 0, item.source_character, item.target_character),
+            ),
+            world_updates=world_updates[-8:],
+        )
+
+    def normalize_continuity_state_payload(self, payload: object) -> BlueprintContinuityState:
+        """把持久化或接口侧传回的连续性状态收口为正式结构。"""
+        if isinstance(payload, BlueprintContinuityState):
+            return payload
+        if isinstance(payload, dict):
+            return BlueprintContinuityState.model_validate(payload)
+        return BlueprintContinuityState()
+
     def verify_roadmap(
         self,
         story_arcs: list[StoryArcPlan],
         roadmap: list[ChapterRoadmapItem],
+        *,
+        world: WorldBlueprint | None = None,
+        relationship_graph: list[RelationshipBlueprintEdge] | None = None,
     ) -> list[RoadmapValidationIssue]:
-        """对章节路线执行静态 verifier。"""
-        return self._roadmap_verifier.verify(story_arcs, roadmap)
+        """对章节路线执行静态 verifier。
+
+        verifier 现在不仅检查重复和停滞，也会使用已确认的世界观/关系图做保守型一致性校验。
+        """
+        return self._roadmap_verifier.verify(
+            story_arcs,
+            roadmap,
+            world=world,
+            relationship_graph=relationship_graph or [],
+        )
 
     def _generate_story_arcs(
         self,
@@ -1289,8 +1709,15 @@ class RoadmapPlanner:
         *,
         starting_chapter: int = 1,
         chapter_count: int | None = None,
+        strict_loop_constraints: bool = False,
     ) -> list[ChapterRoadmapItem]:
-        """把章节路线原始载荷统一收口为正式路线列表。"""
+        """把章节路线原始载荷统一收口为正式路线列表。
+
+        strict_loop_constraints=False 主要用于读取历史草稿：
+        - 旧数据可能缺 title / summary / due_end_chapter；
+        - 这里允许先做一次保守回填，避免工作台直接炸掉；
+        - 但新生成内容应走 strict=True，不再继续容忍无截止伏笔。
+        """
         raw_items = self._extract_roadmap_items(payload)
         normalized: list[ChapterRoadmapItem] = []
         for index, item in enumerate(raw_items, start=0):
@@ -1299,12 +1726,50 @@ class RoadmapPlanner:
                 continue
             if not isinstance(item, dict):
                 continue
-            normalized.append(self._normalize_roadmap_item(item, starting_chapter + index))
+            normalized.append(
+                self._normalize_roadmap_item(
+                    item,
+                    starting_chapter + index,
+                    strict_loop_constraints=strict_loop_constraints,
+                )
+            )
         if normalized:
-            return normalized
+            return self._repair_roadmap_loop_constraints(
+                normalized,
+                fallback_max_chapter=starting_chapter + max(len(normalized), chapter_count or len(normalized)) - 1,
+            )
         if chapter_count is not None:
             return self._build_fallback_roadmap(starting_chapter, chapter_count)
         return []
+
+    def normalize_single_roadmap_payload(
+        self,
+        payload: object,
+        *,
+        fallback_chapter_number: int,
+        strict_loop_constraints: bool = True,
+        fallback_stage_end_chapter: int | None = None,
+        fallback_max_chapter: int | None = None,
+    ) -> ChapterRoadmapItem:
+        """把单章载荷统一收口为正式章节对象。
+
+        单章生成/重生成默认采用 strict_loop_constraints=True：
+        新生成伏笔如果没有最迟兑现章，就应该立即报错，而不是再悄悄补一个默认值。
+        """
+        item = self._extract_single_roadmap_item(payload)
+        if not isinstance(item, dict):
+            raise ValueError("single_chapter_payload_invalid")
+        chapter = self._normalize_roadmap_item(
+            item,
+            fallback_chapter_number,
+            strict_loop_constraints=strict_loop_constraints,
+        )
+        return self._repair_single_chapter_loop_constraints(
+            chapter,
+            fallback_stage_end_chapter=fallback_stage_end_chapter,
+            fallback_max_chapter=fallback_max_chapter,
+            allow_missing_due_end=not strict_loop_constraints,
+        )
 
     def _extract_character_items(self, payload: object) -> list[object]:
         """兼容 characters 数组、单对象和直接传列表的多种人物载荷。"""
@@ -1333,6 +1798,25 @@ class RoadmapPlanner:
             if any(key in payload for key in ("chapter_number", "goal", "core_conflict", "closure_function")):
                 return [payload]
         return []
+
+    def _extract_single_roadmap_item(self, payload: object) -> object | None:
+        """兼容 chapter 对象、chapters 单元素数组与直接单对象。"""
+        if isinstance(payload, ChapterRoadmapItem):
+            return payload.model_dump(mode="json")
+        if isinstance(payload, dict):
+            raw_item = payload.get("chapter")
+            if isinstance(raw_item, dict):
+                return raw_item
+            raw_items = payload.get("chapters")
+            if isinstance(raw_items, list) and raw_items:
+                return cast(object, raw_items[0])
+            if isinstance(raw_items, dict):
+                return raw_items
+            if any(key in payload for key in ("chapter_number", "goal", "core_conflict", "closure_function")):
+                return payload
+        if isinstance(payload, list) and payload:
+            return cast(object, payload[0])
+        return None
 
     def _normalize_character_blueprint(self, item: dict[str, Any], index: int) -> CharacterBlueprint:
         """规范单个人物蓝图，避免数组字段被模型输出成整段中文。"""
@@ -1418,35 +1902,86 @@ class RoadmapPlanner:
         self,
         item: dict[str, Any],
         fallback_chapter_number: int,
+        *,
+        strict_loop_constraints: bool = False,
     ) -> ChapterRoadmapItem:
         """规范单章路线，兼容数组字段被输出成整段中文或字符串线索列表。"""
         chapter_number = self._normalize_positive_int(item.get("chapter_number"), fallback=fallback_chapter_number)
+        title = self._normalize_string(item.get("title")) or f"第 {chapter_number} 章"
+        story_stage = self._normalize_string(item.get("story_stage"))
+        timeline_anchor = self._normalize_string(item.get("timeline_anchor"))
+        depends_on_chapters = self._normalize_int_list(item.get("depends_on_chapters"))
+        goal = self._normalize_string(item.get("goal")) or "推进主线"
+        core_conflict = self._normalize_string(item.get("core_conflict")) or "外部压力逼近"
+        turning_point = self._normalize_string(item.get("turning_point")) or "主角必须做出选择"
+        story_progress = self._normalize_string(item.get("story_progress")) or "主线局势出现新的状态变化"
+        key_events = self._normalize_string_list(item.get("key_events")) or [turning_point or story_progress]
+        chapter_tasks = self._normalize_chapter_tasks(item.get("chapter_tasks"), chapter_number) or [
+            PlannedTaskItem(
+                task_id=f"chapter-{chapter_number}-task-1",
+                summary=goal,
+                status="new",
+                related_characters=[],
+                due_end_chapter=chapter_number + 2,
+            )
+        ]
+        character_progress = self._normalize_string_list(item.get("character_progress"))
+        relationship_beats = self._normalize_relationship_beats(item.get("relationship_beats"))
+        relationship_progress = self._normalize_string_list(item.get("relationship_progress"))
+        new_reveals = self._normalize_string_list(item.get("new_reveals"))
+        world_updates = self._normalize_string_list(item.get("world_updates"))
+        status_shift = self._normalize_string_list(item.get("status_shift"))
+        chapter_function = self._normalize_string(item.get("chapter_function")) or "推进"
+        anti_repeat_signature = self._normalize_string(item.get("anti_repeat_signature")) or f"{chapter_function}:{goal}"
+        planned_loops = self._normalize_planned_loops(
+            item.get("planned_loops"),
+            chapter_number,
+            strict_required_fields=strict_loop_constraints,
+        )
+        closure_function = self._normalize_string(item.get("closure_function")) or "制造下一章钩子"
         return ChapterRoadmapItem.model_validate(
             {
                 "chapter_number": chapter_number,
-                "title": self._normalize_string(item.get("title")) or f"第 {chapter_number} 章",
-                "story_stage": self._normalize_string(item.get("story_stage")),
-                "timeline_anchor": self._normalize_string(item.get("timeline_anchor")),
-                "depends_on_chapters": self._normalize_int_list(item.get("depends_on_chapters")),
-                "goal": self._normalize_string(item.get("goal")) or "推进主线",
-                "core_conflict": self._normalize_string(item.get("core_conflict")) or "外部压力逼近",
-                "turning_point": self._normalize_string(item.get("turning_point")) or "主角必须做出选择",
-                "story_progress": self._normalize_string(item.get("story_progress")) or "主线局势出现新的状态变化",
-                "character_progress": self._normalize_string_list(item.get("character_progress")),
-                "relationship_progress": self._normalize_string_list(item.get("relationship_progress")),
-                "new_reveals": self._normalize_string_list(item.get("new_reveals")),
-                "status_shift": self._normalize_string_list(item.get("status_shift")),
-                "chapter_function": self._normalize_string(item.get("chapter_function")) or "推进",
-                "anti_repeat_signature": self._normalize_string(item.get("anti_repeat_signature"))
-                or f"{self._normalize_string(item.get('chapter_function'))}:{self._normalize_string(item.get('goal'))}",
-                "planned_loops": self._normalize_planned_loops(item.get("planned_loops"), chapter_number),
-                "closure_function": self._normalize_string(item.get("closure_function")) or "制造下一章钩子",
+                "title": title,
+                "story_stage": story_stage,
+                "timeline_anchor": timeline_anchor,
+                "depends_on_chapters": depends_on_chapters,
+                "goal": goal,
+                "core_conflict": core_conflict,
+                "turning_point": turning_point,
+                "story_progress": story_progress,
+                "key_events": key_events,
+                "chapter_tasks": chapter_tasks,
+                "character_progress": character_progress,
+                "relationship_beats": relationship_beats,
+                "relationship_progress": relationship_progress,
+                "new_reveals": new_reveals,
+                "world_updates": world_updates,
+                "status_shift": status_shift,
+                "chapter_function": chapter_function,
+                "anti_repeat_signature": anti_repeat_signature,
+                "planned_loops": planned_loops,
+                "closure_function": closure_function,
             }
         )
 
-    def _normalize_planned_loops(self, value: object, chapter_number: int) -> list[dict[str, object]]:
-        """把字符串或半结构线索列表统一压成正式 planned_loops 结构。"""
-        items: list[dict[str, object]] = []
+    def _normalize_planned_loops(
+        self,
+        value: object,
+        chapter_number: int,
+        *,
+        strict_required_fields: bool,
+    ) -> list[PlannedLoopItem]:
+        """把字符串或半结构线索列表统一压成正式 planned_loops 结构。
+
+        strict_required_fields=True 用于新生成内容：
+        - title / summary / due_end_chapter 缺一不可；
+        - 不再静默补一个 chapter+2 的默认值。
+
+        strict_required_fields=False 用于读取历史草稿：
+        - 先把已有信息尽量收口成正式结构；
+        - 缺失字段留给后续的历史回填逻辑统一补齐，避免在这里拍脑袋写死。
+        """
         if isinstance(value, list):
             raw_items = value
         elif isinstance(value, dict):
@@ -1456,12 +1991,13 @@ class RoadmapPlanner:
         else:
             raw_items = self._normalize_string_list(value)
 
+        normalized_items: list[PlannedLoopItem] = []
         for index, raw_item in enumerate(raw_items, start=1):
             if isinstance(raw_item, dict):
                 title = self._normalize_string(
                     raw_item.get("title") or raw_item.get("summary") or raw_item.get("loop_id")
-                ) or f"第 {chapter_number} 章线索 {index}"
-                summary = self._normalize_string(raw_item.get("summary")) or title
+                )
+                summary = self._normalize_string(raw_item.get("summary"))
                 loop_id = self._normalize_string(raw_item.get("loop_id")) or f"chapter-{chapter_number}-loop-{index}"
                 priority = self._normalize_positive_int(raw_item.get("priority"), fallback=1)
                 due_start = self._normalize_optional_positive_int(
@@ -1470,40 +2006,382 @@ class RoadmapPlanner:
                 )
                 due_end = self._normalize_optional_positive_int(
                     raw_item.get("due_end_chapter"),
-                    default=chapter_number + 2,
+                    default=None,
                 )
-                items.append(
-                    {
-                        "loop_id": loop_id,
-                        "title": title,
-                        "summary": summary,
-                        "priority": priority,
-                        "due_start_chapter": due_start,
-                        "due_end_chapter": due_end,
-                        "related_characters": self._normalize_string_list(raw_item.get("related_characters")),
-                        "resolution_requirements": self._normalize_string_list(
+                if strict_required_fields and (not title or not summary or due_end is None):
+                    raise ValueError("planned_loops_due_end_required")
+                normalized_items.append(
+                    PlannedLoopItem(
+                        loop_id=loop_id,
+                        title=title or "",
+                        summary=summary or "",
+                        status=self._normalize_loop_status(raw_item.get("status")),
+                        priority=priority,
+                        due_start_chapter=due_start,
+                        due_end_chapter=due_end if due_end is not None else chapter_number,
+                        related_characters=self._normalize_string_list(raw_item.get("related_characters")),
+                        resolution_requirements=self._normalize_string_list(
                             raw_item.get("resolution_requirements")
                         ),
-                    }
+                    )
                 )
                 continue
 
             summary = self._normalize_string(raw_item)
             if not summary:
                 continue
-            items.append(
-                {
-                    "loop_id": f"chapter-{chapter_number}-loop-{index}",
-                    "title": summary,
-                    "summary": summary,
-                    "priority": 1,
-                    "due_start_chapter": chapter_number,
-                    "due_end_chapter": chapter_number + 2,
-                    "related_characters": [],
-                    "resolution_requirements": [],
-                }
+            if strict_required_fields:
+                raise ValueError("planned_loops_due_end_required")
+            normalized_items.append(
+                PlannedLoopItem(
+                    loop_id=f"chapter-{chapter_number}-loop-{index}",
+                    title=summary,
+                    summary=summary,
+                    status="open",
+                    priority=1,
+                    due_start_chapter=chapter_number,
+                    due_end_chapter=chapter_number,
+                    related_characters=[],
+                    resolution_requirements=[],
+                )
             )
-        return items
+        return normalized_items
+
+    def _repair_roadmap_loop_constraints(
+        self,
+        roadmap: list[ChapterRoadmapItem],
+        *,
+        fallback_max_chapter: int | None = None,
+    ) -> list[ChapterRoadmapItem]:
+        """读取旧草稿时，为缺失的伏笔结构补一层保守回填。
+
+        回填优先级：
+        1. 若能通过 story_stage 找到所属阶段，则优先回填到该阶段结束章；
+        2. 否则回填到 min(当前章 + 2, 全书最大已规划章号)；
+        3. title / summary 至少补齐一份可读文案，避免界面出现 loop-1 这类内部值。
+        """
+        if not roadmap:
+            return roadmap
+        max_planned_chapter = fallback_max_chapter or max(item.chapter_number for item in roadmap)
+        stage_end_map: dict[str, int] = {}
+        for chapter in roadmap:
+            stage = chapter.story_stage.strip()
+            if not stage:
+                continue
+            stage_end_map[stage] = max(stage_end_map.get(stage, 0), chapter.chapter_number)
+
+        repaired: list[ChapterRoadmapItem] = []
+        for chapter in roadmap:
+            repaired.append(
+                self._repair_single_chapter_loop_constraints(
+                    chapter,
+                    fallback_stage_end_chapter=stage_end_map.get(chapter.story_stage.strip()),
+                    fallback_max_chapter=max_planned_chapter,
+                    allow_missing_due_end=True,
+                )
+            )
+        return repaired
+
+    def _repair_single_chapter_loop_constraints(
+        self,
+        chapter: ChapterRoadmapItem,
+        *,
+        fallback_stage_end_chapter: int | None,
+        fallback_max_chapter: int | None,
+        allow_missing_due_end: bool,
+    ) -> ChapterRoadmapItem:
+        """按单章维度修正旧伏笔数据，保证 UI 和连续性回填都能拿到完整结构。"""
+        repaired_loops: list[PlannedLoopItem] = []
+        for index, loop in enumerate(chapter.planned_loops, start=1):
+            title = loop.title.strip() or loop.summary.strip()
+            summary = loop.summary.strip() or title
+            if not title:
+                title = f"伏笔 {index}"
+            if not summary:
+                summary = title
+
+            if loop.due_end_chapter is not None:
+                due_end_chapter = loop.due_end_chapter
+            elif not allow_missing_due_end:
+                raise ValueError("planned_loops_due_end_required")
+            elif fallback_stage_end_chapter is not None:
+                due_end_chapter = fallback_stage_end_chapter
+            else:
+                due_end_chapter = min(chapter.chapter_number + 2, fallback_max_chapter or chapter.chapter_number + 2)
+
+            repaired_loops.append(
+                loop.model_copy(
+                    update={
+                        "title": title,
+                        "summary": summary,
+                        "due_end_chapter": due_end_chapter,
+                    }
+                )
+            )
+        return chapter.model_copy(update={"planned_loops": repaired_loops})
+
+    def _normalize_chapter_tasks(self, value: object, chapter_number: int) -> list[PlannedTaskItem]:
+        """把任务字段规范成显式任务对象，避免后续连续性回填只能依赖自由文本猜测。"""
+        if isinstance(value, list):
+            raw_items = value
+        elif isinstance(value, dict):
+            raw_items = [value]
+        elif value is None or value == "":
+            raw_items = []
+        else:
+            raw_items = self._normalize_string_list(value)
+
+        tasks: list[PlannedTaskItem] = []
+        for index, raw_item in enumerate(raw_items, start=1):
+            if isinstance(raw_item, PlannedTaskItem):
+                tasks.append(raw_item)
+                continue
+            if isinstance(raw_item, dict):
+                summary = self._normalize_string(raw_item.get("summary") or raw_item.get("title"))
+                if not summary:
+                    continue
+                tasks.append(
+                    PlannedTaskItem(
+                        task_id=self._normalize_string(raw_item.get("task_id")) or f"chapter-{chapter_number}-task-{index}",
+                        summary=summary,
+                        status=self._normalize_task_status(raw_item.get("status")),
+                        related_characters=self._normalize_string_list(raw_item.get("related_characters")),
+                        due_end_chapter=self._normalize_optional_positive_int(
+                            raw_item.get("due_end_chapter"),
+                            default=None,
+                        ),
+                    )
+                )
+                continue
+
+            summary = self._normalize_string(raw_item)
+            if not summary:
+                continue
+            tasks.append(
+                PlannedTaskItem(
+                    task_id=f"chapter-{chapter_number}-task-{index}",
+                    summary=summary,
+                    status="new",
+                    related_characters=[],
+                    due_end_chapter=chapter_number + 2,
+                )
+            )
+        return tasks
+
+    def _normalize_relationship_beats(self, value: object) -> list[PlannedRelationshipBeat]:
+        """把章节层关系推进收口成角色对，便于聚合回填到蓝图连续性状态。"""
+        if isinstance(value, list):
+            raw_items = value
+        elif isinstance(value, dict):
+            raw_items = [value]
+        elif value is None or value == "":
+            raw_items = []
+        else:
+            raw_items = self._normalize_string_list(value)
+
+        beats: list[PlannedRelationshipBeat] = []
+        for raw_item in raw_items:
+            if isinstance(raw_item, PlannedRelationshipBeat):
+                beats.append(raw_item)
+                continue
+            if isinstance(raw_item, dict):
+                source_character = self._normalize_string(raw_item.get("source_character"))
+                target_character = self._normalize_string(raw_item.get("target_character"))
+                summary = self._normalize_string(raw_item.get("summary"))
+                if not source_character or not target_character or not summary:
+                    continue
+                beats.append(
+                    PlannedRelationshipBeat(
+                        source_character=source_character,
+                        target_character=target_character,
+                        summary=summary,
+                    )
+                )
+                continue
+
+            text = self._normalize_string(raw_item)
+            if "->" not in text or "|" not in text:
+                continue
+            relation_part, summary = text.split("|", 1)
+            source_character, target_character = [
+                self._normalize_string(part)
+                for part in relation_part.split("->", 1)
+            ]
+            if source_character and target_character and self._normalize_string(summary):
+                beats.append(
+                    PlannedRelationshipBeat(
+                        source_character=source_character,
+                        target_character=target_character,
+                        summary=self._normalize_string(summary),
+                    )
+                )
+        return beats
+
+    def _normalize_task_status(self, value: object) -> Literal["new", "in_progress", "resolved", "failed"]:
+        """兼容任务状态的中文/英文写法，只保留单章工作流允许的 4 种值。"""
+        normalized = self._normalize_string(value).lower()
+        if normalized in {"new", "in_progress", "resolved", "failed"}:
+            return cast(Literal["new", "in_progress", "resolved", "failed"], normalized)
+        mapping = {
+            "新建": "new",
+            "进行中": "in_progress",
+            "推进中": "in_progress",
+            "完成": "resolved",
+            "已解决": "resolved",
+            "失败": "failed",
+            "中断": "failed",
+        }
+        return cast(
+            Literal["new", "in_progress", "resolved", "failed"],
+            mapping.get(normalized, "new"),
+        )
+
+    def _normalize_loop_status(self, value: object) -> str:
+        """planned_loops 支持显式状态，便于判断某条伏笔是否仍处于激活中。"""
+        normalized = self._normalize_string(value).lower()
+        if normalized in {"open", "progressed", "resolved"}:
+            return normalized
+        mapping = {
+            "开启": "open",
+            "推进": "progressed",
+            "已推进": "progressed",
+            "解决": "resolved",
+            "已解决": "resolved",
+        }
+        return mapping.get(normalized, "open")
+
+    def _normalize_story_arc_status(self, value: object, has_chapters: bool) -> str:
+        """兼容旧状态值并映射到新阶段状态。"""
+        status = self._normalize_string(value)
+        if status in {"draft", "in_progress", "completed", "confirmed"}:
+            return status
+        if status == "expanded":
+            return "completed" if has_chapters else "in_progress"
+        return "draft"
+
+    def _build_single_arc_chapter_context(
+        self,
+        story_arc: StoryArcPlan,
+        roadmap: list[ChapterRoadmapItem],
+    ) -> dict[str, object]:
+        """构造单章生成所需的最小连续性上下文。"""
+        current_arc_chapters = self.get_arc_chapters(story_arc, roadmap)
+        previous_chapter = current_arc_chapters[-1] if current_arc_chapters else None
+        continuity_state = self.rebuild_continuity_state(roadmap)
+        prior_story_facts = [
+            {
+                "chapter_number": item.chapter_number,
+                "title": item.title,
+                "story_progress": item.story_progress,
+                "key_events": item.key_events,
+                "turning_point": item.turning_point,
+                "timeline_anchor": item.timeline_anchor,
+                "chapter_tasks": [task.model_dump(mode="json") for task in item.chapter_tasks],
+                "relationship_beats": [beat.model_dump(mode="json") for beat in item.relationship_beats],
+                "relationship_progress": item.relationship_progress,
+                "new_reveals": item.new_reveals,
+                "world_updates": item.world_updates,
+            }
+            for item in sorted(roadmap, key=lambda row: row.chapter_number)[-5:]
+        ]
+        return {
+            "previous_chapter": previous_chapter,
+            "prior_story_facts": prior_story_facts,
+            "continuity_state": continuity_state.model_dump(mode="json"),
+            "current_arc_chapters": [item.model_dump(mode="json") for item in current_arc_chapters],
+            "remaining_main_progress": self._remaining_arc_targets(
+                story_arc.main_progress,
+                current_arc_chapters,
+                lambda chapter: [
+                    chapter.story_progress,
+                    chapter.goal,
+                    chapter.turning_point,
+                    *chapter.key_events,
+                    *chapter.new_reveals,
+                    *chapter.world_updates,
+                ],
+            ),
+            "remaining_relationship_progress": self._remaining_arc_targets(
+                story_arc.relationship_progress,
+                current_arc_chapters,
+                lambda chapter: [
+                    *chapter.relationship_progress,
+                    *[beat.summary for beat in chapter.relationship_beats],
+                ],
+            ),
+            "remaining_loop_progress": self._remaining_arc_targets(
+                story_arc.loop_progress,
+                current_arc_chapters,
+                lambda chapter: [
+                    str(loop.title or loop.summary or loop.loop_id or "")
+                    for loop in chapter.planned_loops
+                ],
+            ),
+            "remaining_timeline_milestones": self._remaining_arc_targets(
+                story_arc.timeline_milestones,
+                current_arc_chapters,
+                lambda chapter: [chapter.timeline_anchor],
+            ),
+        }
+
+    def _remaining_arc_targets(
+        self,
+        targets: list[str],
+        chapters: list[ChapterRoadmapItem],
+        extractor: Any,
+    ) -> list[str]:
+        """根据已生成章节，估算阶段内尚未兑现的约束。"""
+        if not targets:
+            return []
+        achieved_text = " ".join(
+            value
+            for chapter in chapters
+            for value in extractor(chapter)
+            if isinstance(value, str) and value.strip()
+        )
+        remaining = [target for target in targets if target and target not in achieved_text]
+        return remaining or targets[-1:]
+
+    def _finalize_generated_arc_chapter(
+        self,
+        *,
+        chapter: ChapterRoadmapItem,
+        story_arc: StoryArcPlan,
+        roadmap: list[ChapterRoadmapItem],
+        chapter_number: int,
+    ) -> ChapterRoadmapItem:
+        """补齐单章工作流下的默认连续性字段。"""
+        previous_chapter = self.get_arc_chapters(story_arc, roadmap)[-1] if self.get_arc_chapters(story_arc, roadmap) else None
+        chapter.chapter_number = chapter_number
+        chapter.story_stage = story_arc.title
+        if not chapter.depends_on_chapters and previous_chapter is not None:
+            chapter.depends_on_chapters = [previous_chapter.chapter_number]
+        if not chapter.timeline_anchor:
+            milestone_index = min(
+                max(chapter_number - story_arc.start_chapter, 0),
+                max(len(story_arc.timeline_milestones) - 1, 0),
+            )
+            if story_arc.timeline_milestones:
+                chapter.timeline_anchor = story_arc.timeline_milestones[milestone_index]
+            elif previous_chapter is not None and previous_chapter.timeline_anchor:
+                chapter.timeline_anchor = f"{previous_chapter.timeline_anchor}之后"
+            else:
+                chapter.timeline_anchor = f"第 {chapter_number} 章当日"
+        if not chapter.anti_repeat_signature:
+            chapter.anti_repeat_signature = f"{story_arc.title}:{chapter.goal}"
+        if not chapter.key_events:
+            chapter.key_events = [chapter.turning_point or chapter.story_progress]
+        if not chapter.chapter_tasks:
+            chapter.chapter_tasks = [
+                PlannedTaskItem(
+                    task_id=f"chapter-{chapter_number}-task-1",
+                    summary=chapter.goal or "推进当前阶段目标",
+                    status="new",
+                    related_characters=[],
+                    due_end_chapter=min(story_arc.end_chapter, chapter_number + 2),
+                )
+            ]
+        return chapter
 
     def _build_fallback_roadmap(self, starting_chapter: int, chapter_count: int) -> list[ChapterRoadmapItem]:
         """当模型未返回可用章节路线时，提供可继续编辑的最小草稿。"""
@@ -1518,9 +2396,21 @@ class RoadmapPlanner:
                 core_conflict="外部压力逼近",
                 turning_point="主角必须做出选择",
                 story_progress="主线局势被迫向前推进一步",
+                key_events=["主角遭遇新的外部压力"],
+                chapter_tasks=[
+                    PlannedTaskItem(
+                        task_id=f"fallback-task-{chapter_no}",
+                        summary="处理当前章节暴露的新问题",
+                        status="new",
+                        related_characters=[],
+                        due_end_chapter=chapter_no + 2,
+                    )
+                ],
                 character_progress=["主角认知发生变化"],
+                relationship_beats=[],
                 relationship_progress=[],
                 new_reveals=[],
+                world_updates=[],
                 status_shift=["主角立场发生变化"],
                 chapter_function=self._fallback_chapter_function(chapter_no, starting_chapter),
                 anti_repeat_signature=f"fallback:{chapter_no}",
@@ -1595,6 +2485,16 @@ class RoadmapPlanner:
                 "loop_progress": self._normalize_string_list(item.get("loop_progress")),
                 "timeline_milestones": self._normalize_string_list(item.get("timeline_milestones")),
                 "arc_climax": self._normalize_string(item.get("arc_climax")) or "在阶段末尾制造明确转折",
+                "status": "draft",
+                "has_chapters": False,
+                "generated_chapter_count": 0,
+                "chapter_target_count": max(
+                    1,
+                    self._normalize_positive_int(item.get("end_chapter"), fallback=fallback_end)
+                    - self._normalize_positive_int(item.get("start_chapter"), fallback=fallback_start)
+                    + 1,
+                ),
+                "next_chapter_number": self._normalize_positive_int(item.get("start_chapter"), fallback=fallback_start),
             }
         )
 
@@ -1654,6 +2554,11 @@ class RoadmapPlanner:
                     loop_progress=[f"第 {index} 幕回收或升级关键线索"],
                     timeline_milestones=[f"第 {current_start}-{end_chapter} 章阶段时间推进"],
                     arc_climax="阶段末尾抛出新的转折或揭示",
+                    status="draft",
+                    has_chapters=False,
+                    generated_chapter_count=0,
+                    chapter_target_count=max(1, end_chapter - current_start + 1),
+                    next_chapter_number=current_start,
                 )
             )
             current_start = end_chapter + 1
@@ -1972,6 +2877,8 @@ class RoadmapPlanner:
             return "章节路线生成失败：人物推进字段应为列表。"
         if "relationship_progress" in text:
             return "章节路线生成失败：关系推进字段应为列表。"
+        if "planned_loops_due_end_required" in text:
+            return "章节路线生成失败：每条伏笔都必须填写最迟兑现章。"
         if "planned_loops" in text:
             return "章节路线生成失败：计划线索字段格式不正确。"
         return "章节路线生成失败：章节结构输出不符合要求，请重试。"
@@ -1985,6 +2892,8 @@ class RoadmapPlanner:
             return "阶段重生成失败：人物推进字段应为列表。"
         if "relationship_progress" in text:
             return "阶段重生成失败：关系推进字段应为列表。"
+        if "planned_loops_due_end_required" in text:
+            return "阶段重生成失败：每条伏笔都必须填写最迟兑现章。"
         if "planned_loops" in text:
             return "阶段重生成失败：计划线索字段格式不正确。"
         return "阶段重生成失败：章节结构输出不符合要求，请重试。"
@@ -2002,6 +2911,50 @@ class RoadmapPlanner:
         if "InternalServerError" in text or "Error code: 500" in text or "50507" in text:
             return "章节路线生成失败：模型服务暂时异常，请稍后重试。"
         return "章节路线生成失败：生成服务暂时异常，请稍后重试。"
+
+    def _build_single_chapter_generation_error_message(self, exc: ValueError) -> str:
+        """把单章生成错误压缩成用户可读提示。"""
+        text = str(exc)
+        if "Could not extract JSON" in text or "single_chapter_payload_invalid" in text:
+            return "单章生成失败：模型返回的章节结构不是合法 JSON，请重试。"
+        if "character_progress" in text:
+            return "单章生成失败：人物推进字段应为列表。"
+        if "relationship_progress" in text:
+            return "单章生成失败：关系推进字段应为列表。"
+        if "planned_loops_due_end_required" in text:
+            return "单章生成失败：每条伏笔都必须填写最迟兑现章。"
+        if "planned_loops" in text:
+            return "单章生成失败：计划线索字段格式不正确。"
+        return "单章生成失败：章节结构输出不符合要求，请重试。"
+
+    def _build_single_chapter_generation_exception_message(self, exc: Exception) -> str:
+        """把单章生成中的模型服务异常压缩成用户可读提示。"""
+        text = str(exc)
+        if "InternalServerError" in text or "Error code: 500" in text or "50507" in text:
+            return "单章生成失败：模型服务暂时异常，请稍后重试。"
+        return "单章生成失败：生成服务暂时异常，请稍后重试。"
+
+    def _build_single_chapter_regeneration_error_message(self, exc: ValueError) -> str:
+        """把单章重生成错误压缩成用户可读提示。"""
+        text = str(exc)
+        if "Could not extract JSON" in text or "single_chapter_payload_invalid" in text:
+            return "单章重生成失败：模型返回的章节结构不是合法 JSON，请重试。"
+        if "character_progress" in text:
+            return "单章重生成失败：人物推进字段应为列表。"
+        if "relationship_progress" in text:
+            return "单章重生成失败：关系推进字段应为列表。"
+        if "planned_loops_due_end_required" in text:
+            return "单章重生成失败：每条伏笔都必须填写最迟兑现章。"
+        if "planned_loops" in text:
+            return "单章重生成失败：计划线索字段格式不正确。"
+        return "单章重生成失败：章节结构输出不符合要求，请重试。"
+
+    def _build_single_chapter_regeneration_exception_message(self, exc: Exception) -> str:
+        """把单章重生成中的模型服务异常压缩成用户可读提示。"""
+        text = str(exc)
+        if "InternalServerError" in text or "Error code: 500" in text or "50507" in text:
+            return "单章重生成失败：模型服务暂时异常，请稍后重试。"
+        return "单章重生成失败：生成服务暂时异常，请稍后重试。"
 
     def _build_world_skeleton_prompt(
         self,
@@ -2252,9 +3205,10 @@ class RoadmapPlanner:
             "1. 每章至少推进主线事实、人物关系、线索状态、世界局势中的一项。\n"
             "2. 连续两章不能拥有相同 chapter_function。\n"
             "3. 不要连续多章只重复“调查 / 怀疑 / 追查 / 训练”而没有状态变化。\n"
-            "4. character_progress、relationship_progress、new_reveals、status_shift 必须是 string[]。\n"
-            "5. planned_loops 必须是对象数组，而不是线索标题字符串列表。\n"
-            "6. timeline_anchor 必须持续递进。\n"
+            "4. key_events 必须是非空 string[]；chapter_tasks 和 relationship_beats 必须返回对象数组。\n"
+            "5. character_progress、relationship_progress、new_reveals、world_updates、status_shift 必须是 string[]。\n"
+            "6. planned_loops 必须是对象数组，而不是线索标题字符串列表。\n"
+            "7. timeline_anchor 必须持续递进。\n"
             "最小示例："
             "{"
             "\"chapters\":[{"
@@ -2267,21 +3221,117 @@ class RoadmapPlanner:
             "\"core_conflict\":\"主角想置身事外，但黑市与门派同时逼近\","
             "\"turning_point\":\"主角首次看到残谱异动，无法继续旁观\","
             "\"story_progress\":\"父母旧案与血月门第一次产生明确联系\","
+            "\"key_events\":[\"主角目击残谱异动\",\"师门开始察觉线索泄露\"],"
+            "\"chapter_tasks\":[{\"task_id\":\"trace-blood-moon\",\"summary\":\"追查血月门与父母旧案的连接点\",\"status\":\"new\",\"related_characters\":[\"主角\"],\"due_end_chapter\":3}],"
             "\"character_progress\":[\"主角从隐忍观望转向主动调查\"],"
+            "\"relationship_beats\":[{\"source_character\":\"主角\",\"target_character\":\"师妹\",\"summary\":\"双方建立最初信任\"}],"
             "\"relationship_progress\":[\"主角与师妹建立最初信任\"],"
             "\"new_reveals\":[\"残谱会对主角血脉产生共鸣\"],"
+            "\"world_updates\":[\"江湖黑市开始围绕残谱重新活跃\"],"
             "\"status_shift\":[\"主角不再只是被动逃避\"],"
             "\"chapter_function\":\"开局\","
             "\"anti_repeat_signature\":\"血月旧案开启:卷入主线\","
-            "\"planned_loops\":[{\"loop_id\":\"loop-1\",\"title\":\"残谱异动\",\"summary\":\"残谱对主角血脉产生共鸣\",\"priority\":1,\"due_start_chapter\":1,\"due_end_chapter\":3,\"related_characters\":[\"主角\"],\"resolution_requirements\":[\"揭示血脉来源\"]}],"
+            "\"planned_loops\":[{\"loop_id\":\"loop-1\",\"title\":\"残谱异动\",\"summary\":\"残谱对主角血脉产生共鸣\",\"status\":\"open\",\"priority\":1,\"due_start_chapter\":1,\"due_end_chapter\":3,\"related_characters\":[\"主角\"],\"resolution_requirements\":[\"揭示血脉来源\"]}],"
             "\"closure_function\":\"抛出下一章钩子\""
             "}]"
             "}\n"
             f"当前阶段需要展开 {chapter_count} 章。\n"
             "返回 JSON：{chapters:[{chapter_number, title, story_stage, timeline_anchor, depends_on_chapters:number[],"
-            " goal, core_conflict, turning_point, story_progress, character_progress:string[],"
-            " relationship_progress:string[], new_reveals:string[], status_shift:string[],"
-            " chapter_function, anti_repeat_signature, planned_loops:[{loop_id, title, summary, priority,"
+            " goal, core_conflict, turning_point, story_progress, key_events:string[],"
+            " chapter_tasks:[{task_id, summary, status, related_characters:string[], due_end_chapter}],"
+            " character_progress:string[], relationship_beats:[{source_character, target_character, summary}],"
+            " relationship_progress:string[], new_reveals:string[], world_updates:string[], status_shift:string[],"
+            " chapter_function, anti_repeat_signature, planned_loops:[{loop_id, title, summary, status, priority,"
             " due_start_chapter, due_end_chapter, related_characters:string[], resolution_requirements:string[]}],"
             " closure_function}]}"
+        )
+
+    def _build_single_arc_chapter_prompt(
+        self,
+        *,
+        intent: CreationIntent,
+        variant: ConceptVariant,
+        world: WorldBlueprint,
+        characters: list[CharacterBlueprint],
+        feedback: str,
+        story_arc: StoryArcPlan,
+        chapter_number: int,
+        previous_chapter: ChapterRoadmapItem | None,
+        prior_story_facts: list[dict[str, object]],
+        continuity_state: dict[str, object],
+        current_arc_chapters: list[dict[str, object]],
+        remaining_main_progress: list[str],
+        remaining_relationship_progress: list[str],
+        remaining_loop_progress: list[str],
+        remaining_timeline_milestones: list[str],
+        mode: Literal["generate", "regenerate"],
+        current_chapter: ChapterRoadmapItem | None = None,
+    ) -> str:
+        """构造单章顺序生成 prompt。"""
+        mode_instruction = "重写当前阶段最后一章" if mode == "regenerate" else "生成当前阶段下一章"
+        regenerate_payload = current_chapter.model_dump(mode="json") if current_chapter is not None else None
+        return (
+            f"请{mode_instruction}，禁止越界到其他阶段，也不要一次返回多章。\n"
+            f"作者意图：{intent.model_dump(mode='json')}\n"
+            f"候选方向：{variant.model_dump(mode='json')}\n"
+            f"世界观：{world.model_dump(mode='json')}\n"
+            f"人物：{[item.model_dump(mode='json') for item in characters]}\n"
+            f"当前阶段：{story_arc.model_dump(mode='json')}\n"
+            f"目标章号：第 {chapter_number} 章\n"
+            f"当前阶段已生成章节：{current_arc_chapters}\n"
+            f"上一章：{previous_chapter.model_dump(mode='json') if previous_chapter is not None else '无'}\n"
+            f"前序章节关键事实：{prior_story_facts}\n"
+            f"连续性工作态：{continuity_state}\n"
+            f"当前阶段尚未兑现的主线推进：{remaining_main_progress or ['本章必须制造新的主线状态变化']}\n"
+            f"当前阶段尚未兑现的关系推进：{remaining_relationship_progress or ['本章至少推进一项关系变化']}\n"
+            f"当前阶段尚未兑现的线索推进：{remaining_loop_progress or ['本章至少推进一条计划线索']}\n"
+            f"当前阶段尚未兑现的时间里程碑：{remaining_timeline_milestones or ['时间线必须继续前进']}\n"
+            f"当前章草稿（仅重生成时可参考）：{regenerate_payload or '无'}\n"
+            f"微调要求：{feedback or '无'}\n"
+            "硬性规则：\n"
+            "1. 只能返回当前这一章，返回单个 chapter 对象。\n"
+            "2. chapter_number 必须等于目标章号。\n"
+            "3. story_stage 必须等于当前阶段标题。\n"
+            "4. 如果存在上一章，depends_on_chapters 必须承接上一章。\n"
+            "5. timeline_anchor 必须比上一章更晚，不能原地踏步。\n"
+            "6. 本章必须推进至少一个尚未兑现的阶段目标，不能只重复调查/怀疑/训练。\n"
+            "7. key_events 必须是非空 string[]，至少写 1 条关键事件。\n"
+            "8. chapter_tasks 必须是对象数组，至少写 1 条任务变化；如果是承接旧任务，复用原 task_id。\n"
+            "9. relationship_beats 必须是对象数组，每项都要包含 source_character、target_character、summary。\n"
+            "10. character_progress、relationship_progress、new_reveals、world_updates、status_shift 必须是 string[]。\n"
+            "11. planned_loops 必须是对象数组，不允许只返回字符串列表；可用 status=open/progressed/resolved 表示伏笔状态。\n"
+            "最小示例："
+            "{"
+            "\"chapter\":{"
+            "\"chapter_number\":5,"
+            "\"title\":\"残谱再鸣\","
+            "\"story_stage\":\"血月旧案开启\","
+            "\"timeline_anchor\":\"入秋次日清晨\","
+            "\"depends_on_chapters\":[4],"
+            "\"goal\":\"让主角确认残谱与父母旧案的直接关联\","
+            "\"core_conflict\":\"主角想压住动静，但师门与黑市同时逼近\","
+            "\"turning_point\":\"残谱在众目睽睽下对主角血脉产生共鸣\","
+            "\"story_progress\":\"父母旧案从怀疑升级为可验证事实\","
+            "\"key_events\":[\"主角当众触发残谱共鸣\",\"师门高层开始关注主角血脉异动\"],"
+            "\"chapter_tasks\":[{\"task_id\":\"verify-bloodline\",\"summary\":\"确认主角血脉与残谱的联系\",\"status\":\"in_progress\",\"related_characters\":[\"林寒\",\"苏璃\"],\"due_end_chapter\":7}],"
+            "\"character_progress\":[\"主角从试探转向主动追查\"],"
+            "\"relationship_beats\":[{\"source_character\":\"林寒\",\"target_character\":\"苏璃\",\"summary\":\"共同调查默契进一步强化\"}],"
+            "\"relationship_progress\":[\"主角与师妹形成共同调查默契\"],"
+            "\"new_reveals\":[\"残谱缺页记录了血月门实验编号\"],"
+            "\"world_updates\":[\"血月门实验编号第一次被公开确认存在\"],"
+            "\"status_shift\":[\"主角无法继续留在旁观位置\"],"
+            "\"chapter_function\":\"揭示\","
+            "\"anti_repeat_signature\":\"血月旧案开启:残谱与旧案直接关联\","
+            "\"planned_loops\":[{\"loop_id\":\"loop-5\",\"title\":\"残谱缺页\",\"summary\":\"缺页指向血月门实验编号\",\"status\":\"progressed\",\"priority\":1,\"due_start_chapter\":5,\"due_end_chapter\":7,\"related_characters\":[\"林寒\"],\"resolution_requirements\":[\"确认实验编号归属\"]}],"
+            "\"closure_function\":\"抛出下一章追查入口\""
+            "}"
+            "}\n"
+            "返回 JSON：{chapter:{chapter_number, title, story_stage, timeline_anchor, depends_on_chapters:number[],"
+            " goal, core_conflict, turning_point, story_progress, key_events:string[],"
+            " chapter_tasks:[{task_id, summary, status, related_characters:string[], due_end_chapter}],"
+            " character_progress:string[], relationship_beats:[{source_character, target_character, summary}],"
+            " relationship_progress:string[], new_reveals:string[], world_updates:string[], status_shift:string[],"
+            " chapter_function, anti_repeat_signature, planned_loops:[{loop_id, title, summary, status, priority,"
+            " due_start_chapter, due_end_chapter, related_characters:string[], resolution_requirements:string[]}],"
+            " closure_function}}"
         )

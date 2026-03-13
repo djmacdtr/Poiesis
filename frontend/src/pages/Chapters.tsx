@@ -2,17 +2,16 @@
  * 章节列表页：展示所有章节的基本信息
  */
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { ChevronRight } from 'lucide-react'
+import { useActiveBook, resolveActiveBookId } from '@/contexts/ActiveBookContext'
 import { fetchChaptersByBook } from '@/services/chapters'
 import { fetchBooks } from '@/services/books'
 import { LoadingSpinner, ErrorMessage, EmptyState } from '@/components/Feedback'
 import { formatDate, formatWordCount, chapterStatusLabel } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import type { BookItem } from '@/types'
-
-const ACTIVE_BOOK_ID_KEY = 'poiesis.activeBookId'
 
 /** 状态徽章颜色 */
 const statusColor: Record<string, string> = {
@@ -25,13 +24,7 @@ const statusColor: Record<string, string> = {
 
 export default function Chapters() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [activeBookId, setActiveBookId] = useState<number>(() => {
-    const fromQuery = Number(searchParams.get('book') || '')
-    if (Number.isFinite(fromQuery) && fromQuery > 0) return fromQuery
-    if (typeof window === 'undefined') return 1
-    const raw = window.localStorage.getItem(ACTIVE_BOOK_ID_KEY)
-    return raw ? Number(raw) || 1 : 1
-  })
+  const { activeBookId, setActiveBookId } = useActiveBook()
 
   const { data: books = [] } = useQuery<BookItem[]>({
     queryKey: ['books'],
@@ -40,23 +33,24 @@ export default function Chapters() {
   })
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['chapters', activeBookId],
-    queryFn: () => fetchChaptersByBook(activeBookId),
+    queryKey: ['chapters', resolveActiveBookId(activeBookId, books)],
+    queryFn: () => fetchChaptersByBook(resolveActiveBookId(activeBookId, books)),
+    enabled: books.length > 0,
   })
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem(ACTIVE_BOOK_ID_KEY, String(activeBookId))
-    setSearchParams({ book: String(activeBookId) }, { replace: true })
-  }, [activeBookId, setSearchParams])
-
-  useEffect(() => {
     if (books.length === 0) return
-    const exists = books.some((item) => item.id === activeBookId)
-    if (exists) return
-    const next = books.find((item) => item.is_default)?.id ?? books[0].id
-    setActiveBookId(next)
-  }, [activeBookId, books])
+    const fromQuery = Number(searchParams.get('book') || '')
+    const targetBookId =
+      Number.isFinite(fromQuery) && fromQuery > 0 ? resolveActiveBookId(fromQuery, books) : resolveActiveBookId(activeBookId, books)
+    if (targetBookId !== activeBookId) {
+      setActiveBookId(targetBookId)
+      return
+    }
+    if (searchParams.get('book') !== String(targetBookId)) {
+      setSearchParams({ book: String(targetBookId) }, { replace: true })
+    }
+  }, [activeBookId, books, searchParams, setActiveBookId, setSearchParams])
 
   if (isLoading) return <LoadingSpinner text="加载章节列表…" />
   if (error) return <ErrorMessage message={(error as Error).message} />
@@ -66,17 +60,7 @@ export default function Chapters() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold text-gray-800">章节列表</h2>
-        <select
-          value={activeBookId}
-          onChange={(e) => setActiveBookId(Number(e.target.value))}
-          className="min-w-56 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
-        >
-          {books.map((book) => (
-            <option key={book.id} value={book.id}>
-              {book.name}（{book.language} / {book.style_preset}）
-            </option>
-          ))}
-        </select>
+        <p className="text-sm text-gray-500">当前作品由左侧导航统一切换</p>
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">

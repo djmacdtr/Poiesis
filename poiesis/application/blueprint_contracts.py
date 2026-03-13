@@ -288,8 +288,13 @@ class StoryArcPlan(BaseModel):
     loop_progress: list[str] = Field(default_factory=list)
     timeline_milestones: list[str] = Field(default_factory=list)
     arc_climax: str = ""
-    status: Literal["draft", "expanded", "confirmed"] = "draft"
+    status: Literal["draft", "in_progress", "completed", "confirmed"] = "draft"
     has_chapters: bool = False
+    generated_chapter_count: int = 0
+    chapter_target_count: int = 0
+    next_chapter_number: int | None = None
+    can_generate_next_chapter: bool = False
+    blocking_arc_number: int | None = None
     expansion_issue_count: int = 0
 
 
@@ -304,12 +309,10 @@ class RoadmapValidationIssue(BaseModel):
     arc_number: int | None = None
     scope: Literal["arc", "chapter", "global"] = "chapter"
     suggested_action: Literal[
-        "expand_arc",
-        "regenerate_arc",
+        "generate_next_chapter",
+        "regenerate_last_chapter",
         "edit_chapter",
         "review_arc",
-        "review_stage",
-        "regenerate_stage",
     ] = "review_arc"
 
 
@@ -325,14 +328,104 @@ class ChapterRoadmapItem(BaseModel):
     core_conflict: str = ""
     turning_point: str = ""
     story_progress: str = ""
+    key_events: list[str] = Field(default_factory=list)
+    chapter_tasks: list[PlannedTaskItem] = Field(default_factory=list)
     character_progress: list[str] = Field(default_factory=list)
+    relationship_beats: list[PlannedRelationshipBeat] = Field(default_factory=list)
     relationship_progress: list[str] = Field(default_factory=list)
     new_reveals: list[str] = Field(default_factory=list)
+    world_updates: list[str] = Field(default_factory=list)
     status_shift: list[str] = Field(default_factory=list)
     chapter_function: str = ""
     anti_repeat_signature: str = ""
-    planned_loops: list[dict[str, object]] = Field(default_factory=list)
+    # 伏笔改为显式结构，避免前后端长期围绕匿名 dict 补兼容逻辑。
+    planned_loops: list[PlannedLoopItem] = Field(default_factory=list)
     closure_function: str = ""
+
+
+class PlannedTaskItem(BaseModel):
+    """章节计划里显式引入或推进的任务项。"""
+
+    task_id: str = ""
+    summary: str = ""
+    status: Literal["new", "in_progress", "resolved", "failed"] = "new"
+    related_characters: list[str] = Field(default_factory=list)
+    due_end_chapter: int | None = None
+
+
+class PlannedRelationshipBeat(BaseModel):
+    """章节层显式声明的人物关系推进。"""
+
+    source_character: str = ""
+    target_character: str = ""
+    summary: str = ""
+
+
+class PlannedLoopItem(BaseModel):
+    """章节层显式声明的伏笔/悬念项。
+
+    设计约束：
+    1. due_end_chapter 现在是强制约束，目的是阻止伏笔无限堆积；
+    2. 允许跨幕，但必须给出明确的最迟兑现章；
+    3. title / summary 都要求保留，前者偏展示，后者偏连续性校验和后续生成提示。
+    """
+
+    loop_id: str = ""
+    title: str = ""
+    summary: str = ""
+    status: Literal["open", "progressed", "resolved"] = "open"
+    priority: int = 1
+    due_start_chapter: int | None = None
+    due_end_chapter: int
+    related_characters: list[str] = Field(default_factory=list)
+    resolution_requirements: list[str] = Field(default_factory=list)
+
+
+class BlueprintContinuityEvent(BaseModel):
+    """蓝图工作态中的连续性事件摘要。"""
+
+    chapter_number: int
+    story_stage: str = ""
+    timeline_anchor: str = ""
+    kind: Literal["main_progress", "key_event", "reveal", "world_update"] = "key_event"
+    summary: str = ""
+
+
+class BlueprintRelationshipState(BaseModel):
+    """基于章节路线聚合出的最新关系状态。"""
+
+    source_character: str = ""
+    target_character: str = ""
+    latest_summary: str = ""
+    source_chapter: int | None = None
+
+
+class BlueprintContinuityLoop(BaseModel):
+    """连续性工作态中的活跃伏笔摘要。
+
+    这里保留 due_end_chapter，而不是只保留展示层别名，
+    是为了让前端和后端对“最迟兑现章”的语义完全一致。
+    """
+
+    loop_id: str = ""
+    label: str | None = None
+    summary: str | None = None
+    title: str | None = None
+    status: str | None = None
+    due_end_chapter: int | None = None
+    payoff_due_chapter: int | None = None
+
+
+class BlueprintContinuityState(BaseModel):
+    """单章工作流使用的连续性工作态。"""
+
+    last_planned_chapter: int = 0
+    open_tasks: list[PlannedTaskItem] = Field(default_factory=list)
+    resolved_tasks: list[PlannedTaskItem] = Field(default_factory=list)
+    active_loops: list[BlueprintContinuityLoop] = Field(default_factory=list)
+    recent_events: list[BlueprintContinuityEvent] = Field(default_factory=list)
+    relationship_states: list[BlueprintRelationshipState] = Field(default_factory=list)
+    world_updates: list[str] = Field(default_factory=list)
 
 
 class BlueprintRevision(BaseModel):
@@ -370,6 +463,7 @@ class BookBlueprint(BaseModel):
     expanded_arc_numbers: list[int] = Field(default_factory=list)
     roadmap_draft: list[ChapterRoadmapItem] = Field(default_factory=list)
     roadmap_confirmed: list[ChapterRoadmapItem] = Field(default_factory=list)
+    continuity_state: BlueprintContinuityState = Field(default_factory=BlueprintContinuityState)
     roadmap_validation_issues: list[RoadmapValidationIssue] = Field(default_factory=list)
     revisions: list[BlueprintRevision] = Field(default_factory=list)
 

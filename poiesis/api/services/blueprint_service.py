@@ -29,16 +29,16 @@ from poiesis.application.blueprint_use_cases import (
     ConfirmRelationshipPendingUseCase,
     ConfirmRelationshipReplanUseCase,
     CreateRelationshipReplanUseCase,
-    ExpandStoryArcUseCase,
     GenerateCharacterBlueprintUseCase,
     GenerateConceptVariantsUseCase,
+    GenerateNextArcChapterUseCase,
     GenerateRoadmapUseCase,
     GenerateStoryArcsUseCase,
     GenerateWorldBlueprintUseCase,
     GetRelationshipGraphUseCase,
     ListRelationshipPendingUseCase,
+    RegenerateArcChapterUseCase,
     RegenerateConceptVariantUseCase,
-    RegenerateRoadmapStageUseCase,
     RegenerateStoryArcUseCase,
     RejectRelationshipPendingUseCase,
     RelationshipConflictError,
@@ -174,21 +174,22 @@ def expand_story_arc(
     arc_number: int,
     feedback: str = "",
 ) -> BookBlueprint:
-    """展开某一幕对应的章节。"""
+    """按顺序为某一幕生成下一章。"""
     context = _build_context(config_path, db, book_id)
-    return ExpandStoryArcUseCase(context).execute(arc_number, feedback)
+    return GenerateNextArcChapterUseCase(context).execute(arc_number, feedback)
 
 
-def regenerate_roadmap_stage(
+def regenerate_arc_chapter(
     db: Database,
     config_path: str,
     book_id: int,
     arc_number: int,
+    chapter_number: int,
     feedback: str = "",
 ) -> BookBlueprint:
-    """只重生成某个阶段覆盖的章节范围。"""
+    """只重生成某一幕中的最后一章。"""
     context = _build_context(config_path, db, book_id)
-    return RegenerateRoadmapStageUseCase(context).execute(arc_number, feedback)
+    return RegenerateArcChapterUseCase(context).execute(arc_number, chapter_number, feedback)
 
 
 def regenerate_story_arc(

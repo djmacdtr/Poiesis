@@ -1,15 +1,18 @@
 /**
- * 书籍管理页：按书配置语言、文风与命名策略
+ * 作品库 / 作品设置页：
+ * 工作台已经迁移到独立的 /workspace，这里只负责作品资产管理与基础配置。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, Plus } from 'lucide-react'
+import { ArrowRight, BookOpen, LibraryBig, Plus, Settings2 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { createBook, fetchBookBlueprint, fetchBooks, saveCreationIntent, updateBook } from '@/services/books'
-import type { BookCreateWizardRequest, BookItem, BookUpsertRequest } from '@/types'
-import { LoadingSpinner, ErrorMessage } from '@/components/Feedback'
 import { BookCreateModal } from '@/components/BookCreateModal'
-import { BookBlueprintWorkspace } from '@/components/BookBlueprintWorkspace'
+import { ErrorMessage, LoadingSpinner } from '@/components/Feedback'
+import { useActiveBook, resolveActiveBookId } from '@/contexts/ActiveBookContext'
+import { formatLanguageLabel, formatStylePresetLabel, formatNamingPolicyLabel } from '@/lib/display-labels'
+import { createBook, fetchBooks, saveCreationIntent, updateBook } from '@/services/books'
+import type { BookCreateWizardRequest, BookItem, BookUpsertRequest } from '@/types'
 
 const STYLE_PRESETS: Array<{ value: string; label: string; prompt: string }> = [
   {
@@ -29,20 +32,11 @@ const STYLE_PRESETS: Array<{ value: string; label: string; prompt: string }> = [
   },
 ]
 
-function getLanguageLabel(language: string): string {
-  if (language === 'zh-CN') return '中文'
-  if (language === 'en-US') return '英文'
-  return language
-}
-
-function getStylePresetLabel(stylePreset: string): string {
-  return STYLE_PRESETS.find((item) => item.value === stylePreset)?.label ?? stylePreset
-}
-
 export default function BooksPage() {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { activeBookId, setActiveBookId } = useActiveBook()
 
-  const [activeBookId, setActiveBookId] = useState<number>(1)
   const [bookName, setBookName] = useState('')
   const [bookLanguage, setBookLanguage] = useState('zh-CN')
   const [bookStylePreset, setBookStylePreset] = useState('literary_cn')
@@ -57,11 +51,11 @@ export default function BooksPage() {
     staleTime: 30_000,
   })
 
-  const { data: blueprint } = useQuery({
-    queryKey: ['bookBlueprint', activeBookId],
-    queryFn: () => fetchBookBlueprint(activeBookId),
-    enabled: books.length > 0 && activeBookId > 0,
-  })
+  const selectedBookId = resolveActiveBookId(activeBookId, books)
+  const selectedBook = useMemo(
+    () => books.find((book) => book.id === selectedBookId) ?? null,
+    [books, selectedBookId],
+  )
 
   const createMutation = useMutation({
     mutationFn: async (payload: BookCreateWizardRequest) => {
@@ -69,37 +63,48 @@ export default function BooksPage() {
       await saveCreationIntent(created.id, payload.intent)
       return created
     },
-    onSuccess: (created) => {
-      queryClient.invalidateQueries({ queryKey: ['books'] })
-      queryClient.invalidateQueries({ queryKey: ['bookBlueprint', created.id] })
+    onSuccess: async (created) => {
       setActiveBookId(created.id)
       setCreateModalOpen(false)
-      toast.success('作品已创建，请继续确认整书蓝图')
+      await queryClient.invalidateQueries({ queryKey: ['books'] })
+      toast.success('作品已创建')
+      navigate(`/workspace?book=${created.id}`)
     },
     onError: (err: Error) => toast.error(`创建失败：${err.message}`),
   })
 
   const updateMutation = useMutation({
     mutationFn: (params: { id: number; payload: BookUpsertRequest }) => updateBook(params.id, params.payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['books'] })
-      toast.success('书籍配置已更新')
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['books'] })
+      toast.success('作品设置已更新')
     },
     onError: (err: Error) => toast.error(`更新失败：${err.message}`),
   })
 
   useEffect(() => {
-    if (books.length === 0) return
-    const selected = books.find((b) => b.id === activeBookId)
-    const current = selected ?? books.find((b) => b.is_default) ?? books[0]
-    if (!selected) setActiveBookId(current.id)
-    setBookName(current.name)
-    setBookLanguage(current.language)
-    setBookStylePreset(current.style_preset)
-    setBookStylePrompt(current.style_prompt)
-    setBookNamingPolicy(current.naming_policy)
-    setBookIsDefault(current.is_default)
-  }, [activeBookId, books])
+    /**
+     * 作品库页不再拥有自己的“选书真源”。
+     * 它只消费全局当前作品，并在书籍列表变化后把表单同步到当前书上。
+     * 这样从左侧导航切书、从工作台跳回作品库时，表单会自动跟随同一本书。
+     */
+    if (books.length === 0) {
+      return
+    }
+    if (selectedBookId !== activeBookId) {
+      setActiveBookId(selectedBookId)
+      return
+    }
+    if (!selectedBook) {
+      return
+    }
+    setBookName(selectedBook.name)
+    setBookLanguage(selectedBook.language)
+    setBookStylePreset(selectedBook.style_preset)
+    setBookStylePrompt(selectedBook.style_prompt)
+    setBookNamingPolicy(selectedBook.naming_policy)
+    setBookIsDefault(selectedBook.is_default)
+  }, [activeBookId, books, selectedBook, selectedBookId, setActiveBookId])
 
   const buildUpdatePayload = (): BookUpsertRequest => ({
     name: bookName.trim() || '未命名小说',
@@ -110,149 +115,196 @@ export default function BooksPage() {
     is_default: bookIsDefault,
   })
 
-  if (isLoading) return <LoadingSpinner text="加载书籍配置中…" />
+  if (isLoading) return <LoadingSpinner text="加载作品库中…" />
   if (error) return <ErrorMessage message={(error as Error).message} />
 
   return (
-    <div className="space-y-6 max-w-6xl">
-      <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
-        <BookOpen className="w-5 h-5" />
-        作品与蓝图管理
-      </h2>
-
-      <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="book-select-page">
-            选择书籍
-          </label>
-          <select
-            id="book-select-page"
-            value={activeBookId}
-            onChange={(e) => setActiveBookId(Number(e.target.value))}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
-          >
-            {books.map((book) => (
-              <option key={book.id} value={book.id}>
-                {book.name}（{getLanguageLabel(book.language)} / {getStylePresetLabel(book.style_preset)}{book.is_default ? ' / 默认' : ''}）
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="book-name-page">
-            书名
-          </label>
-          <input
-            id="book-name-page"
-            type="text"
-            value={bookName}
-            onChange={(e) => setBookName(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          />
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <div className="space-y-6">
+      <section className="rounded-[28px] border border-stone-200 bg-white px-6 py-5 shadow-sm">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="book-language-page">
-              语言
-            </label>
-            <select
-              id="book-language-page"
-              value={bookLanguage}
-              onChange={(e) => setBookLanguage(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
-            >
-              <option value="zh-CN">中文</option>
-              <option value="en-US">英文</option>
-            </select>
+            <div className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
+              <LibraryBig className="h-3.5 w-3.5" />
+              作品库与基础配置
+            </div>
+            <h2 className="mt-3 text-2xl font-semibold text-stone-900">先整理作品资产，再进入创作工作台</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-600">
+              这里不再承载整书蓝图主流程，只负责切换作品、维护语言与文风、以及新建项目。
+            </p>
           </div>
-
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="book-naming-policy-page">
-              专名策略
-            </label>
-            <select
-              id="book-naming-policy-page"
-              value={bookNamingPolicy}
-              onChange={(e) => setBookNamingPolicy(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => selectedBook && navigate(`/workspace?book=${selectedBook.id}`)}
+              disabled={!selectedBook}
+              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
             >
-              <option value="localized_zh">中文化（音译/意译）</option>
-              <option value="preserve_original">保留原名</option>
-              <option value="hybrid">混合策略</option>
-            </select>
+              进入当前工作台
+              <ArrowRight className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setCreateModalOpen(true)}
+              disabled={createMutation.isPending}
+              className="inline-flex items-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
+            >
+              <Plus className="h-4 w-4" />
+              新建作品
+            </button>
           </div>
         </div>
+      </section>
 
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="book-style-preset-page">
-            文风预设
-          </label>
-          <select
-            id="book-style-preset-page"
-            value={bookStylePreset}
-            onChange={(e) => {
-              const preset = e.target.value
-              setBookStylePreset(preset)
-              const hit = STYLE_PRESETS.find((item) => item.value === preset)
-              if (hit) setBookStylePrompt(hit.prompt)
-            }}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
-          >
-            {STYLE_PRESETS.map((preset) => (
-              <option key={preset.value} value={preset.value}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
-        </div>
+      <div className="grid gap-6 xl:grid-cols-[340px_minmax(0,1fr)]">
+        <section className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
+          <div className="flex items-center gap-2">
+            <BookOpen className="h-5 w-5 text-stone-500" />
+            <h3 className="text-base font-semibold text-stone-900">作品列表</h3>
+          </div>
+          <div className="mt-4 space-y-3">
+            {books.map((book) => {
+              const isActive = book.id === selectedBookId
+              return (
+                <button
+                  key={book.id}
+                  type="button"
+                  onClick={() => setActiveBookId(book.id)}
+                  className={`w-full rounded-2xl border px-4 py-4 text-left transition-colors ${
+                    isActive
+                      ? 'border-emerald-200 bg-emerald-50/80'
+                      : 'border-stone-200 bg-stone-50 hover:bg-stone-100'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-stone-900">{book.name}</p>
+                      <p className="mt-1 text-xs text-stone-500">
+                        {formatLanguageLabel(book.language)} · {formatStylePresetLabel(book.style_preset)}
+                      </p>
+                    </div>
+                    {book.is_default ? (
+                      <span className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-emerald-700">
+                        默认
+                      </span>
+                    ) : null}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </section>
 
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1" htmlFor="book-style-prompt-page">
-            自定义文风描述
-          </label>
-          <textarea
-            id="book-style-prompt-page"
-            value={bookStylePrompt}
-            onChange={(e) => setBookStylePrompt(e.target.value)}
-            rows={4}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            placeholder="例如：多用短句推进冲突，减少解释性旁白，结尾留悬念。"
-          />
-        </div>
+        <section className="rounded-[28px] border border-stone-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center gap-2">
+            <Settings2 className="h-5 w-5 text-stone-500" />
+            <div>
+              <h3 className="text-base font-semibold text-stone-900">作品设置</h3>
+              <p className="mt-1 text-sm text-stone-500">这些基础配置会影响后续蓝图生成与命名策略。</p>
+            </div>
+          </div>
 
-        <label className="inline-flex items-center gap-2 text-sm text-gray-700">
-          <input
-            type="checkbox"
-            checked={bookIsDefault}
-            onChange={(e) => setBookIsDefault(e.target.checked)}
-            className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-          />
-          设为默认书籍
-        </label>
+          {!selectedBook ? (
+            <div className="mt-6 rounded-2xl border border-dashed border-stone-300 px-4 py-8 text-sm text-stone-500">
+              当前还没有可编辑作品，请先新建。
+            </div>
+          ) : (
+            <div className="mt-5 space-y-5">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-stone-500">书名</label>
+                <input
+                  value={bookName}
+                  onChange={(event) => setBookName(event.target.value)}
+                  className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
+                />
+              </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => updateMutation.mutate({ id: activeBookId, payload: buildUpdatePayload() })}
-            disabled={updateMutation.isPending || books.length === 0}
-            className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-          >
-            {updateMutation.isPending ? '保存中…' : '保存当前书籍'}
-          </button>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-stone-500">语言</label>
+                  <select
+                    value={bookLanguage}
+                    onChange={(event) => setBookLanguage(event.target.value)}
+                    className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm"
+                  >
+                    <option value="zh-CN">中文</option>
+                    <option value="en-US">英文</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-stone-500">专名策略</label>
+                  <select
+                    value={bookNamingPolicy}
+                    onChange={(event) => setBookNamingPolicy(event.target.value)}
+                    className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm"
+                  >
+                    <option value="localized_zh">中文化（音译/意译）</option>
+                    <option value="preserve_original">保留原名</option>
+                    <option value="hybrid">混合策略</option>
+                  </select>
+                  <p className="mt-1 text-xs text-stone-400">当前显示：{formatNamingPolicyLabel(bookNamingPolicy)}</p>
+                </div>
+              </div>
 
-          <button
-            onClick={() => setCreateModalOpen(true)}
-            disabled={createMutation.isPending}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            新建作品
-          </button>
-        </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-stone-500">文风预设</label>
+                <select
+                  value={bookStylePreset}
+                  onChange={(event) => {
+                    const preset = event.target.value
+                    setBookStylePreset(preset)
+                    const hit = STYLE_PRESETS.find((item) => item.value === preset)
+                    if (hit) {
+                      setBookStylePrompt(hit.prompt)
+                    }
+                  }}
+                  className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm"
+                >
+                  {STYLE_PRESETS.map((preset) => (
+                    <option key={preset.value} value={preset.value}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-stone-500">自定义文风描述</label>
+                <textarea
+                  value={bookStylePrompt}
+                  onChange={(event) => setBookStylePrompt(event.target.value)}
+                  rows={5}
+                  className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
+                  placeholder="例如：多用短句推进冲突，减少解释性旁白，结尾保留强钩子。"
+                />
+              </div>
+
+              <label className="inline-flex items-center gap-2 text-sm text-stone-700">
+                <input
+                  type="checkbox"
+                  checked={bookIsDefault}
+                  onChange={(event) => setBookIsDefault(event.target.checked)}
+                  className="rounded border-stone-300"
+                />
+                设为默认作品
+              </label>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => updateMutation.mutate({ id: selectedBook.id, payload: buildUpdatePayload() })}
+                  disabled={updateMutation.isPending}
+                  className="rounded-xl bg-stone-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-stone-800 disabled:opacity-50"
+                >
+                  {updateMutation.isPending ? '保存中…' : '保存作品设置'}
+                </button>
+                <button
+                  onClick={() => navigate(`/workspace?book=${selectedBook.id}`)}
+                  className="rounded-xl border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-700 hover:bg-stone-50"
+                >
+                  去工作台继续蓝图
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
       </div>
-
-      {activeBookId > 0 && <BookBlueprintWorkspace bookId={activeBookId} blueprint={blueprint} />}
 
       <BookCreateModal
         open={createModalOpen}

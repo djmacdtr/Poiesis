@@ -202,6 +202,7 @@ CREATE TABLE IF NOT EXISTS book_blueprints (
     expanded_arc_numbers_json JSON DEFAULT '[]',
     roadmap_draft_json JSON DEFAULT '[]',
     roadmap_confirmed_json JSON DEFAULT '[]',
+    blueprint_continuity_state_json JSON DEFAULT '{}',
     roadmap_validation_issues_json JSON DEFAULT '[]',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
