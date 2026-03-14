@@ -103,6 +103,76 @@ const CONTINUITY_EVENT_KIND_LABELS: Record<string, string> = {
   world_update: '世界更新',
 }
 
+const CREATIVE_ISSUE_STATUS_LABELS: Record<string, string> = {
+  open: '待处理',
+  planned: '已规划',
+  awaiting_approval: '待确认',
+  applied: '已执行',
+  verified: '已复验',
+  escalated: '已升级',
+  dismissed: '已忽略',
+}
+
+const CREATIVE_REPAIRABILITY_LABELS: Record<string, string> = {
+  deterministic: '结构补丁',
+  llm: '需要改写',
+  manual: '建议手动处理',
+}
+
+/**
+ * 问题来源层用于告诉作者“这个问题来自哪一层真源”。
+ * roadmap 之外的层目前还只接入了检测或只读视图，因此需要单独翻译出来源，
+ * 避免作者误以为所有问题都已经支持一键执行修复。
+ */
+const CREATIVE_SOURCE_LAYER_LABELS: Record<string, string> = {
+  blueprint: '蓝图层',
+  roadmap: '章节路线',
+  scene: '场景生成',
+  review: '审阅队列',
+  canon: '设定同步',
+}
+
+const CREATIVE_STRATEGY_LABELS: Record<string, string> = {
+  field_patch: '字段级修补',
+  chapter_rewrite: '单章重写',
+  arc_rewrite: '阶段重写',
+  scene_rewrite: '场景重写',
+  canon_sync: '设定同步',
+}
+
+const CREATIVE_RISK_LABELS: Record<string, string> = {
+  low: '低风险',
+  medium: '中风险',
+  high: '高风险',
+}
+
+const CREATIVE_RUN_STATUS_LABELS: Record<string, string> = {
+  queued: '排队中',
+  running: '执行中',
+  succeeded: '执行成功',
+  failed: '执行失败',
+  rolled_back: '已回滚',
+}
+
+const SCENE_STATUS_LABELS: Record<string, string> = {
+  pending: '等待中',
+  running: '运行中',
+  completed: '已完成',
+  needs_review: '待审阅',
+  approved: '已通过',
+  failed: '失败',
+}
+
+const REVIEW_STATUS_LABELS: Record<string, string> = {
+  pending: '待处理',
+  completed: '已处理',
+  failed: '执行失败',
+}
+
+const CREATIVE_ISSUE_TYPE_LABELS: Record<string, string> = {
+  scene_review_pending: '待审阅场景',
+}
+
 export function formatLanguageLabel(language?: string | null): string {
   if (!language) return '未填写'
   return LANGUAGE_LABELS[language] ?? language
@@ -187,4 +257,49 @@ export function formatContinuityLoopLabel(loop: {
 export function formatContinuityEventKindLabel(kind?: string | null): string {
   if (!kind) return '未标注事件'
   return CONTINUITY_EVENT_KIND_LABELS[kind] ?? kind
+}
+
+export function formatCreativeIssueStatusLabel(status?: string | null): string {
+  if (!status) return '待处理'
+  return CREATIVE_ISSUE_STATUS_LABELS[status] ?? status
+}
+
+export function formatCreativeRepairabilityLabel(repairability?: string | null): string {
+  if (!repairability) return '待判断'
+  return CREATIVE_REPAIRABILITY_LABELS[repairability] ?? repairability
+}
+
+export function formatCreativeSourceLayerLabel(sourceLayer?: string | null): string {
+  if (!sourceLayer) return '未标注来源'
+  return CREATIVE_SOURCE_LAYER_LABELS[sourceLayer] ?? sourceLayer
+}
+
+export function formatCreativeStrategyLabel(strategy?: string | null): string {
+  if (!strategy) return '待判断'
+  return CREATIVE_STRATEGY_LABELS[strategy] ?? strategy
+}
+
+export function formatCreativeRiskLabel(risk?: string | null): string {
+  if (!risk) return '未标注风险'
+  return CREATIVE_RISK_LABELS[risk] ?? risk
+}
+
+export function formatCreativeRunStatusLabel(status?: string | null): string {
+  if (!status) return '未执行'
+  return CREATIVE_RUN_STATUS_LABELS[status] ?? status
+}
+
+export function formatSceneStatusLabel(status?: string | null): string {
+  if (!status) return '未标注'
+  return SCENE_STATUS_LABELS[status] ?? status
+}
+
+export function formatReviewStatusLabel(status?: string | null): string {
+  if (!status) return '未标注'
+  return REVIEW_STATUS_LABELS[status] ?? status
+}
+
+export function formatCreativeIssueTypeLabel(issueType?: string | null): string {
+  if (!issueType) return '未标注问题类型'
+  return CREATIVE_ISSUE_TYPE_LABELS[issueType] ?? issueType
 }

@@ -23,6 +23,7 @@ from poiesis.application.blueprint_contracts import (
 )
 from poiesis.application.blueprint_use_cases import (
     AcceptRegeneratedConceptVariantUseCase,
+    ApplyCreativeRepairProposalUseCase,
     BlueprintContext,
     ConfirmBlueprintLayerUseCase,
     ConfirmRelationshipGraphUseCase,
@@ -35,14 +36,18 @@ from poiesis.application.blueprint_use_cases import (
     GenerateRoadmapUseCase,
     GenerateStoryArcsUseCase,
     GenerateWorldBlueprintUseCase,
+    GetCreativeRepairProposalUseCase,
     GetRelationshipGraphUseCase,
     ListRelationshipPendingUseCase,
+    PlanCreativeRepairsUseCase,
     RegenerateArcChapterUseCase,
     RegenerateConceptVariantUseCase,
     RegenerateStoryArcUseCase,
     RejectRelationshipPendingUseCase,
     RelationshipConflictError,
     ReplanBlueprintUseCase,
+    ReverifyCreativeIssuesUseCase,
+    RollbackCreativeRepairRunUseCase,
     SaveCreationIntentUseCase,
     SelectConceptVariantUseCase,
     UpsertRelationshipEdgeUseCase,
@@ -80,6 +85,68 @@ def _build_context(config_path: str, db: Database, book_id: int) -> BlueprintCon
 def get_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
     """读取当前作品的整书蓝图状态。"""
     return build_book_blueprint(db, book_id)
+
+
+def list_creative_issues(db: Database, book_id: int) -> list[dict[str, object]]:
+    """读取当前控制面问题队列。"""
+    return [
+        item.model_dump(mode="json")
+        for item in build_book_blueprint(db, book_id).creative_issues
+    ]
+
+
+def plan_creative_repairs(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    issue_ids: list[str] | None = None,
+) -> BookBlueprint:
+    """为当前问题队列生成修复提案。"""
+    context = _build_context(config_path, db, book_id)
+    return PlanCreativeRepairsUseCase(context).execute(issue_ids or [])
+
+
+def get_creative_repair_proposal(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    proposal_id: str,
+) -> dict[str, object]:
+    """读取单条修复提案。"""
+    context = _build_context(config_path, db, book_id)
+    return GetCreativeRepairProposalUseCase(context).execute(proposal_id).model_dump(mode="json")
+
+
+def apply_creative_repair_proposal(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    proposal_id: str,
+) -> BookBlueprint:
+    """执行指定修复提案。"""
+    context = _build_context(config_path, db, book_id)
+    return ApplyCreativeRepairProposalUseCase(context).execute(proposal_id)
+
+
+def rollback_creative_repair_run(
+    db: Database,
+    config_path: str,
+    book_id: int,
+    run_id: str,
+) -> BookBlueprint:
+    """按执行记录回滚修复结果。"""
+    context = _build_context(config_path, db, book_id)
+    return RollbackCreativeRepairRunUseCase(context).execute(run_id)
+
+
+def reverify_creative_issues(
+    db: Database,
+    config_path: str,
+    book_id: int,
+) -> BookBlueprint:
+    """重新扫描当前章节路线，刷新控制面问题队列。"""
+    context = _build_context(config_path, db, book_id)
+    return ReverifyCreativeIssuesUseCase(context).execute()
 
 
 def save_creation_intent(db: Database, config_path: str, book_id: int, payload: dict[str, Any]) -> BookBlueprint:

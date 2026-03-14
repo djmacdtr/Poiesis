@@ -16,6 +16,9 @@ from poiesis.application.blueprint_contracts import (
     ConceptVariant,
     ConceptVariantRegenerationResult,
     CreationIntent,
+    CreativeIssue,
+    CreativeRepairProposal,
+    CreativeRepairRun,
     RelationshipBlueprintEdge,
     RelationshipConflictReport,
     RelationshipPendingItem,
@@ -24,6 +27,7 @@ from poiesis.application.blueprint_contracts import (
     StoryArcPlan,
     WorldBlueprint,
 )
+from poiesis.application.creative_orchestrator import CreativeOrchestrator
 from poiesis.db.database import Database
 from poiesis.llm.base import LLMClient
 from poiesis.pipeline.planning.roadmap_planner import RoadmapPlanner
@@ -119,6 +123,143 @@ def _build_unexpanded_arc_issues(
     return issues
 
 
+def _build_review_queue_creative_issues(db: Database, book_id: int) -> list[CreativeIssue]:
+    """把待审阅 scene 项折叠进统一问题队列。
+
+    当前属于第二阶段“最小接入”：
+    - review / scene 先只进入统一控制面，方便作者在同一页看到跨层问题来源；
+    - 这些问题暂时仍是只读，不接入 apply / rollback；
+    - 后续如果 scene verifier 与 review queue 分开建 detector，这里再细分 source_layer。
+    """
+    issues: list[CreativeIssue] = []
+    if not hasattr(db, "list_scene_reviews"):
+        return issues
+
+    for review in db.list_scene_reviews(book_id):
+        if str(review.get("status") or "") != "pending":
+            continue
+        review_id = int(review.get("id") or 0)
+        run_id = int(review.get("run_id") or 0)
+        chapter_number = int(review.get("chapter_number") or 0) or None
+        scene_number = int(review.get("scene_number") or 0) or None
+        review_status = str(review.get("status") or "").strip()
+        reason = str(review.get("reason") or "").strip()
+        scene_status = str(review.get("scene_status") or "").strip() or "needs_review"
+        latest_result_summary = str(review.get("latest_result_summary") or "").strip()
+        patch_text = str(review.get("patch_text") or "").strip()
+        event_count = int(review.get("event_count") or 0)
+        message = (
+            f"第 {chapter_number} 章第 {scene_number} 场待审阅：{reason or latest_result_summary or '存在需要人工处理的场景问题。'}"
+            if chapter_number and scene_number
+            else reason or latest_result_summary or "存在需要人工处理的场景问题。"
+        )
+        issues.append(
+            CreativeIssue(
+                issue_id=f"review-issue-{review_id}",
+                book_id=book_id,
+                source_layer="review",
+                target_type="scene_chapter",
+                target_ref={
+                    "review_id": review_id,
+                    "run_id": run_id,
+                    "chapter_number": chapter_number,
+                    "scene_number": scene_number,
+                },
+                issue_type="scene_review_pending",
+                severity="fatal",
+                message=message,
+                detected_by="scene_review_queue",
+                repairability="manual",
+                status="open",
+                suggested_strategy="scene_rewrite",
+                # review 当前只读接入工作台，因此把详情显式塞进 context_payload。
+                # 这样前端 inspector 可以展示结构化审阅信息，而不是从 message 里反向拆字段。
+                context_payload={
+                    "review_id": review_id,
+                    "run_id": run_id,
+                    "chapter_number": chapter_number,
+                    "scene_number": scene_number,
+                    "review_status": review_status,
+                    "reason": reason,
+                    "scene_status": scene_status,
+                    "latest_result_summary": latest_result_summary,
+                    "event_count": event_count,
+                    "patch_text": patch_text,
+                },
+            )
+        )
+    return issues
+
+
+def _load_creative_repair_proposals(state: dict[str, Any]) -> list[CreativeRepairProposal]:
+    """把蓝图状态里的修复提案反序列化成正式模型。"""
+    return [
+        CreativeRepairProposal.model_validate(item)
+        for item in state.get("creative_repair_proposals") or []
+        if isinstance(item, dict)
+    ]
+
+
+def _load_creative_repair_runs(state: dict[str, Any]) -> list[CreativeRepairRun]:
+    """把蓝图状态里的执行记录反序列化成正式模型。"""
+    return [
+        CreativeRepairRun.model_validate(item)
+        for item in state.get("creative_repair_runs") or []
+        if isinstance(item, dict)
+    ]
+
+
+def _load_creative_control_snapshots(state: dict[str, Any]) -> list[dict[str, object]]:
+    """读取控制面快照列表。
+
+    快照暂时只在用例层按 dict 处理，避免为第一阶段回滚额外引入一层不必要的数据库结构。
+    """
+    return [
+        item
+        for item in state.get("creative_control_snapshots") or []
+        if isinstance(item, dict)
+    ]
+
+
+def _upsert_blueprint_business_state(
+    db: Database,
+    book_id: int,
+    payload: dict[str, object],
+    *,
+    creative_repair_proposals: list[dict[str, object]] | None = None,
+    creative_repair_runs: list[dict[str, object]] | None = None,
+    creative_control_snapshots: list[dict[str, object]] | None = None,
+) -> None:
+    """把业务真源和控制面状态一次性写回 book_blueprints。
+
+    回滚时需要恢复一整个蓝图工作态，但又不能把 proposals / runs 历史抹掉，
+    因此这里把“业务真源”和“控制面元数据”显式分开。
+    """
+    db.upsert_book_blueprint_state(
+        book_id,
+        status=str(payload.get("status") or "intent_pending"),
+        current_step=str(payload.get("current_step") or "intent"),
+        selected_variant_id=cast(int | None, payload.get("selected_variant_id")),
+        active_revision_id=cast(int | None, payload.get("active_revision_id")),
+        world_draft=cast(dict[str, Any] | None, payload.get("world_draft")),
+        world_confirmed=cast(dict[str, Any] | None, payload.get("world_confirmed")),
+        character_draft=cast(list[dict[str, Any]] | None, payload.get("character_draft")),
+        character_confirmed=cast(list[dict[str, Any]] | None, payload.get("character_confirmed")),
+        relationship_graph_draft=cast(list[dict[str, Any]] | None, payload.get("relationship_graph_draft")),
+        relationship_graph_confirmed=cast(list[dict[str, Any]] | None, payload.get("relationship_graph_confirmed")),
+        story_arcs_draft=cast(list[dict[str, Any]] | None, payload.get("story_arcs_draft")),
+        story_arcs_confirmed=cast(list[dict[str, Any]] | None, payload.get("story_arcs_confirmed")),
+        expanded_arc_numbers=cast(list[int] | None, payload.get("expanded_arc_numbers")),
+        roadmap_draft=cast(list[dict[str, Any]] | None, payload.get("roadmap_draft")),
+        roadmap_confirmed=cast(list[dict[str, Any]] | None, payload.get("roadmap_confirmed")),
+        blueprint_continuity_state=cast(dict[str, Any] | None, payload.get("blueprint_continuity_state")),
+        roadmap_validation_issues=cast(list[dict[str, Any]] | None, payload.get("roadmap_validation_issues")),
+        creative_repair_proposals=creative_repair_proposals,
+        creative_repair_runs=creative_repair_runs,
+        creative_control_snapshots=creative_control_snapshots,
+    )
+
+
 def _load_confirmed_world(planner: RoadmapPlanner, state: dict[str, Any]) -> WorldBlueprint | None:
     """连续性校验只参考已确认世界观，没有确认就退回到 None。"""
     if not state.get("world_confirmed"):
@@ -144,6 +285,7 @@ def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
     """把当前蓝图工作态和版本快照组装成统一响应。"""
     state = db.get_book_blueprint_state(book_id) or {}
     planner = RoadmapPlanner()
+    orchestrator = CreativeOrchestrator(planner)
     intent_row = db.get_creation_intent(book_id)
     variants = [ConceptVariant.model_validate(item) for item in db.list_concept_variants(book_id)]
     selected_variant = None
@@ -205,6 +347,25 @@ def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
         *roadmap_issues,
         *_build_unexpanded_arc_issues(planner, base_story_arcs, expanded_arc_numbers, base_roadmap),
     ]
+    creative_repair_proposals = _load_creative_repair_proposals(state)
+    creative_repair_runs = _load_creative_repair_runs(state)
+    roadmap_creative_issues = orchestrator.build_creative_issues(
+        book_id=book_id,
+        story_arcs=base_story_arcs,
+        roadmap=base_roadmap,
+        roadmap_issues=roadmap_issues,
+        stored_proposals=creative_repair_proposals,
+    )
+    review_creative_issues = _build_review_queue_creative_issues(db, book_id)
+    creative_issues = sorted(
+        [*roadmap_creative_issues, *review_creative_issues],
+        key=lambda item: (
+            0 if item.severity == "fatal" else 1,
+            0 if item.source_layer == "roadmap" else 1,
+            int(item.target_ref.get("chapter_number") or 0),
+            item.issue_type,
+        ),
+    )
     decorated_story_arcs_draft = _decorate_story_arcs(
         planner,
         story_arcs_draft,
@@ -284,6 +445,9 @@ def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
             RoadmapValidationIssue.model_validate(item.model_dump(mode="json"))
             for item in roadmap_issues
         ],
+        creative_issues=creative_issues,
+        creative_repair_proposals=creative_repair_proposals,
+        creative_repair_runs=creative_repair_runs,
         revisions=revisions,
     )
 
@@ -499,6 +663,50 @@ class _BlueprintLayerBase:
     def _rebuild_continuity_state(self, roadmap: list[ChapterRoadmapItem]) -> dict[str, object]:
         """连续性工作态始终从 roadmap 重建，避免局部修改留下脏状态。"""
         return self._context.planner.rebuild_continuity_state(roadmap).model_dump(mode="json")
+
+    def _creative_orchestrator(self) -> CreativeOrchestrator:
+        """统一返回当前上下文使用的闭环编排器。
+
+        第一阶段虽然只落 roadmap，但问题识别、提案策略和回滚约束已经集中收口到
+        CreativeOrchestrator，避免后续 scene / canon 再各写一套相似逻辑。
+        """
+        return CreativeOrchestrator(self._context.planner)
+
+    def _load_story_arcs_and_roadmap(
+        self,
+        state: dict[str, Any],
+    ) -> tuple[list[StoryArcPlan], list[ChapterRoadmapItem], list[int]]:
+        """从当前蓝图工作态读取“正在生效的路线真源”。
+
+        这里优先取 draft，是因为第一阶段闭环控制面主要服务蓝图工作台；
+        只有在草稿为空时，才退回到 confirmed，保证老数据仍然能被只读检查。
+        """
+        story_arcs = self._context.planner.normalize_story_arcs_payload(
+            state.get("story_arcs_draft") or state.get("story_arcs_confirmed") or []
+        )
+        roadmap = self._context.planner.normalize_roadmap_payload(
+            state.get("roadmap_draft") or state.get("roadmap_confirmed") or []
+        )
+        expanded_arc_numbers = _normalize_expanded_arc_numbers(state.get("expanded_arc_numbers"), story_arcs)
+        return story_arcs, roadmap, expanded_arc_numbers
+
+    def _verify_roadmap_with_gate_issues(
+        self,
+        story_arcs: list[StoryArcPlan],
+        roadmap: list[ChapterRoadmapItem],
+        expanded_arc_numbers: list[int],
+    ) -> list[RoadmapValidationIssue]:
+        """把静态 verifier 结果和阶段门禁提示合并成统一问题集合。"""
+        issues = self._verify_roadmap(story_arcs, roadmap) if (story_arcs and roadmap) else []
+        return [
+            *issues,
+            *_build_unexpanded_arc_issues(
+                self._context.planner,
+                story_arcs,
+                expanded_arc_numbers,
+                roadmap,
+            ),
+        ]
 
     def _length_to_chapter_count(self, intent: CreationIntent) -> int:
         raw = intent.length_preference.strip()
@@ -926,6 +1134,245 @@ class RegenerateArcChapterUseCase(_BlueprintLayerBase):
             roadmap_draft=[item.model_dump(mode="json") for item in merged],
             blueprint_continuity_state=self._rebuild_continuity_state(merged),
             roadmap_validation_issues=[item.model_dump(mode="json") for item in merged_issues],
+        )
+        return build_book_blueprint(self._context.db, self._context.book_id)
+
+
+class PlanCreativeRepairsUseCase(_BlueprintLayerBase):
+    """基于当前问题队列生成修复提案。
+
+    第一阶段只接 roadmap，但这里已经按统一控制面的方式组织：
+    - issue 先统一标准化；
+    - 再按 deterministic / llm 分流成不同粒度的提案；
+    - 提案只写入控制面状态，不直接修改路线真源。
+    """
+
+    def execute(self, issue_ids: list[str] | None = None) -> BookBlueprint:
+        state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
+        story_arcs, roadmap, expanded_arc_numbers = self._load_story_arcs_and_roadmap(state)
+        if not story_arcs and not roadmap:
+            raise ValueError("当前还没有可修复的章节路线。")
+        orchestrator = self._creative_orchestrator()
+        proposals = orchestrator.plan_roadmap_repairs(
+            book_id=self._context.book_id,
+            story_arcs=story_arcs,
+            roadmap=roadmap,
+            roadmap_issues=self._verify_roadmap_with_gate_issues(story_arcs, roadmap, expanded_arc_numbers),
+            stored_proposals=_load_creative_repair_proposals(state),
+            issue_ids=list(issue_ids or []),
+            intent=self._require_intent() if self._context.db.get_creation_intent(self._context.book_id) else None,
+            variant=self._require_selected_variant() if state.get("selected_variant_id") else None,
+            world=self._load_confirmed_world_optional(),
+            characters=self._require_character_confirmed() if (state.get("character_confirmed") or state.get("character_draft")) else [],
+            llm=self._context.llm,
+        )
+        _upsert_blueprint_business_state(
+            self._context.db,
+            self._context.book_id,
+            payload=orchestrator.build_snapshot_payload(state),
+            creative_repair_proposals=[item.model_dump(mode="json") for item in proposals],
+            creative_repair_runs=[item.model_dump(mode="json") for item in _load_creative_repair_runs(state)],
+            creative_control_snapshots=_load_creative_control_snapshots(state),
+        )
+        return build_book_blueprint(self._context.db, self._context.book_id)
+
+
+class GetCreativeRepairProposalUseCase(_BlueprintLayerBase):
+    """按 proposal_id 读取单条修复提案。"""
+
+    def execute(self, proposal_id: str) -> CreativeRepairProposal:
+        state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
+        proposal = next(
+            (
+                item
+                for item in _load_creative_repair_proposals(state)
+                if item.proposal_id == proposal_id
+            ),
+            None,
+        )
+        if proposal is None:
+            raise ValueError("修复提案不存在。")
+        return proposal
+
+
+class ApplyCreativeRepairProposalUseCase(_BlueprintLayerBase):
+    """执行一条已生成的修复提案，并自动复验。
+
+    设计原则：
+    - apply 前先存 before 快照；
+    - apply 后重新构建 continuity / verifier；
+    - 失败时保留提案和失败 run，方便作者回看原因。
+    """
+
+    def execute(self, proposal_id: str) -> BookBlueprint:
+        state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
+        orchestrator = self._creative_orchestrator()
+        proposals = _load_creative_repair_proposals(state)
+        runs = _load_creative_repair_runs(state)
+        snapshots = _load_creative_control_snapshots(state)
+        proposal = next((item for item in proposals if item.proposal_id == proposal_id), None)
+        if proposal is None:
+            raise ValueError("修复提案不存在。")
+        if proposal.status not in {"awaiting_approval", "failed"}:
+            raise ValueError("当前提案不处于可执行状态。")
+        if str(state.get("status") or "") == "locked" and proposal.strategy_type != "field_patch":
+            raise ValueError("已锁定蓝图只允许字段级修复；大范围改写请改用未来章节重规划。")
+
+        story_arcs, roadmap, expanded_arc_numbers = self._load_story_arcs_and_roadmap(state)
+        before_payload = orchestrator.build_snapshot_payload(state)
+        next_snapshots, before_snapshot_id = orchestrator.append_snapshot(
+            book_id=self._context.book_id,
+            snapshots=snapshots,
+            payload=before_payload,
+            kind="before_apply",
+        )
+
+        try:
+            next_story_arcs, next_roadmap, next_expanded_arc_numbers = orchestrator.apply_proposal(
+                proposal=proposal,
+                story_arcs=story_arcs,
+                roadmap=roadmap,
+                expanded_arc_numbers=expanded_arc_numbers,
+            )
+            next_issues = self._verify_roadmap_with_gate_issues(
+                next_story_arcs,
+                next_roadmap,
+                next_expanded_arc_numbers,
+            )
+            business_payload = {
+                **before_payload,
+                "story_arcs_draft": [item.model_dump(mode="json") for item in next_story_arcs],
+                "expanded_arc_numbers": next_expanded_arc_numbers,
+                "roadmap_draft": [item.model_dump(mode="json") for item in next_roadmap],
+                "blueprint_continuity_state": self._rebuild_continuity_state(next_roadmap),
+                "roadmap_validation_issues": [item.model_dump(mode="json") for item in next_issues],
+                "status": (
+                    "roadmap_ready"
+                    if next_story_arcs and len(next_expanded_arc_numbers) == len(next_story_arcs)
+                    else str(before_payload.get("status") or "story_arcs_ready")
+                ),
+                "current_step": "roadmap",
+            }
+            next_snapshots, after_snapshot_id = orchestrator.append_snapshot(
+                book_id=self._context.book_id,
+                snapshots=next_snapshots,
+                payload=business_payload,
+                kind="after_apply",
+            )
+            updated_proposals: list[CreativeRepairProposal] = []
+            for item in proposals:
+                if item.proposal_id == proposal_id:
+                    updated_proposals.append(item.model_copy(update={"status": "applied"}))
+                else:
+                    updated_proposals.append(item)
+            updated_runs = [
+                *runs,
+                orchestrator.build_success_run(
+                    book_id=self._context.book_id,
+                    proposal_id=proposal_id,
+                    before_snapshot_ref=before_snapshot_id,
+                    after_snapshot_ref=after_snapshot_id,
+                    logs=[
+                        f"已执行提案：{proposal.summary}",
+                        "系统已自动重建连续性工作态并复验当前章节路线。",
+                    ],
+                ),
+            ]
+            _upsert_blueprint_business_state(
+                self._context.db,
+                self._context.book_id,
+                payload=business_payload,
+                creative_repair_proposals=[item.model_dump(mode="json") for item in updated_proposals],
+                creative_repair_runs=[item.model_dump(mode="json") for item in updated_runs],
+                creative_control_snapshots=next_snapshots,
+            )
+            return build_book_blueprint(self._context.db, self._context.book_id)
+        except Exception as exc:  # noqa: BLE001
+            failed_proposals = [
+                item.model_copy(update={"status": "failed"}) if item.proposal_id == proposal_id else item
+                for item in proposals
+            ]
+            failed_runs = [
+                *runs,
+                orchestrator.build_failed_run(
+                    book_id=self._context.book_id,
+                    proposal_id=proposal_id,
+                    error_message=str(exc),
+                ),
+            ]
+            _upsert_blueprint_business_state(
+                self._context.db,
+                self._context.book_id,
+                payload=before_payload,
+                creative_repair_proposals=[item.model_dump(mode="json") for item in failed_proposals],
+                creative_repair_runs=[item.model_dump(mode="json") for item in failed_runs],
+                creative_control_snapshots=next_snapshots,
+            )
+            raise
+
+
+class RollbackCreativeRepairRunUseCase(_BlueprintLayerBase):
+    """把一次已执行的修复回滚到 apply 前快照。"""
+
+    def execute(self, run_id: str) -> BookBlueprint:
+        state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
+        orchestrator = self._creative_orchestrator()
+        proposals = _load_creative_repair_proposals(state)
+        runs = _load_creative_repair_runs(state)
+        snapshots = _load_creative_control_snapshots(state)
+        target_run = next((item for item in runs if item.run_id == run_id), None)
+        if target_run is None:
+            raise ValueError("修复执行记录不存在。")
+        if target_run.status != "succeeded" or not target_run.before_snapshot_ref:
+            raise ValueError("当前执行记录不支持回滚。")
+        restored_payload = orchestrator.rollback_from_snapshot(
+            snapshots=snapshots,
+            snapshot_id=target_run.before_snapshot_ref,
+        )
+        updated_proposals = [
+            item.model_copy(update={"status": "rolled_back"}) if item.proposal_id == target_run.proposal_id else item
+            for item in proposals
+        ]
+        rollback_run = CreativeRepairRun(
+            run_id=f"{run_id}-rollback",
+            book_id=self._context.book_id,
+            proposal_id=target_run.proposal_id,
+            execution_mode="apply",
+            status="rolled_back",
+            logs=["已根据执行前快照回滚修复结果。"],
+            before_snapshot_ref=target_run.before_snapshot_ref,
+            after_snapshot_ref=target_run.after_snapshot_ref,
+            created_at=target_run.created_at,
+        )
+        _upsert_blueprint_business_state(
+            self._context.db,
+            self._context.book_id,
+            payload=restored_payload,
+            creative_repair_proposals=[item.model_dump(mode="json") for item in updated_proposals],
+            creative_repair_runs=[item.model_dump(mode="json") for item in [*runs, rollback_run]],
+            creative_control_snapshots=snapshots,
+        )
+        return build_book_blueprint(self._context.db, self._context.book_id)
+
+
+class ReverifyCreativeIssuesUseCase(_BlueprintLayerBase):
+    """重新扫描当前章节路线，刷新问题队列和复验结果。"""
+
+    def execute(self) -> BookBlueprint:
+        state = self._context.db.get_book_blueprint_state(self._context.book_id) or {}
+        story_arcs, roadmap, expanded_arc_numbers = self._load_story_arcs_and_roadmap(state)
+        refreshed_issues = self._verify_roadmap_with_gate_issues(story_arcs, roadmap, expanded_arc_numbers)
+        _upsert_blueprint_business_state(
+            self._context.db,
+            self._context.book_id,
+            payload={
+                **self._creative_orchestrator().build_snapshot_payload(state),
+                "roadmap_validation_issues": [item.model_dump(mode="json") for item in refreshed_issues],
+                "blueprint_continuity_state": self._rebuild_continuity_state(roadmap),
+            },
+            creative_repair_proposals=[item.model_dump(mode="json") for item in _load_creative_repair_proposals(state)],
+            creative_repair_runs=[item.model_dump(mode="json") for item in _load_creative_repair_runs(state)],
+            creative_control_snapshots=_load_creative_control_snapshots(state),
         )
         return build_book_blueprint(self._context.db, self._context.book_id)
 

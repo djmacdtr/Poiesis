@@ -12,16 +12,27 @@ import {
   type WorkspaceSidebarItem,
   WorkspaceSidebar,
 } from '@/components/workspace/WorkspaceSidebar'
-import { WorkspaceSummaryRail } from '@/components/workspace/WorkspaceSummaryRail'
+import { WorkspaceInspectorRail } from '@/components/workspace/WorkspaceInspectorRail'
+import { RoadmapArcBoard } from '@/components/workspace/RoadmapArcBoard'
+import { RoadmapChapterList } from '@/components/workspace/RoadmapChapterList'
+import { RoadmapControlPanel, type RoadmapViewMode } from '@/components/workspace/RoadmapControlPanel'
+import {
+  CreativeRepairBoard,
+  type CreativeIssueSourceFilter,
+} from '@/components/workspace/CreativeRepairBoard'
+import {
+  RoadmapInspectorPanel,
+  type RoadmapInspectorState,
+} from '@/components/workspace/RoadmapInspectorPanel'
 import {
   formatBlueprintStatusLabel,
   formatBlueprintStepLabel,
   formatContinuityEventKindLabel,
   formatContinuityLoopLabel,
+  formatCreativeSourceLayerLabel,
   formatLanguageLabel,
   formatLoopStatusLabel,
   formatNamingPolicyLabel,
-  parseLoopStatusValue,
   formatStylePresetLabel,
   parseTaskStatusValue,
   formatTaskStatusLabel,
@@ -39,6 +50,7 @@ import {
 } from '@/lib/relationship-graph'
 import {
   acceptRegeneratedConceptVariant,
+  applyCreativeRepairProposal,
   confirmRelationshipGraph,
   confirmRelationshipPending,
   confirmCharacterBlueprint,
@@ -51,11 +63,14 @@ import {
   generateStoryArcs,
   generateWorldBlueprint,
   expandStoryArc,
+  planCreativeRepairs,
   regenerateArcChapter,
   regenerateStoryArc,
   regenerateConceptVariant,
   rejectRelationshipPending,
+  reverifyCreativeIssues,
   replanBlueprint,
+  rollbackCreativeRepairRun,
   saveCreationIntent,
   selectConceptVariant,
   upsertRelationshipEdge,
@@ -68,6 +83,9 @@ import type {
   CharacterNode,
   CharacterBlueprint,
   ConceptVariantRegenerationResult,
+  CreativeIssue,
+  CreativeRepairProposal,
+  CreativeRepairRun,
   PlannedLoopItem,
   PlannedRelationshipBeat,
   PlannedTaskItem,
@@ -366,12 +384,27 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
    */
   const [selectedRoadmapChapterNumber, setSelectedRoadmapChapterNumber] = useState<number | null>(null)
   const [highlightedRoadmapChapterNumber, setHighlightedRoadmapChapterNumber] = useState<number | null>(null)
+  /**
+   * 路线页被拆成“阶段视图 / 修复视图”后，需要单独记录当前主视图。
+   * 这里仍然只影响前端展示，不改变后端蓝图状态机。
+   */
+  const [roadmapViewMode, setRoadmapViewMode] = useState<RoadmapViewMode>('stages')
+  /**
+   * 修复控制面中的选中态统一放在工作台壳层：
+   * - 主区三列卡片可以互相联动；
+   * - 右栏 inspector 可以根据同一个选中值展示详细差异或日志；
+   * - 刷新后若对象已不存在，会在下方 effect 中自动清空。
+   */
+  const [creativeIssueSourceFilter, setCreativeIssueSourceFilter] =
+    useState<CreativeIssueSourceFilter>('all')
+  const [selectedCreativeIssueId, setSelectedCreativeIssueId] = useState<string | null>(null)
+  const [selectedCreativeRepairProposalId, setSelectedCreativeRepairProposalId] = useState<string | null>(null)
+  const [selectedCreativeRepairRunId, setSelectedCreativeRepairRunId] = useState<string | null>(null)
   const [regenerationProposalByVariantId, setRegenerationProposalByVariantId] = useState<
     Record<number, ConceptVariantRegenerationResult>
   >({})
   const characterCardRefs = useRef<Record<string, HTMLElement | null>>({})
   const relationshipCardRefs = useRef<Record<string, HTMLElement | null>>({})
-  const roadmapChapterRefs = useRef<Record<number, HTMLElement | null>>({})
   const pendingSectionRef = useRef<HTMLDivElement | null>(null)
   const conflictSectionRef = useRef<HTMLDivElement | null>(null)
 
@@ -785,6 +818,42 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
     onError: (error: Error) => toast.error(error.message),
   })
 
+  const planCreativeRepairsMutation = useMutation({
+    mutationFn: (issueIds: string[] = []) => planCreativeRepairs(bookId, issueIds),
+    onSuccess: async () => {
+      toast.success('已生成修复提案，请先预览差异再决定是否执行')
+      await refreshBlueprint()
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+
+  const applyCreativeRepairProposalMutation = useMutation({
+    mutationFn: (proposalId: string) => applyCreativeRepairProposal(bookId, proposalId),
+    onSuccess: async () => {
+      toast.success('修复提案已执行，并已自动复验当前章节路线')
+      await refreshBlueprint()
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+
+  const rollbackCreativeRepairRunMutation = useMutation({
+    mutationFn: (runId: string) => rollbackCreativeRepairRun(bookId, runId),
+    onSuccess: async () => {
+      toast.success('已回滚到修复前快照')
+      await refreshBlueprint()
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+
+  const reverifyCreativeIssuesMutation = useMutation({
+    mutationFn: () => reverifyCreativeIssues(bookId),
+    onSuccess: async () => {
+      toast.success('已重新复验当前章节路线')
+      await refreshBlueprint()
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+
   const selectedVariantId = blueprint?.selected_variant_id
   const canGenerateCharacters = Boolean(blueprint?.world_confirmed)
   const canGenerateStoryArcs = Boolean(blueprint?.world_confirmed && blueprint?.character_confirmed.length)
@@ -813,6 +882,17 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
   const continuityState: BlueprintContinuityState =
     roadmapDraftDirty || !blueprint?.continuity_state ? localContinuityState : blueprint.continuity_state
   const roadmapIssues = roadmapDraftDirty ? localRoadmapIssues : blueprint?.roadmap_validation_issues ?? []
+  /**
+   * 闭环控制面默认只消费后端已持久化的工作态：
+   * - issue / proposal / run 都需要和数据库快照保持一致，才能支持 apply / rollback；
+   * - 如果用户本地正在编辑但尚未写回，我们先提示“请先保存或确认当前修改”，
+   *   避免拿一份未持久化的前端草稿去执行后端提案，造成状态分裂。
+   */
+  const creativeIssues: CreativeIssue[] = roadmapDraftDirty ? [] : blueprint?.creative_issues ?? []
+  const creativeRepairProposals: CreativeRepairProposal[] = roadmapDraftDirty
+    ? []
+    : blueprint?.creative_repair_proposals ?? []
+  const creativeRepairRuns: CreativeRepairRun[] = roadmapDraftDirty ? [] : blueprint?.creative_repair_runs ?? []
   const roadmapLockState = useMemo(
     () => summarizeRoadmapLockState(storyArcsToShow, expandedArcNumbers, roadmapIssues, roadmapToShow),
     [expandedArcNumbers, roadmapIssues, roadmapToShow, storyArcsToShow],
@@ -1052,13 +1132,158 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
         : [],
     [roadmapIssues, selectedRoadmapChapter],
   )
-  const lastGeneratedRoadmapChapterNumber = activeRoadmapArc?.generated_chapter_count
-    ? activeRoadmapArc.start_chapter + activeRoadmapArc.generated_chapter_count - 1
+  const pendingCreativeRepairCount = useMemo(
+    () => creativeRepairProposals.filter((item) => item.status === 'awaiting_approval').length,
+    [creativeRepairProposals],
+  )
+  /**
+   * 路线主区的核心规则是“只突出当前最早可行动阶段”：
+   * - 优先找后端明确标记 can_generate_next_chapter 的阶段；
+   * - 如果当前没有明确的可行动阶段，则回退到用户已经展开查看的阶段；
+   * - 这样主区始终有一个清晰焦点，不会再把所有阶段平铺成同一层级。
+   */
+  const currentActionableArc = useMemo(
+    () =>
+      storyArcsToShow.find((item) => item.can_generate_next_chapter) ??
+      activeRoadmapArc ??
+      storyArcsToShow[0] ??
+      null,
+    [activeRoadmapArc, storyArcsToShow],
+  )
+  const blockedRoadmapArcs = useMemo(
+    () =>
+      storyArcsToShow.filter(
+        (item) =>
+          item.arc_number !== currentActionableArc?.arc_number &&
+          item.status !== 'completed' &&
+          item.status !== 'confirmed',
+      ),
+    [currentActionableArc?.arc_number, storyArcsToShow],
+  )
+  const completedRoadmapArcs = useMemo(
+    () => storyArcsToShow.filter((item) => item.status === 'completed' || item.status === 'confirmed'),
+    [storyArcsToShow],
+  )
+  const currentArcChapters = useMemo(() => {
+    if (!currentActionableArc) {
+      return []
+    }
+    return roadmapToShow.filter(
+      (item) =>
+        item.chapter_number >= currentActionableArc.start_chapter &&
+        item.chapter_number <= currentActionableArc.end_chapter,
+    )
+  }, [currentActionableArc, roadmapToShow])
+  const archivedArcChapters = useMemo(
+    () =>
+      storyArcsToShow
+        .filter((arc) => arc.arc_number !== currentActionableArc?.arc_number)
+        .map((arc) => ({
+          arc,
+          chapters: roadmapToShow.filter(
+            (item) => item.chapter_number >= arc.start_chapter && item.chapter_number <= arc.end_chapter,
+          ),
+        }))
+        .filter((item) => item.chapters.length > 0),
+    [currentActionableArc?.arc_number, roadmapToShow, storyArcsToShow],
+  )
+  const selectedCreativeIssue = useMemo(
+    () => creativeIssues.find((item) => item.issue_id === selectedCreativeIssueId) ?? null,
+    [creativeIssues, selectedCreativeIssueId],
+  )
+  const selectedCreativeRepairProposal = useMemo(
+    () => creativeRepairProposals.find((item) => item.proposal_id === selectedCreativeRepairProposalId) ?? null,
+    [creativeRepairProposals, selectedCreativeRepairProposalId],
+  )
+  const selectedCreativeRepairRun = useMemo(
+    () => creativeRepairRuns.find((item) => item.run_id === selectedCreativeRepairRunId) ?? null,
+    [creativeRepairRuns, selectedCreativeRepairRunId],
+  )
+  /**
+   * 来源筛选本质上是在切换“当前控制面工作层”。
+   * 非 roadmap 层还没有 proposal / run 执行链，因此切过去时要主动清掉这些 roadmap 选中态，
+   * 否则右栏会停在旧提案详情，和当前筛选来源产生语义分裂。
+   */
+  const handleCreativeIssueSourceFilterChange = (filter: CreativeIssueSourceFilter) => {
+    setCreativeIssueSourceFilter(filter)
+    if (filter === 'all' || filter === 'roadmap') {
+      return
+    }
+    setSelectedCreativeRepairProposalId(null)
+    setSelectedCreativeRepairRunId(null)
+    setSelectedRoadmapChapterNumber(null)
+    setSelectedCreativeIssueId((current) => {
+      if (!current) {
+        return null
+      }
+      const matchedIssue = creativeIssues.find((item) => item.issue_id === current) ?? null
+      return matchedIssue?.source_layer === filter ? current : null
+    })
+  }
+  /**
+   * 右栏 inspector 的显示规则统一折叠到一个视图层状态对象里：
+   * - 同一时刻只允许出现一个主对象；
+   * - 章节、问题、提案、执行结果的优先级固定，避免 JSX 条件分支互相覆盖；
+   * - 后续 scene / review / canon 接入时，也能沿用同一套“选中对象 -> inspector 模式”。
+   */
+  const roadmapInspectorState = useMemo<RoadmapInspectorState>(() => {
+    if (selectedCreativeRepairProposal) {
+      return {
+        mode: 'proposal',
+        issue: null,
+        proposal: selectedCreativeRepairProposal,
+        run: null,
+        chapter: null,
+      }
+    }
+    if (selectedCreativeRepairRun) {
+      return {
+        mode: 'run',
+        issue: null,
+        proposal: null,
+        run: selectedCreativeRepairRun,
+        chapter: null,
+      }
+    }
+    if (selectedCreativeIssue) {
+      return {
+        mode: 'issue',
+        issue: selectedCreativeIssue,
+        proposal: null,
+        run: null,
+        chapter: null,
+      }
+    }
+    if (selectedRoadmapChapter) {
+      return {
+        mode: 'chapter',
+        issue: null,
+        proposal: null,
+        run: null,
+        chapter: selectedRoadmapChapter,
+      }
+    }
+    return {
+      mode: 'summary',
+      issue: null,
+      proposal: null,
+      run: null,
+      chapter: null,
+    }
+  }, [
+    selectedCreativeIssue,
+    selectedCreativeRepairProposal,
+    selectedCreativeRepairRun,
+    selectedRoadmapChapter,
+  ])
+  const chapterActionArc = activeRoadmapArc ?? currentActionableArc
+  const lastGeneratedVisibleRoadmapChapterNumber = chapterActionArc?.generated_chapter_count
+    ? chapterActionArc.start_chapter + chapterActionArc.generated_chapter_count - 1
     : null
-  const canRegenerateSelectedRoadmapChapter =
+  const canRegenerateFocusedRoadmapChapter =
     selectedRoadmapChapter !== null &&
-    lastGeneratedRoadmapChapterNumber !== null &&
-    selectedRoadmapChapter.chapter_number === lastGeneratedRoadmapChapterNumber
+    lastGeneratedVisibleRoadmapChapterNumber !== null &&
+    selectedRoadmapChapter.chapter_number === lastGeneratedVisibleRoadmapChapterNumber
 
   useEffect(() => {
     if (visibleRoadmapChapters.length === 0) {
@@ -1089,6 +1314,44 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
     }
   }, [graphSelection, relationshipGraphView])
 
+  useEffect(() => {
+    /**
+     * 路线页默认策略：
+     * - 一旦出现 fatal 或待确认修复提案，优先切到“修复视图”，
+     *   让作者先处理真正阻塞后续生成的问题；
+     * - 没有高优先级修复压力时，再回到“阶段视图”。
+     */
+    if (activeSection !== 'roadmap') {
+      return
+    }
+    if (totalFatalRoadmapIssues > 0 || pendingCreativeRepairCount > 0) {
+      setRoadmapViewMode('repair')
+      return
+    }
+    setRoadmapViewMode((current) => current)
+  }, [activeSection, pendingCreativeRepairCount, totalFatalRoadmapIssues])
+
+  useEffect(() => {
+    if (selectedCreativeIssueId && !creativeIssues.some((item) => item.issue_id === selectedCreativeIssueId)) {
+      setSelectedCreativeIssueId(null)
+    }
+  }, [creativeIssues, selectedCreativeIssueId])
+
+  useEffect(() => {
+    if (
+      selectedCreativeRepairProposalId &&
+      !creativeRepairProposals.some((item) => item.proposal_id === selectedCreativeRepairProposalId)
+    ) {
+      setSelectedCreativeRepairProposalId(null)
+    }
+  }, [creativeRepairProposals, selectedCreativeRepairProposalId])
+
+  useEffect(() => {
+    if (selectedCreativeRepairRunId && !creativeRepairRuns.some((item) => item.run_id === selectedCreativeRepairRunId)) {
+      setSelectedCreativeRepairRunId(null)
+    }
+  }, [creativeRepairRuns, selectedCreativeRepairRunId])
+
   const jumpToCharacterForm = (nodeId: string) => {
     setGraphSelection({ kind: 'node', id: nodeId })
     characterCardRefs.current[nodeId]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -1113,9 +1376,6 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
     }
     setSelectedRoadmapChapterNumber(chapterNumber)
     setHighlightedRoadmapChapterNumber(chapterNumber)
-    requestAnimationFrame(() => {
-      roadmapChapterRefs.current[chapterNumber]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    })
   }
 
   const toggleRoadmapArc = (arcNumber: number) => {
@@ -1124,6 +1384,7 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
 
   const jumpToRoadmapArc = (arcNumber: number) => {
     setActiveRoadmapArcNumber(arcNumber)
+    setSelectedRoadmapChapterNumber(null)
   }
 
   const handleStoryArcExpand = (arcNumber: number) => {
@@ -1302,15 +1563,43 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
               : activeSection === 'relationships'
                 ? '关系图谱摘要'
                 : activeSection === 'roadmap'
-                  ? selectedRoadmapChapter
-                    ? `第 ${selectedRoadmapChapter.chapter_number} 章细修`
-                    : '章节路线摘要'
+                  ? roadmapInspectorState.mode === 'proposal'
+                    ? '修复提案详情'
+                    : roadmapInspectorState.mode === 'run'
+                      ? '执行结果详情'
+                      : roadmapInspectorState.mode === 'issue'
+                        ? '问题详情'
+                        : roadmapInspectorState.mode === 'chapter' && roadmapInspectorState.chapter
+                          ? `第 ${roadmapInspectorState.chapter.chapter_number} 章细修`
+                          : creativeIssueSourceFilter === 'review'
+                            ? '审阅接入摘要'
+                            : creativeIssueSourceFilter === 'scene'
+                              ? '场景接入预留'
+                              : creativeIssueSourceFilter === 'canon'
+                                ? '设定同步预留'
+                                : currentActionableArc
+                            ? `第 ${currentActionableArc.arc_number} 幕检查`
+                            : '章节路线摘要'
                   : activeSection === 'continuity'
                     ? '连续性摘要'
                     : '作品设置摘要'
   const summaryRailDescription =
-    activeSection === 'roadmap' && selectedRoadmapChapter
-      ? '章节细修被移到右侧上下文栏，主区只保留阶段工作台与章节列表，避免长表单把整页压垮。'
+    activeSection === 'roadmap' && roadmapInspectorState.mode === 'proposal'
+      ? '当前查看的是修复提案细节。右栏会展示差异摘要、后置条件与执行风险，方便作者在确认前先做一轮人工审阅。'
+      : activeSection === 'roadmap' && roadmapInspectorState.mode === 'run'
+        ? '当前查看的是最近一次修复执行结果。右栏会保留日志与快照信息，帮助判断是否需要回滚。'
+        : activeSection === 'roadmap' && roadmapInspectorState.mode === 'issue'
+          ? `当前查看的是${formatCreativeSourceLayerLabel(roadmapInspectorState.issue?.source_layer)}问题详情。可以先理解影响范围，再决定是接受修复提案还是手动编辑。`
+          : activeSection === 'roadmap' && roadmapInspectorState.mode === 'chapter'
+            ? '章节细修被移到右侧 inspector，主区只保留阶段工作台与章节列表，避免长表单把整页压垮。'
+            : activeSection === 'roadmap' && creativeIssueSourceFilter === 'review'
+              ? '审阅队列先以只读形式进入工作台。这里用于集中查看待处理 scene，真正的通过、重试、修补动作仍在审阅页执行。'
+              : activeSection === 'roadmap' && creativeIssueSourceFilter === 'scene'
+                ? 'scene verifier 原始问题目前还没有稳定持久化真源，因此这一层暂时只保留接入预留，不直接伪造问题卡。'
+                : activeSection === 'roadmap' && creativeIssueSourceFilter === 'canon'
+                  ? '设定同步代理尚未启用。等 canon_sync agent 真正落地后，这里才会展示可执行的跨层同步提案。'
+            : activeSection === 'roadmap'
+              ? '未选中章节时，右栏默认显示当前阶段摘要与连续性压力点，帮助作者决定下一步先修哪里。'
       : activeSection === 'relationships'
         ? '关系图谱以画布为中心，具体人物或关系边的细节放在这里查看与编辑。'
         : activeSection === 'continuity'
@@ -2796,461 +3085,139 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
         ) : null}
 
         {activeSection === 'roadmap' ? (
-      <section className="rounded-2xl border border-stone-200 bg-white p-5 space-y-4">
-        {/* 章节路线主区只保留阶段工作台与章节摘要卡，详细细修移动到右栏。 */}
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-base font-semibold text-stone-800">章节路线</h3>
-            <p className="mt-1 text-sm text-stone-500">先生成阶段骨架，再按阶段顺序逐章生成。结构问题优先按阶段处理，章节卡片负责细修与末章重生成。</p>
-          </div>
-          <span
-            className={`rounded-full px-2 py-1 text-xs font-medium ${
-              roadmapIsLocked ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-            }`}
-          >
-            {roadmapIsLocked ? '整书蓝图已锁定' : '章节路线待锁定'}
-          </span>
-        </div>
-        <textarea
-          value={roadmapFeedback}
-          onChange={(e) => setRoadmapFeedback(e.target.value)}
-          rows={2}
-          placeholder="可选：补充本层微调要求，例如“前 3 章开局更猛，中段节奏更压抑”。"
-          className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
-        />
-        {roadmapError ? (
-          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-            {roadmapError}
-          </div>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => generateStoryArcsMutation.mutate()}
-            disabled={!canGenerateStoryArcs || generateStoryArcsMutation.isPending || roadmapIsLocked}
-            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm text-white hover:bg-emerald-700 disabled:opacity-50"
-          >
-            {generateStoryArcsMutation.isPending
-              ? '生成中…'
-              : roadmapIsLocked
-                ? '阶段骨架已锁定'
-                : storyArcsToShow.length > 0
-                  ? '重新生成阶段骨架'
-                  : '生成阶段骨架'}
-          </button>
-          <button
-            onClick={() => confirmRoadmapMutation.mutate()}
-            disabled={!canLockRoadmap}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {confirmRoadmapMutation.isPending ? '锁定中…' : roadmapIsLocked ? '整书蓝图已锁定' : '锁定整书蓝图'}
-          </button>
-        </div>
-        <div className="grid gap-3 md:grid-cols-4">
-          <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3">
-            <p className="text-xs font-medium text-stone-500">整书概览</p>
-            <p className="mt-1 text-lg font-semibold text-stone-800">
-              {storyArcsToShow.length > 0 ? Math.max(...storyArcsToShow.map((item) => item.end_chapter)) : 0} 章
-            </p>
-          </div>
-          <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3">
-            <p className="text-xs font-medium text-stone-500">阶段完成</p>
-            <p className="mt-1 text-lg font-semibold text-stone-800">{expandedArcNumbers.length}/{storyArcsToShow.length} 幕</p>
-          </div>
-          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
-            <p className="text-xs font-medium text-rose-500">严重问题</p>
-            <p className="mt-1 text-lg font-semibold text-rose-700">{totalFatalRoadmapIssues}</p>
-          </div>
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-            <p className="text-xs font-medium text-amber-600">提醒</p>
-            <p className="mt-1 text-lg font-semibold text-amber-700">{totalWarningRoadmapIssues}</p>
-          </div>
-        </div>
-        <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm text-stone-600">
-          <p className="font-medium text-stone-700">
-            {roadmapLockState.canLock ? '当前路线已达到锁定条件。' : '当前路线仍不建议锁定整书蓝图。'}
-          </p>
-          {!roadmapLockState.canLock && roadmapLockState.reasons.length > 0 ? (
-            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
-              {roadmapLockState.reasons.slice(0, 4).map((reason) => (
-                <li key={reason}>{reason}</li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-        {storyArcsToShow.length > 0 && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <h4 className="text-sm font-semibold text-stone-800">阶段工作台</h4>
-              <span className="text-xs text-stone-500">每次只生成下一章，优先保证阶段内连续性与局部质量</span>
-            </div>
-            <div className="grid gap-3 xl:grid-cols-2">
-              {storyArcsToShow.map((arc) => {
-                const issueStats = roadmapIssuesByArc.find((item) => item.arcNumber === arc.arc_number)
-                const fatalCount = issueStats?.fatalCount ?? 0
-                const warningCount = issueStats?.warningCount ?? 0
-                const isActive = activeRoadmapArcNumber === arc.arc_number
-                const isPending = pendingRoadmapArcNumber === arc.arc_number
-                const arcIssues = roadmapIssues.filter((issue) => issue.arc_number === arc.arc_number)
-                return (
-                  <article
-                    key={`${arc.arc_number}-${arc.title}`}
-                    className={`rounded-xl border p-4 space-y-3 ${
-                      fatalCount > 0
-                        ? 'border-rose-200 bg-rose-50/40'
-                        : warningCount > 0
-                          ? 'border-amber-200 bg-amber-50/40'
-                          : 'border-stone-200 bg-stone-50/70'
-                    } ${isActive ? 'ring-2 ring-indigo-200' : ''}`}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <h5 className="text-sm font-semibold text-stone-800">
-                        第 {arc.arc_number} 幕 · {arc.title}
-                      </h5>
-                      <div className="flex items-center gap-2">
-                        {fatalCount > 0 ? (
-                          <span className="rounded-full bg-rose-100 px-2 py-1 text-xs font-medium text-rose-700">需重做</span>
-                        ) : warningCount > 0 ? (
-                          <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-700">需优化</span>
-                        ) : arc.status === 'completed' || arc.status === 'confirmed' ? (
-                          <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">
-                            已完成
-                          </span>
-                        ) : arc.status === 'in_progress' ? (
-                          <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-medium text-sky-700">
-                            进行中
-                          </span>
-                        ) : (
-                          <span className="rounded-full bg-stone-200 px-2 py-1 text-xs font-medium text-stone-700">
-                            待开始
-                          </span>
-                        )}
-                        <span className="rounded-full bg-white px-2 py-1 text-xs text-stone-500">
-                          第 {arc.start_chapter}-{arc.end_chapter} 章
-                        </span>
-                        <span
-                          className={`rounded-full px-2 py-1 text-xs font-medium ${
-                            arc.has_chapters ? 'bg-indigo-100 text-indigo-700' : 'bg-stone-100 text-stone-600'
-                          }`}
-                        >
-                          {arc.has_chapters
-                            ? `已生成 ${arc.generated_chapter_count}/${arc.chapter_target_count} 章`
-                            : '仅有阶段骨架'}
-                        </span>
-                      </div>
-                    </div>
-                    <p className="text-sm text-stone-700">{arc.purpose || '未填写阶段目标'}</p>
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      <span className="rounded-full bg-white px-2 py-1 text-stone-600">严重问题 {fatalCount}</span>
-                      <span className="rounded-full bg-white px-2 py-1 text-stone-600">提醒 {warningCount}</span>
-                      <span className="rounded-full bg-white px-2 py-1 text-stone-600">
-                        章节进度 {arc.generated_chapter_count}/{arc.chapter_target_count}
-                      </span>
-                      <span className="rounded-full bg-white px-2 py-1 text-stone-600">
-                        时间线{arc.timeline_milestones.length > 0 ? '已推进' : '待补'}
-                      </span>
-                      <span className="rounded-full bg-white px-2 py-1 text-stone-600">
-                        主线{arc.main_progress.length > 0 ? '已推进' : '待补'}
-                      </span>
-                      <span className="rounded-full bg-white px-2 py-1 text-stone-600">
-                        阶段高潮{arc.arc_climax ? '已设置' : '待补'}
-                      </span>
-                    </div>
-                    <div className="grid gap-2 md:grid-cols-2">
-                      <div className="rounded-lg bg-white px-3 py-2 text-xs text-stone-600">
-                        <p className="font-medium text-stone-700">主线推进</p>
-                        <p className="mt-1">{arc.main_progress.length ? arc.main_progress.join('；') : '未填写'}</p>
-                      </div>
-                      <div className="rounded-lg bg-white px-3 py-2 text-xs text-stone-600">
-                        <p className="font-medium text-stone-700">关系推进</p>
-                        <p className="mt-1">
-                          {arc.relationship_progress.length ? arc.relationship_progress.join('；') : '未填写'}
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-white px-3 py-2 text-xs text-stone-600">
-                        <p className="font-medium text-stone-700">时间里程碑</p>
-                        <p className="mt-1">
-                          {arc.timeline_milestones.length ? arc.timeline_milestones.join('；') : '未填写'}
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-white px-3 py-2 text-xs text-stone-600">
-                        <p className="font-medium text-stone-700">阶段高潮</p>
-                        <p className="mt-1">{arc.arc_climax || '未填写'}</p>
-                      </div>
-                    </div>
-                    {arcIssues.length > 0 ? (
-                      <div className="rounded-lg border border-dashed border-stone-300 bg-white px-3 py-3 text-xs text-stone-600">
-                        <p className="font-medium text-stone-700">本阶段问题摘要</p>
-                        <ul className="mt-2 space-y-1">
-                          {arcIssues.slice(0, 3).map((issue, issueIndex) => (
-                            <li key={`${issue.type}-${issueIndex}`} className="leading-5">
-                              {issue.severity === 'fatal' ? '严重：' : '提醒：'}
-                              {issue.message}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-                    <div className="space-y-2">
-                      <label className="block text-xs font-medium text-stone-600">编辑阶段说明 / 重生成要求</label>
-                      <textarea
-                        value={roadmapArcFeedbackByNumber[arc.arc_number] ?? ''}
-                        onChange={(e) =>
-                          setRoadmapArcFeedbackByNumber((prev) => ({
-                            ...prev,
-                            [arc.arc_number]: e.target.value,
-                          }))
-                        }
-                        rows={2}
-                        placeholder="例如：不要再重复调查型章节，要更早出现局势升级，并让本阶段结尾形成明确反转。"
-                        className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm"
-                      />
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => toggleRoadmapArc(arc.arc_number)}
-                        disabled={!arc.has_chapters}
-                        className="rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-100"
-                      >
-                        {!arc.has_chapters ? '尚未生成章节' : isActive ? '收起章节' : '查看本阶段章节'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleStoryArcExpand(arc.arc_number)}
-                        disabled={
-                          isPending ||
-                          expandStoryArcMutation.isPending ||
-                          !arc.can_generate_next_chapter ||
-                          arc.status === 'completed' ||
-                          arc.status === 'confirmed'
-                        }
-                        className="rounded-lg bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-700 disabled:opacity-50"
-                      >
-                        {isPending
-                          ? '生成中…'
-                          : arc.status === 'completed' || arc.status === 'confirmed'
-                            ? '本阶段已完成'
-                            : !arc.can_generate_next_chapter && arc.blocking_arc_number
-                              ? `需先完成第 ${arc.blocking_arc_number} 幕`
-                            : arc.next_chapter_number
-                              ? `生成第 ${arc.next_chapter_number} 章`
-                              : '生成下一章'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleRoadmapArcRegenerate(arc.arc_number)}
-                        disabled={isPending || regenerateStoryArcMutation.isPending}
-                        className="rounded-lg bg-amber-600 px-3 py-2 text-sm text-white hover:bg-amber-700 disabled:opacity-50"
-                      >
-                        {isPending ? '重生成中…' : '重生成本阶段骨架'}
-                      </button>
-                    </div>
-                  </article>
-                )
-              })}
-            </div>
-          </div>
-        )}
-        {roadmapIssues.length > 0 && (
-          <div className="space-y-3">
-            <h4 className="text-sm font-semibold text-stone-800">可行动问题列表</h4>
-            <div className="space-y-2">
-              {roadmapIssues.map((issue, index) => (
-                <div
-                  key={`${issue.type}-${issue.chapter_number ?? index}-${issue.story_stage}`}
-                  className={`rounded-xl border px-4 py-3 text-sm ${
-                    issue.severity === 'fatal'
-                      ? 'border-rose-200 bg-rose-50 text-rose-700'
-                      : 'border-amber-200 bg-amber-50 text-amber-700'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="font-medium">
-                      {issue.severity === 'fatal' ? '严重问题' : '提醒'}
-                      {issue.chapter_number ? ` · 第 ${issue.chapter_number} 章` : ''}
-                    </span>
-                    {issue.story_stage ? (
-                      <span className="text-xs">
-                        {issue.story_stage}
-                        {issue.arc_number ? ` · 第 ${issue.arc_number} 幕` : ''}
-                      </span>
-                    ) : null}
-                  </div>
-                  <p className="mt-1">{issue.message}</p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {issue.chapter_number ? (
-                      <button
-                        type="button"
-                        onClick={() => focusRoadmapChapter(issue.chapter_number!, issue.arc_number)}
-                        className="rounded-lg border border-current px-3 py-1.5 text-xs"
-                      >
-                        定位到章节
-                      </button>
-                    ) : null}
-                    {issue.arc_number ? (
-                      <button
-                        type="button"
-                        onClick={() => jumpToRoadmapArc(issue.arc_number!)}
-                        className="rounded-lg border border-current px-3 py-1.5 text-xs"
-                      >
-                        查看所属阶段
-                      </button>
-                    ) : null}
-                    {issue.arc_number && issue.suggested_action === 'review_arc' ? (
-                      <button
-                        type="button"
-                        onClick={() => jumpToRoadmapArc(issue.arc_number!)}
-                        className="rounded-lg bg-current/90 px-3 py-1.5 text-xs text-white"
-                      >
-                        查看所属阶段
-                      </button>
-                    ) : null}
-                    {issue.arc_number && issue.suggested_action === 'generate_next_chapter' ? (
-                      <button
-                        type="button"
-                        onClick={() => handleStoryArcExpand(issue.arc_number!)}
-                        disabled={
-                          pendingRoadmapArcNumber === issue.arc_number ||
-                          !storyArcsToShow.find((arc) => arc.arc_number === issue.arc_number)?.can_generate_next_chapter
-                        }
-                        className="rounded-lg bg-current/90 px-3 py-1.5 text-xs text-white disabled:opacity-60"
-                      >
-                        {pendingRoadmapArcNumber === issue.arc_number
-                          ? '生成中…'
-                          : storyArcsToShow.find((arc) => arc.arc_number === issue.arc_number)?.can_generate_next_chapter
-                            ? '生成下一章'
-                            : '前序阶段未完成'}
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h4 className="text-sm font-semibold text-stone-800">章节细修区</h4>
-              <p className="mt-1 text-xs text-stone-500">阶段负责结构，章节负责细节。大问题优先用阶段重生成处理。</p>
-            </div>
-            {activeRoadmapArcNumber ? (
-              <span className="rounded-full bg-indigo-100 px-2 py-1 text-xs font-medium text-indigo-700">
-                当前聚焦：第 {activeRoadmapArcNumber} 幕
-              </span>
+          <section className="space-y-4">
+            <RoadmapControlPanel
+              roadmapFeedback={roadmapFeedback}
+              onRoadmapFeedbackChange={setRoadmapFeedback}
+              totalChapterCount={storyArcsToShow.length > 0 ? Math.max(...storyArcsToShow.map((item) => item.end_chapter)) : 0}
+              expandedArcCount={expandedArcNumbers.length}
+              totalArcCount={storyArcsToShow.length}
+              fatalCount={totalFatalRoadmapIssues}
+              warningCount={totalWarningRoadmapIssues}
+              pendingRepairCount={pendingCreativeRepairCount}
+              isLocked={roadmapIsLocked}
+              canGenerateStoryArcs={canGenerateStoryArcs}
+              canLockRoadmap={canLockRoadmap}
+              isGeneratingStoryArcs={generateStoryArcsMutation.isPending}
+              isLockingRoadmap={confirmRoadmapMutation.isPending}
+              isPlanningRepairs={planCreativeRepairsMutation.isPending}
+              isReverifying={reverifyCreativeIssuesMutation.isPending}
+              viewMode={roadmapViewMode}
+              onViewModeChange={setRoadmapViewMode}
+              onGenerateStoryArcs={() => generateStoryArcsMutation.mutate()}
+              onPlanRepairs={() => planCreativeRepairsMutation.mutate([])}
+              onReverify={() => reverifyCreativeIssuesMutation.mutate()}
+              onConfirmRoadmap={() => confirmRoadmapMutation.mutate()}
+              lockReasons={roadmapLockState.reasons}
+            />
+
+            {roadmapError ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {roadmapError}
+              </div>
             ) : null}
-          </div>
-          <div className="rounded-xl border border-sky-200 bg-sky-50/60 p-4 text-sm text-sky-900">
-            <p className="font-semibold">章节编辑已经迁到右侧上下文栏</p>
-            <p className="mt-1 leading-6 text-sky-800">
-              中间主区只保留阶段工作台和章节摘要卡。点击任意章节，会在右栏打开完整细修表单；连续性总览则独立进入“连续性”步骤。
-            </p>
-          </div>
 
-          <div className="grid gap-3 xl:grid-cols-2">
-            {visibleRoadmapChapters.map((item) => {
-              const chapterIssues = roadmapIssues.filter((issue) => issue.chapter_number === item.chapter_number)
-              const isSelected = selectedRoadmapChapterNumber === item.chapter_number
-              const canRegenerateChapter =
-                lastGeneratedRoadmapChapterNumber !== null && item.chapter_number === lastGeneratedRoadmapChapterNumber
-              return (
-                <article
-                  key={item.chapter_number}
-                  ref={(node) => {
-                    roadmapChapterRefs.current[item.chapter_number] = node
+            {storyArcsToShow.length === 0 ? (
+              <div className="rounded-[24px] border border-dashed border-stone-300 bg-white px-5 py-8 text-sm text-stone-500 shadow-sm">
+                还没有阶段骨架。请先确认世界观与人物蓝图，再生成整书阶段结构。
+              </div>
+            ) : roadmapViewMode === 'repair' ? (
+              <CreativeRepairBoard
+                issues={creativeIssues}
+                proposals={creativeRepairProposals}
+                runs={creativeRepairRuns}
+                roadmapDraftDirty={roadmapDraftDirty}
+                isPlanningRepairs={planCreativeRepairsMutation.isPending}
+                isApplyingProposal={applyCreativeRepairProposalMutation.isPending}
+                isRollingBackRun={rollbackCreativeRepairRunMutation.isPending}
+                onPlanAll={() => planCreativeRepairsMutation.mutate([])}
+                onPlanIssue={(issueId) => planCreativeRepairsMutation.mutate([issueId])}
+                onApplyProposal={(proposalId) => applyCreativeRepairProposalMutation.mutate(proposalId)}
+                onRollbackRun={(runId) => rollbackCreativeRepairRunMutation.mutate(runId)}
+                onFocusChapter={focusRoadmapChapter}
+                onFocusArc={jumpToRoadmapArc}
+                onSelectIssue={(issueId) => {
+                  const matchedIssue = creativeIssues.find((item) => item.issue_id === issueId) ?? null
+                  if (matchedIssue) {
+                    setCreativeIssueSourceFilter(
+                      ['roadmap', 'scene', 'review', 'canon'].includes(matchedIssue.source_layer)
+                        ? (matchedIssue.source_layer as CreativeIssueSourceFilter)
+                        : 'all',
+                    )
+                  }
+                  setSelectedCreativeIssueId(issueId)
+                  setSelectedCreativeRepairProposalId(null)
+                  setSelectedCreativeRepairRunId(null)
+                  setSelectedRoadmapChapterNumber(null)
+                }}
+                onSelectProposal={(proposalId) => {
+                  setCreativeIssueSourceFilter('roadmap')
+                  setSelectedCreativeRepairProposalId(proposalId)
+                  setSelectedCreativeIssueId(null)
+                  setSelectedCreativeRepairRunId(null)
+                  setSelectedRoadmapChapterNumber(null)
+                }}
+                onSelectRun={(runId) => {
+                  setCreativeIssueSourceFilter('roadmap')
+                  setSelectedCreativeRepairRunId(runId)
+                  setSelectedCreativeIssueId(null)
+                  setSelectedCreativeRepairProposalId(null)
+                  setSelectedRoadmapChapterNumber(null)
+                }}
+                selectedIssueId={selectedCreativeIssueId}
+                selectedProposalId={selectedCreativeRepairProposalId}
+                selectedRunId={selectedCreativeRepairRunId}
+                sourceFilter={creativeIssueSourceFilter}
+                onSourceFilterChange={handleCreativeIssueSourceFilterChange}
+                reviewQueueHref={`/reviews?book=${bookId}`}
+              />
+            ) : (
+              <>
+                <RoadmapArcBoard
+                  currentArc={currentActionableArc}
+                  blockedArcs={blockedRoadmapArcs}
+                  completedArcs={completedRoadmapArcs}
+                  activeArcNumber={activeRoadmapArcNumber}
+                  issueStats={roadmapIssuesByArc}
+                  feedbackByArcNumber={roadmapArcFeedbackByNumber}
+                  pendingArcNumber={pendingRoadmapArcNumber}
+                  isExpanding={expandStoryArcMutation.isPending}
+                  isRegenerating={regenerateStoryArcMutation.isPending}
+                  onToggleArc={toggleRoadmapArc}
+                  onExpandArc={handleStoryArcExpand}
+                  onRegenerateArc={handleRoadmapArcRegenerate}
+                  onArcFeedbackChange={(arcNumber, value) =>
+                    setRoadmapArcFeedbackByNumber((prev) => ({ ...prev, [arcNumber]: value }))
+                  }
+                  onFocusArc={(arcNumber) => {
+                    setActiveRoadmapArcNumber(arcNumber)
+                    setSelectedRoadmapChapterNumber(null)
                   }}
-                  className={`rounded-2xl border p-4 transition-all ${
-                    isSelected ? 'border-indigo-300 ring-2 ring-indigo-100 bg-white' : 'border-stone-200 bg-stone-50/70'
-                  } ${
-                    highlightedRoadmapChapterNumber === item.chapter_number ? 'ring-2 ring-sky-200' : ''
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h5 className="text-sm font-semibold text-stone-900">
-                        第 {item.chapter_number} 章 · {item.title || '未命名章节'}
-                      </h5>
-                      <p className="mt-1 text-xs text-stone-500">
-                        {item.story_stage || '未标注阶段'} · {item.timeline_anchor || '未标注时间锚点'}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      {chapterIssues.length > 0 ? (
-                        <span
-                          className={`rounded-full px-2 py-1 font-medium ${
-                            chapterIssues.some((issue) => issue.severity === 'fatal')
-                              ? 'bg-rose-100 text-rose-700'
-                              : 'bg-amber-100 text-amber-700'
-                          }`}
-                        >
-                          {chapterIssues.some((issue) => issue.severity === 'fatal') ? '需重做' : '需优化'}
-                        </span>
-                      ) : null}
-                      <span className="rounded-full bg-white px-2 py-1 text-stone-600">
-                        伏笔 {item.planned_loops.length}
-                      </span>
-                    </div>
-                  </div>
-
-                  <p className="mt-3 text-sm leading-6 text-stone-700">{item.story_progress || item.goal || '当前还没有填写章节摘要。'}</p>
-
-                  <div className="mt-3 grid gap-2 text-xs text-stone-600 sm:grid-cols-2">
-                    <div className="rounded-xl bg-white px-3 py-2">关键事件：{item.key_events.join('；') || '未指定'}</div>
-                    <div className="rounded-xl bg-white px-3 py-2">人物推进：{item.character_progress.join('；') || '未指定'}</div>
-                    <div className="rounded-xl bg-white px-3 py-2">关系推进：{item.relationship_progress.join('；') || '未指定'}</div>
-                    <div className="rounded-xl bg-white px-3 py-2">世界更新：{item.world_updates.join('；') || '未指定'}</div>
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedRoadmapChapterNumber(item.chapter_number)
-                        setHighlightedRoadmapChapterNumber(item.chapter_number)
-                      }}
-                      className="rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm text-stone-700 hover:bg-stone-100"
-                    >
-                      {isSelected ? '正在右栏编辑' : '在右栏编辑'}
-                    </button>
-                    {canRegenerateChapter && activeRoadmapArc ? (
-                      <button
-                        type="button"
-                        onClick={() => handleRoadmapChapterRegenerate(activeRoadmapArc.arc_number, item.chapter_number)}
-                        disabled={pendingRoadmapChapterNumber === item.chapter_number}
-                        className="rounded-xl bg-amber-600 px-3 py-2 text-sm text-white hover:bg-amber-700 disabled:opacity-50"
-                      >
-                        {pendingRoadmapChapterNumber === item.chapter_number ? '重生成中…' : '重生成本章'}
-                      </button>
-                    ) : null}
-                  </div>
-                </article>
-              )
-            })}
-          </div>
-
-          {selectedRoadmapChapter ? (
-            <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 px-4 py-3 text-sm text-indigo-800">
-              当前正在右栏编辑第 {selectedRoadmapChapter.chapter_number} 章。若想检查任务、伏笔、关系与世界更新的全局承接，请切到“连续性”步骤。
-            </div>
-          ) : null}
-
-          {/* 主区只保留摘要卡，详细字段移动到右栏。 */}
-          {/* 这样阶段工作台可以持续可见，不会再被一串章节长表单压到页面下半截。 */}
-          {storyArcsToShow.length === 0 && (
-            <div className="rounded-xl border border-dashed border-stone-300 px-4 py-6 text-sm text-stone-500">
-              还没有阶段骨架。请先确认世界观和人物蓝图，再生成整书阶段结构。
-            </div>
-          )}
-          {storyArcsToShow.length > 0 && visibleRoadmapChapters.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-stone-300 px-4 py-6 text-sm text-stone-500">
-              请先为某一幕生成下一章，再进入该阶段的章节细修。
-            </div>
-          ) : null}
-        </div>
-      </section>
-
+                />
+                <RoadmapChapterList
+                  currentArc={currentActionableArc}
+                  currentArcChapters={currentArcChapters}
+                  archivedArcChapters={archivedArcChapters}
+                  selectedChapterNumber={selectedRoadmapChapterNumber}
+                  highlightedChapterNumber={highlightedRoadmapChapterNumber}
+                  lastGeneratedChapterNumber={lastGeneratedVisibleRoadmapChapterNumber}
+                  activeArc={chapterActionArc}
+                  roadmapIssues={roadmapIssues}
+                  pendingChapterNumber={pendingRoadmapChapterNumber}
+                  onSelectChapter={(chapterNumber) => {
+                    setCreativeIssueSourceFilter('roadmap')
+                    setSelectedRoadmapChapterNumber(chapterNumber)
+                    setHighlightedRoadmapChapterNumber(chapterNumber)
+                    setSelectedCreativeIssueId(null)
+                    setSelectedCreativeRepairProposalId(null)
+                    setSelectedCreativeRepairRunId(null)
+                  }}
+                  onRegenerateChapter={handleRoadmapChapterRegenerate}
+                />
+              </>
+            )}
+          </section>
         ) : null}
-
         {activeSection === 'continuity' ? (
           <section className="rounded-[28px] border border-stone-200 bg-white p-6 shadow-sm">
             <div className="flex items-start justify-between gap-4">
@@ -3478,30 +3445,42 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
       </div>
 
       <div className="xl:sticky xl:top-6 xl:self-start">
-        <WorkspaceSummaryRail title={summaryRailTitle} description={summaryRailDescription}>
-          {/* 右栏第一张卡固定展示全局状态，避免上下文切换后用户丢失整体进度感。 */}
-          <section className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-2xl bg-stone-50 px-4 py-3">
-                <p className="text-xs font-medium text-stone-500">当前状态</p>
-                <p className="mt-2 text-sm font-semibold text-stone-900">{formatBlueprintStatusLabel(blueprint?.status)}</p>
-              </div>
-              <div className="rounded-2xl bg-stone-50 px-4 py-3">
-                <p className="text-xs font-medium text-stone-500">生效版本</p>
-                <p className="mt-2 text-sm font-semibold text-stone-900">{activeRevisionLabel}</p>
-              </div>
-              <div className="rounded-2xl bg-stone-50 px-4 py-3">
-                <p className="text-xs font-medium text-stone-500">严重问题</p>
-                <p className="mt-2 text-sm font-semibold text-stone-900">{totalFatalRoadmapIssues}</p>
-              </div>
-              <div className="rounded-2xl bg-stone-50 px-4 py-3">
-                <p className="text-xs font-medium text-stone-500">提醒</p>
-                <p className="mt-2 text-sm font-semibold text-stone-900">{totalWarningRoadmapIssues}</p>
-              </div>
-            </div>
-          </section>
+        <WorkspaceInspectorRail
+          title={summaryRailTitle}
+          description={summaryRailDescription}
+          statusLabel={formatBlueprintStatusLabel(blueprint?.status)}
+          revisionLabel={activeRevisionLabel}
+          fatalCount={totalFatalRoadmapIssues}
+          warningCount={totalWarningRoadmapIssues}
+        >
+          {/* 全局状态卡已经上移到 WorkspaceInspectorRail 壳层，这里不再重复渲染第二份。 */}
 
-          {roadmapIssues.length > 0 ? (
+          {activeSection === 'roadmap' ? (
+            <RoadmapInspectorPanel
+              state={roadmapInspectorState}
+              currentActionableArc={currentActionableArc}
+              chapterActionArc={chapterActionArc}
+              continuityState={continuityState}
+              selectedRoadmapChapterIssues={selectedRoadmapChapterIssues}
+              pendingRoadmapChapterNumber={pendingRoadmapChapterNumber}
+              canRegenerateFocusedRoadmapChapter={canRegenerateFocusedRoadmapChapter}
+              joinTags={joinTags}
+              parseTags={parseTags}
+              serializeChapterTasks={serializeChapterTasks}
+              parseChapterTasks={parseChapterTasks}
+              serializeRelationshipBeats={serializeRelationshipBeats}
+              parseRelationshipBeats={parseRelationshipBeats}
+              parseOptionalChapterNumber={parseOptionalChapterNumber}
+              updateRoadmapChapterByNumber={updateRoadmapChapterByNumber}
+              updateRoadmapLoopByIndex={updateRoadmapLoopByIndex}
+              addRoadmapLoop={addRoadmapLoop}
+            removeRoadmapLoop={removeRoadmapLoop}
+            onRegenerateChapter={handleRoadmapChapterRegenerate}
+            reviewQueueHref={`/reviews?book=${bookId}`}
+          />
+          ) : null}
+
+          {activeSection !== 'roadmap' && roadmapIssues.length > 0 ? (
             <section className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
               <h4 className="text-sm font-semibold text-stone-900">优先处理问题</h4>
               <div className="mt-3 space-y-2">
@@ -3557,370 +3536,6 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
             </>
           ) : null}
 
-          {activeSection === 'roadmap' && selectedRoadmapChapter ? (
-            <>
-              {/* 章节细修迁到右栏后的目标是“让阶段工作台始终可见”。
-                  用户在主区点任意章节卡，就在这里打开完整编辑表单；
-                  这样就不会再出现一页里同时堆着阶段卡、连续性面板和长章节表单的情况。 */}
-              <section className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h4 className="text-base font-semibold text-stone-900">
-                    第 {selectedRoadmapChapter.chapter_number} 章 · {selectedRoadmapChapter.title || '未命名章节'}
-                  </h4>
-                  <p className="mt-1 text-sm text-stone-500">
-                    当前阶段：{selectedRoadmapChapter.story_stage || '未标注'} · 时间锚点：
-                    {selectedRoadmapChapter.timeline_anchor || '未标注'}
-                  </p>
-                </div>
-                {canRegenerateSelectedRoadmapChapter && activeRoadmapArc ? (
-                  <button
-                    type="button"
-                    onClick={() => handleRoadmapChapterRegenerate(activeRoadmapArc.arc_number, selectedRoadmapChapter.chapter_number)}
-                    disabled={pendingRoadmapChapterNumber === selectedRoadmapChapter.chapter_number}
-                    className="rounded-xl bg-amber-600 px-3 py-2 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
-                  >
-                    {pendingRoadmapChapterNumber === selectedRoadmapChapter.chapter_number ? '重生成中…' : '重生成本章'}
-                  </button>
-                ) : null}
-              </div>
-
-              <div className="mt-4 space-y-3">
-                <input
-                  value={selectedRoadmapChapter.title}
-                  onChange={(event) =>
-                    updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                      ...item,
-                      title: event.target.value,
-                    }))
-                  }
-                  placeholder="章节标题"
-                  className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                />
-                <div className="grid gap-3 md:grid-cols-2">
-                  <input
-                    value={selectedRoadmapChapter.story_stage}
-                    onChange={(event) =>
-                      updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                        ...item,
-                        story_stage: event.target.value,
-                      }))
-                    }
-                    placeholder="所属阶段"
-                    className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                  />
-                  <input
-                    value={selectedRoadmapChapter.timeline_anchor}
-                    onChange={(event) =>
-                      updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                        ...item,
-                        timeline_anchor: event.target.value,
-                      }))
-                    }
-                    placeholder="时间线锚点"
-                    className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                  />
-                </div>
-                <textarea
-                  value={selectedRoadmapChapter.goal}
-                  onChange={(event) =>
-                    updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                      ...item,
-                      goal: event.target.value,
-                    }))
-                  }
-                  rows={2}
-                  placeholder="章节目标"
-                  className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                />
-                <textarea
-                  value={selectedRoadmapChapter.core_conflict}
-                  onChange={(event) =>
-                    updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                      ...item,
-                      core_conflict: event.target.value,
-                    }))
-                  }
-                  rows={2}
-                  placeholder="核心冲突"
-                  className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                />
-                <textarea
-                  value={selectedRoadmapChapter.story_progress}
-                  onChange={(event) =>
-                    updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                      ...item,
-                      story_progress: event.target.value,
-                    }))
-                  }
-                  rows={3}
-                  placeholder="这一章真正推进了什么主线事实"
-                  className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                />
-                <textarea
-                  value={joinTags(selectedRoadmapChapter.key_events)}
-                  onChange={(event) =>
-                    updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                      ...item,
-                      key_events: parseTags(event.target.value),
-                    }))
-                  }
-                  rows={2}
-                  placeholder="关键事件，多项可用逗号分隔"
-                  className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                />
-                <div className="grid gap-3 md:grid-cols-2">
-                  <textarea
-                    value={joinTags(selectedRoadmapChapter.character_progress)}
-                    onChange={(event) =>
-                      updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                        ...item,
-                        character_progress: parseTags(event.target.value),
-                      }))
-                    }
-                    rows={2}
-                    placeholder="人物推进"
-                    className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                  />
-                  <textarea
-                    value={joinTags(selectedRoadmapChapter.relationship_progress)}
-                    onChange={(event) =>
-                      updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                        ...item,
-                        relationship_progress: parseTags(event.target.value),
-                      }))
-                    }
-                    rows={2}
-                    placeholder="关系推进"
-                    className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                  />
-                  <textarea
-                    value={joinTags(selectedRoadmapChapter.new_reveals)}
-                    onChange={(event) =>
-                      updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                        ...item,
-                        new_reveals: parseTags(event.target.value),
-                      }))
-                    }
-                    rows={2}
-                    placeholder="新揭示"
-                    className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                  />
-                  <textarea
-                    value={joinTags(selectedRoadmapChapter.world_updates)}
-                    onChange={(event) =>
-                      updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                        ...item,
-                        world_updates: parseTags(event.target.value),
-                      }))
-                    }
-                    rows={2}
-                    placeholder="世界更新"
-                    className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                  />
-                </div>
-                <details className="rounded-2xl border border-stone-200 bg-stone-50 p-3">
-                  <summary className="cursor-pointer text-sm font-medium text-stone-700">更多结构字段</summary>
-                  <div className="mt-3 space-y-3">
-                    <textarea
-                      value={serializeChapterTasks(selectedRoadmapChapter.chapter_tasks)}
-                      onChange={(event) =>
-                        updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                          ...item,
-                          chapter_tasks: parseChapterTasks(event.target.value),
-                        }))
-                      }
-                      rows={3}
-                      placeholder="任务变化：一行一个，推荐格式 任务摘要|任务状态|人物A,人物B|最迟章号|任务标识"
-                      className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                    />
-                    <textarea
-                      value={serializeRelationshipBeats(selectedRoadmapChapter.relationship_beats)}
-                      onChange={(event) =>
-                        updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                          ...item,
-                          relationship_beats: parseRelationshipBeats(event.target.value),
-                        }))
-                      }
-                      rows={3}
-                      placeholder="关系推进：一行一个，格式 角色A->角色B|推进摘要"
-                      className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                    />
-                    <div className="rounded-2xl border border-stone-200 bg-white p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-medium text-stone-800">结构化伏笔</p>
-                          <p className="mt-1 text-xs leading-5 text-stone-500">
-                            伏笔现在必须填写标题、摘要和最迟兑现章，避免长篇路线里无限堆积“以后再说”的悬念。
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            addRoadmapLoop(
-                              selectedRoadmapChapter.chapter_number,
-                              activeRoadmapArc?.end_chapter ?? selectedRoadmapChapter.chapter_number,
-                            )
-                          }
-                          className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
-                        >
-                          新增伏笔
-                        </button>
-                      </div>
-
-                      <div className="mt-3 space-y-3">
-                        {selectedRoadmapChapter.planned_loops.length > 0 ? (
-                          selectedRoadmapChapter.planned_loops.map((loop, loopIndex) => (
-                            <div key={loop.loop_id} className="rounded-2xl border border-stone-200 bg-stone-50 p-3">
-                              <div className="flex items-center justify-between gap-3">
-                                <p className="text-sm font-medium text-stone-800">伏笔 {loopIndex + 1}</p>
-                                <button
-                                  type="button"
-                                  onClick={() => removeRoadmapLoop(selectedRoadmapChapter.chapter_number, loopIndex)}
-                                  className="text-xs font-medium text-rose-600 hover:text-rose-700"
-                                >
-                                  删除
-                                </button>
-                              </div>
-                              <div className="mt-3 grid gap-3">
-                                <input
-                                  value={loop.title}
-                                  onChange={(event) =>
-                                    updateRoadmapLoopByIndex(selectedRoadmapChapter.chapter_number, loopIndex, (current) => ({
-                                      ...current,
-                                      title: event.target.value,
-                                    }))
-                                  }
-                                  placeholder="伏笔标题（必填）"
-                                  className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                                />
-                                <textarea
-                                  value={loop.summary}
-                                  onChange={(event) =>
-                                    updateRoadmapLoopByIndex(selectedRoadmapChapter.chapter_number, loopIndex, (current) => ({
-                                      ...current,
-                                      summary: event.target.value,
-                                    }))
-                                  }
-                                  rows={2}
-                                  placeholder="伏笔摘要（必填）"
-                                  className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                                />
-                                <div className="grid gap-3 md:grid-cols-3">
-                                  <select
-                                    value={loop.status}
-                                    onChange={(event) =>
-                                      updateRoadmapLoopByIndex(selectedRoadmapChapter.chapter_number, loopIndex, (current) => ({
-                                        ...current,
-                                        status: parseLoopStatusValue(event.target.value),
-                                      }))
-                                    }
-                                    className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                                  >
-                                    <option value="open">未回收</option>
-                                    <option value="progressed">已推进</option>
-                                    <option value="resolved">已回收</option>
-                                  </select>
-                                  <input
-                                    type="number"
-                                    min={selectedRoadmapChapter.chapter_number}
-                                    value={loop.due_start_chapter ?? ''}
-                                    onChange={(event) =>
-                                      updateRoadmapLoopByIndex(selectedRoadmapChapter.chapter_number, loopIndex, (current) => ({
-                                        ...current,
-                                        due_start_chapter: parseOptionalChapterNumber(event.target.value),
-                                      }))
-                                    }
-                                    placeholder="开始进入章"
-                                    className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                                  />
-                                  <input
-                                    type="number"
-                                    min={selectedRoadmapChapter.chapter_number}
-                                    value={loop.due_end_chapter}
-                                    onChange={(event) =>
-                                      updateRoadmapLoopByIndex(selectedRoadmapChapter.chapter_number, loopIndex, (current) => ({
-                                        ...current,
-                                        due_end_chapter:
-                                          parseOptionalChapterNumber(event.target.value) ?? selectedRoadmapChapter.chapter_number,
-                                      }))
-                                    }
-                                    placeholder="最迟兑现章（必填）"
-                                    className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                                  />
-                                </div>
-                                <input
-                                  value={joinTags(loop.related_characters)}
-                                  onChange={(event) =>
-                                    updateRoadmapLoopByIndex(selectedRoadmapChapter.chapter_number, loopIndex, (current) => ({
-                                      ...current,
-                                      related_characters: parseTags(event.target.value),
-                                    }))
-                                  }
-                                  placeholder="关联人物，多项可用逗号分隔"
-                                  className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                                />
-                                <textarea
-                                  value={joinTags(loop.resolution_requirements)}
-                                  onChange={(event) =>
-                                    updateRoadmapLoopByIndex(selectedRoadmapChapter.chapter_number, loopIndex, (current) => ({
-                                      ...current,
-                                      resolution_requirements: parseTags(event.target.value),
-                                    }))
-                                  }
-                                  rows={2}
-                                  placeholder="回收条件，多项可用逗号分隔"
-                                  className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                                />
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <p className="rounded-xl border border-dashed border-stone-300 px-3 py-4 text-sm text-stone-500">
-                            当前章节还没有结构化伏笔。新增时请直接填写回收边界，避免线索无限拖延。
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <input
-                      value={selectedRoadmapChapter.depends_on_chapters.join('，')}
-                      onChange={(event) =>
-                        updateRoadmapChapterByNumber(selectedRoadmapChapter.chapter_number, (item) => ({
-                          ...item,
-                          depends_on_chapters: parseTags(event.target.value)
-                            .map((value) => Number(value))
-                            .filter((value) => Number.isFinite(value)),
-                        }))
-                      }
-                      placeholder="承接章节，例如 12，13"
-                      className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
-                    />
-                  </div>
-                </details>
-
-                {selectedRoadmapChapterIssues.length > 0 ? (
-                  <div className="space-y-2">
-                    {selectedRoadmapChapterIssues.map((issue, index) => (
-                      <div
-                        key={`${issue.type}-${index}`}
-                        className={`rounded-2xl px-3 py-3 text-xs ${
-                          issue.severity === 'fatal' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'
-                        }`}
-                      >
-                        {issue.message}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="rounded-2xl bg-emerald-50 px-3 py-3 text-xs text-emerald-700">
-                    当前章节没有额外结构告警，可以继续细修或返回阶段工作台生成下一章。
-                  </p>
-                )}
-              </div>
-              </section>
-            </>
-          ) : null}
-
           {activeSection === 'continuity' ? (
             <section className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
               <h4 className="text-sm font-semibold text-stone-900">连续性检查清单</h4>
@@ -3931,8 +3546,9 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
               </ul>
             </section>
           ) : null}
-        </WorkspaceSummaryRail>
+        </WorkspaceInspectorRail>
       </div>
     </div>
   )
 }
+

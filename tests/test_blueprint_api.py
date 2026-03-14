@@ -12,7 +12,12 @@ from poiesis.application.blueprint_contracts import (
     StoryArcPlan,
     WorldBlueprint,
 )
-from poiesis.application.blueprint_use_cases import BlueprintContext, build_book_blueprint
+from poiesis.application.blueprint_use_cases import (
+    BlueprintContext,
+    PlanCreativeRepairsUseCase,
+    ReverifyCreativeIssuesUseCase,
+    build_book_blueprint,
+)
 from poiesis.db.database import Database
 from poiesis.llm.base import LLMClient
 from poiesis.pipeline.planning.roadmap_planner import RoadmapPlanner
@@ -2189,3 +2194,459 @@ def test_canon_api_returns_structured_world_and_relationship_graph(tmp_db: Datab
     payload = response.json()
     assert payload["world_blueprint_summary"]["power_system"]["core_mechanics"] == "真气与机关术共鸣"
     assert payload["relationship_graph"][0]["relation_type"] == "师徒"
+
+
+def test_creative_repair_control_plane_can_plan_apply_and_rollback(
+    tmp_db: Database,
+    monkeypatch,
+) -> None:
+    """闭环控制面应支持问题识别、提案生成、执行修复与回滚。"""
+    from poiesis.api.services import blueprint_service
+
+    def _fake_context(config_path: str, db: Database, book_id: int) -> BlueprintContext:  # noqa: ARG001
+        return BlueprintContext(
+            db=db,
+            llm=MockLLMClient(),
+            book_id=book_id,
+            planner=RoadmapPlanner(),
+        )
+
+    monkeypatch.setattr(blueprint_service, "_build_context", _fake_context)
+    client = _make_client(tmp_db)
+    book_id = tmp_db.create_book(
+        name="闭环控制面测试",
+        language="zh-CN",
+        style_preset="literary_cn",
+        style_prompt="",
+        naming_policy="localized_zh",
+        is_default=False,
+    )
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="story_arcs_ready",
+        current_step="roadmap",
+        story_arcs_draft=[
+            {
+                "arc_number": 1,
+                "title": "血月旧案开启",
+                "purpose": "让主角卷入旧案",
+                "start_chapter": 1,
+                "end_chapter": 3,
+                "main_progress": ["主角第一次确认父母旧案并非巧合"],
+                "relationship_progress": [],
+                "loop_progress": ["血月门遗迹"],
+                "timeline_milestones": ["入秋初夜"],
+                "arc_climax": "主角在遗迹入口被迫出手",
+            }
+        ],
+        roadmap_draft=[
+            {
+                "chapter_number": 1,
+                "title": "裂碑夜雨",
+                "story_stage": "血月旧案开启",
+                "timeline_anchor": "入秋初夜",
+                "depends_on_chapters": [],
+                "goal": "卷入主线",
+                "core_conflict": "黑市逼近",
+                "turning_point": "残谱异动",
+                "story_progress": "主角第一次确认父母旧案并非巧合",
+                "key_events": ["主角第一次看见残谱异动"],
+                "chapter_tasks": [
+                    {
+                        "task_id": "trace-bloodline",
+                        "summary": "确认主角血脉与残谱的联系",
+                        "status": "in_progress",
+                        "related_characters": ["林寒"],
+                        "due_end_chapter": 2,
+                    }
+                ],
+                "relationship_beats": [],
+                "character_progress": ["林寒从旁观转向主动追查"],
+                "relationship_progress": [],
+                "new_reveals": ["残谱会对主角血脉产生共鸣"],
+                "world_updates": [],
+                "status_shift": ["主角不再只是旁观者"],
+                "chapter_function": "开局",
+                "anti_repeat_signature": "第一幕:卷入主线",
+                "planned_loops": [
+                    {
+                        "loop_id": "loop-1",
+                        "title": "残谱异动",
+                        "summary": "残谱第一次在主角面前异动。",
+                        "status": "open",
+                        "priority": 1,
+                        "due_start_chapter": 1,
+                        "due_end_chapter": 3,
+                        "related_characters": ["林寒"],
+                        "resolution_requirements": ["解释残谱与血脉的关系"],
+                    }
+                ],
+                "closure_function": "抛出下一章钩子",
+            }
+        ],
+        expanded_arc_numbers=[],
+    )
+
+    issues_response = client.get(f"/api/books/{book_id}/creative-issues")
+    assert issues_response.status_code == 200
+    issues_payload = issues_response.json()
+    target_issue = next(item for item in issues_payload["items"] if item["issue_type"] == "task_status_jump")
+    assert target_issue["repairability"] == "deterministic"
+    assert target_issue["suggested_strategy"] == "field_patch"
+
+    plan_response = client.post(
+        f"/api/books/{book_id}/creative-issues:plan-repairs",
+        json={"issue_ids": [target_issue["issue_id"]]},
+    )
+    assert plan_response.status_code == 200
+    plan_payload = plan_response.json()
+    assert len(plan_payload["creative_repair_proposals"]) == 1
+    proposal = plan_payload["creative_repair_proposals"][0]
+    assert proposal["strategy_type"] == "field_patch"
+    assert proposal["status"] == "awaiting_approval"
+
+    proposal_response = client.get(f"/api/books/{book_id}/repair-proposals/{proposal['proposal_id']}")
+    assert proposal_response.status_code == 200
+    assert proposal_response.json()["proposal_id"] == proposal["proposal_id"]
+
+    apply_response = client.post(f"/api/books/{book_id}/repair-proposals/{proposal['proposal_id']}:apply", json={})
+    assert apply_response.status_code == 200
+    apply_payload = apply_response.json()
+    assert not any(item["issue_type"] == "task_status_jump" for item in apply_payload["creative_issues"])
+    assert apply_payload["roadmap_draft"][0]["chapter_tasks"][0]["status"] == "new"
+    assert apply_payload["creative_repair_runs"][-1]["status"] == "succeeded"
+
+    rollback_run = apply_payload["creative_repair_runs"][-1]
+    rollback_response = client.post(
+        f"/api/books/{book_id}/repair-runs/{rollback_run['run_id']}:rollback",
+        json={},
+    )
+    assert rollback_response.status_code == 200
+    rollback_payload = rollback_response.json()
+    assert any(item["issue_type"] == "task_status_jump" for item in rollback_payload["creative_issues"])
+    assert rollback_payload["roadmap_draft"][0]["chapter_tasks"][0]["status"] == "in_progress"
+
+
+def test_creative_repair_planner_marks_semantic_issue_as_rewrite(tmp_db: Database) -> None:
+    """语义连续性问题应升级为重写提案，而不是伪装成字段级修补。"""
+    client = _make_client(tmp_db)
+    book_id = tmp_db.create_book(
+        name="语义重写策略测试",
+        language="zh-CN",
+        style_preset="literary_cn",
+        style_prompt="",
+        naming_policy="localized_zh",
+        is_default=False,
+    )
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="story_arcs_ready",
+        current_step="roadmap",
+        story_arcs_draft=[
+            {
+                "arc_number": 1,
+                "title": "第一幕",
+                "purpose": "卷入主线",
+                "start_chapter": 1,
+                "end_chapter": 3,
+                "main_progress": ["把旧案从传闻推进到可验证线索"],
+                "relationship_progress": [],
+                "loop_progress": [],
+                "timeline_milestones": ["入秋初夜"],
+                "arc_climax": "在渡口确认幕后有人提前布局",
+            }
+        ],
+        roadmap_draft=[
+            {
+                "chapter_number": 1,
+                "title": "旧案初现",
+                "story_stage": "第一幕",
+                "timeline_anchor": "入秋初夜",
+                "depends_on_chapters": [],
+                "goal": "卷入主线",
+                "core_conflict": "主角不敢惊动师门",
+                "turning_point": "残谱异动",
+                "story_progress": "主角第一次确认旧案并非巧合",
+                "key_events": ["主角第一次看见残谱异动"],
+                "chapter_tasks": [],
+                "relationship_beats": [],
+                "character_progress": [],
+                "relationship_progress": [],
+                "new_reveals": [],
+                "world_updates": [],
+                "status_shift": [],
+                "chapter_function": "调查",
+                "anti_repeat_signature": "第一幕:调查旧案",
+                "planned_loops": [],
+                "closure_function": "继续调查",
+            },
+            {
+                "chapter_number": 2,
+                "title": "再查旧案",
+                "story_stage": "第一幕",
+                "timeline_anchor": "入秋次日清晨",
+                "depends_on_chapters": [1],
+                "goal": "继续追查",
+                "core_conflict": "主角仍不敢惊动师门",
+                "turning_point": "账册缺页",
+                "story_progress": "主角继续确认旧案并非巧合",
+                "key_events": ["渡口账册出现缺页"],
+                "chapter_tasks": [],
+                "relationship_beats": [],
+                "character_progress": [],
+                "relationship_progress": [],
+                "new_reveals": [],
+                "world_updates": [],
+                "status_shift": [],
+                "chapter_function": "调查",
+                "anti_repeat_signature": "第一幕:继续调查",
+                "planned_loops": [],
+                "closure_function": "继续调查",
+            },
+        ],
+        expanded_arc_numbers=[],
+    )
+
+    response = client.get(f"/api/books/{book_id}/creative-issues")
+    assert response.status_code == 200
+    issues = response.json()["items"]
+    repeated_issue = next(item for item in issues if item["issue_type"] == "repeated_chapter_function")
+    assert repeated_issue["repairability"] == "llm"
+    assert repeated_issue["suggested_strategy"] == "chapter_rewrite"
+
+
+def test_reverify_keeps_waiting_roadmap_proposal_binding(tmp_db: Database) -> None:
+    """重新复验后，已经挂在待确认提案上的 roadmap issue 仍应保留 awaiting_approval 状态。"""
+    client = _make_client(tmp_db)
+    book_id = tmp_db.create_book(
+        name="复验状态保持测试",
+        language="zh-CN",
+        style_preset="literary_cn",
+        style_prompt="",
+        naming_policy="localized_zh",
+        is_default=False,
+    )
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="story_arcs_ready",
+        current_step="roadmap",
+        story_arcs_draft=[
+            {
+                "arc_number": 1,
+                "title": "第一幕",
+                "purpose": "卷入主线",
+                "start_chapter": 1,
+                "end_chapter": 2,
+                "main_progress": ["让旧案从模糊传闻升级为可验证线索"],
+                "relationship_progress": [],
+                "loop_progress": [],
+                "timeline_milestones": ["入秋初夜"],
+                "arc_climax": "确认血脉与旧案存在直接关联",
+            }
+        ],
+        roadmap_draft=[
+            {
+                "chapter_number": 1,
+                "title": "旧案初现",
+                "story_stage": "第一幕",
+                "timeline_anchor": "入秋初夜",
+                "depends_on_chapters": [],
+                "goal": "卷入主线",
+                "core_conflict": "主角不敢惊动师门",
+                "turning_point": "残谱异动",
+                "story_progress": "主角第一次确认旧案并非巧合",
+                "key_events": ["主角第一次看见残谱异动"],
+                "chapter_tasks": [
+                    {
+                        "task_id": "trace-bloodline",
+                        "summary": "确认主角血脉与残谱的联系",
+                        "status": "in_progress",
+                        "related_characters": ["林寒"],
+                        "due_end_chapter": 2,
+                    }
+                ],
+                "relationship_beats": [],
+                "character_progress": ["林寒从旁观转向主动追查"],
+                "relationship_progress": [],
+                "new_reveals": ["残谱会对主角血脉产生共鸣"],
+                "world_updates": [],
+                "status_shift": ["主角不再只是旁观者"],
+                "chapter_function": "开局",
+                "anti_repeat_signature": "第一幕:卷入主线",
+                "planned_loops": [
+                    {
+                        "loop_id": "loop-1",
+                        "title": "残谱异动",
+                        "summary": "残谱第一次在主角面前异动。",
+                        "status": "open",
+                        "priority": 1,
+                        "due_start_chapter": 1,
+                        "due_end_chapter": 2,
+                        "related_characters": ["林寒"],
+                        "resolution_requirements": ["解释残谱与血脉的关系"],
+                    }
+                ],
+                "closure_function": "抛出下一章钩子",
+            }
+        ],
+        expanded_arc_numbers=[],
+    )
+
+    issues_payload = client.get(f"/api/books/{book_id}/creative-issues").json()
+    target_issue = next(item for item in issues_payload["items"] if item["issue_type"] == "task_status_jump")
+
+    plan_payload = PlanCreativeRepairsUseCase(
+        BlueprintContext(db=tmp_db, llm=MockLLMClient(), book_id=book_id, planner=RoadmapPlanner())
+    ).execute([target_issue["issue_id"]]).model_dump(mode="json")
+    assert plan_payload["creative_repair_proposals"][0]["status"] == "awaiting_approval"
+
+    reverify_payload = ReverifyCreativeIssuesUseCase(
+        BlueprintContext(db=tmp_db, llm=MockLLMClient(), book_id=book_id, planner=RoadmapPlanner())
+    ).execute().model_dump(mode="json")
+    reverified_issue = next(item for item in reverify_payload["creative_issues"] if item["issue_type"] == "task_status_jump")
+    assert reverified_issue["status"] == "awaiting_approval"
+    assert reverify_payload["creative_repair_proposals"][0]["status"] == "awaiting_approval"
+
+
+def test_creative_issue_list_includes_pending_review_queue_item(tmp_db: Database) -> None:
+    """待审阅 scene 会以只读 CreativeIssue 的方式进入统一控制面。"""
+    client = _make_client(tmp_db)
+    book_id = tmp_db.create_book(
+        name="审阅队列接入测试",
+        language="zh-CN",
+        style_preset="literary_cn",
+        style_prompt="",
+        naming_policy="localized_zh",
+        is_default=False,
+    )
+    run_id = tmp_db.create_run_trace(
+        task_id="review-creative-issue",
+        book_id=book_id,
+        status="running",
+        config_snapshot={"mode": "scene"},
+        llm_snapshot={"writer": "mock"},
+    )
+    review_id = tmp_db.create_scene_review(run_id, 3, 2, "场景存在设定冲突，需人工审阅")
+
+    response = client.get(f"/api/books/{book_id}/creative-issues")
+    assert response.status_code == 200
+    payload = response.json()
+    review_issue = next(item for item in payload["items"] if item["issue_id"] == f"review-issue-{review_id}")
+    assert review_issue["source_layer"] == "review"
+    assert review_issue["target_type"] == "scene_chapter"
+    assert review_issue["repairability"] == "manual"
+    assert review_issue["suggested_strategy"] == "scene_rewrite"
+    assert "第 3 章第 2 场待审阅" in review_issue["message"]
+    assert review_issue["context_payload"]["review_id"] == review_id
+    assert review_issue["context_payload"]["run_id"] == run_id
+    assert review_issue["context_payload"]["chapter_number"] == 3
+    assert review_issue["context_payload"]["scene_number"] == 2
+    assert review_issue["context_payload"]["review_status"] == "pending"
+    assert review_issue["context_payload"]["reason"] == "场景存在设定冲突，需人工审阅"
+    assert review_issue["context_payload"]["scene_status"] == "needs_review"
+    assert review_issue["context_payload"]["event_count"] == 0
+
+
+def test_review_issue_does_not_participate_in_roadmap_repair_planning(tmp_db: Database) -> None:
+    """review 只读接入统一控制面，不应被 roadmap 修复提案链错误接管。"""
+    book_id = tmp_db.create_book(
+        name="只读审阅问题测试",
+        language="zh-CN",
+        style_preset="literary_cn",
+        style_prompt="",
+        naming_policy="localized_zh",
+        is_default=False,
+    )
+    run_id = tmp_db.create_run_trace(
+        task_id="review-readonly-issue",
+        book_id=book_id,
+        status="running",
+        config_snapshot={"mode": "scene"},
+        llm_snapshot={"writer": "mock"},
+    )
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="story_arcs_ready",
+        current_step="roadmap",
+        story_arcs_draft=[
+            {
+                "arc_number": 1,
+                "title": "第一幕",
+                "purpose": "卷入主线",
+                "start_chapter": 1,
+                "end_chapter": 1,
+                "main_progress": ["把旧案从传闻推进到可验证线索"],
+                "relationship_progress": [],
+                "loop_progress": [],
+                "timeline_milestones": ["入秋初夜"],
+                "arc_climax": "确认旧案并非巧合",
+            }
+        ],
+        roadmap_draft=[
+            {
+                "chapter_number": 1,
+                "title": "旧案初现",
+                "story_stage": "第一幕",
+                "timeline_anchor": "入秋初夜",
+                "depends_on_chapters": [],
+                "goal": "卷入主线",
+                "core_conflict": "主角不敢惊动师门",
+                "turning_point": "残谱异动",
+                "story_progress": "主角第一次确认旧案并非巧合",
+                "key_events": ["主角第一次看见残谱异动"],
+                "chapter_tasks": [],
+                "relationship_beats": [],
+                "character_progress": [],
+                "relationship_progress": [],
+                "new_reveals": [],
+                "world_updates": [],
+                "status_shift": [],
+                "chapter_function": "开局",
+                "anti_repeat_signature": "第一幕:卷入主线",
+                "planned_loops": [],
+                "closure_function": "抛出下一章钩子",
+            }
+        ],
+        expanded_arc_numbers=[],
+    )
+    review_id = tmp_db.create_scene_review(run_id, 2, 1, "场景冲突需要人工判断")
+
+    use_case = PlanCreativeRepairsUseCase(
+        BlueprintContext(db=tmp_db, llm=MockLLMClient(), book_id=book_id, planner=RoadmapPlanner())
+    )
+    try:
+        use_case.execute([f"review-issue-{review_id}"])
+    except ValueError as exc:
+        assert str(exc) == "当前没有可生成修复方案的问题。"
+    else:
+        raise AssertionError("review 只读问题不应该进入 roadmap 修复提案链。")
+
+
+def test_reverify_keeps_pending_review_issue_visible(tmp_db: Database) -> None:
+    """重新复验不会误删 review 只读问题，它仍然由 scene review 队列驱动。"""
+    book_id = tmp_db.create_book(
+        name="审阅问题复验保持测试",
+        language="zh-CN",
+        style_preset="literary_cn",
+        style_prompt="",
+        naming_policy="localized_zh",
+        is_default=False,
+    )
+    run_id = tmp_db.create_run_trace(
+        task_id="review-reverify-issue",
+        book_id=book_id,
+        status="running",
+        config_snapshot={"mode": "scene"},
+        llm_snapshot={"writer": "mock"},
+    )
+    review_id = tmp_db.create_scene_review(run_id, 4, 2, "当前 scene 需要人工审阅")
+
+    payload = ReverifyCreativeIssuesUseCase(
+        BlueprintContext(db=tmp_db, llm=MockLLMClient(), book_id=book_id, planner=RoadmapPlanner())
+    ).execute().model_dump(mode="json")
+
+    review_issue = next(item for item in payload["creative_issues"] if item["issue_id"] == f"review-issue-{review_id}")
+    assert review_issue["source_layer"] == "review"
+    assert review_issue["status"] == "open"
+    assert review_issue["context_payload"]["chapter_number"] == 4
+    assert review_issue["context_payload"]["scene_number"] == 2

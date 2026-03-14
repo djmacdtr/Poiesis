@@ -18,6 +18,8 @@ import type {
   RelationshipPendingItem,
   RelationshipReplanResponse,
   WorldBlueprint,
+  CreativeIssue,
+  CreativeRepairProposal,
 } from '@/types'
 
 /** 获取书籍列表 */
@@ -41,6 +43,41 @@ export function updateBook(bookId: number, payload: BookUpsertRequest): Promise<
 /** 读取整书蓝图 */
 export function fetchBookBlueprint(bookId: number): Promise<BookBlueprint> {
   return get<BookBlueprint>(`/api/books/${bookId}/blueprint`)
+}
+
+/** 读取闭环控制面的问题队列 */
+export function fetchCreativeIssues(bookId: number): Promise<{ items: CreativeIssue[] }> {
+  return get<{ items: CreativeIssue[] }>(`/api/books/${bookId}/creative-issues`)
+}
+
+/** 为当前问题队列生成修复提案 */
+export function planCreativeRepairs(bookId: number, issueIds: string[] = []): Promise<BookBlueprint> {
+  return post<BookBlueprint>(`/api/books/${bookId}/creative-issues:plan-repairs`, {
+    issue_ids: issueIds,
+  })
+}
+
+/** 读取单条修复提案 */
+export function fetchCreativeRepairProposal(
+  bookId: number,
+  proposalId: string,
+): Promise<CreativeRepairProposal> {
+  return get<CreativeRepairProposal>(`/api/books/${bookId}/repair-proposals/${proposalId}`)
+}
+
+/** 执行指定修复提案 */
+export function applyCreativeRepairProposal(bookId: number, proposalId: string): Promise<BookBlueprint> {
+  return post<BookBlueprint>(`/api/books/${bookId}/repair-proposals/${proposalId}:apply`, {})
+}
+
+/** 回滚一次修复执行 */
+export function rollbackCreativeRepairRun(bookId: number, runId: string): Promise<BookBlueprint> {
+  return post<BookBlueprint>(`/api/books/${bookId}/repair-runs/${runId}:rollback`, {})
+}
+
+/** 重新复验当前章节路线 */
+export function reverifyCreativeIssues(bookId: number): Promise<BookBlueprint> {
+  return post<BookBlueprint>(`/api/books/${bookId}/creative-issues:reverify`, {})
 }
 
 /** 保存作者创作意图 */

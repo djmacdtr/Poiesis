@@ -13,6 +13,9 @@ from poiesis.application.blueprint_contracts import (
     ConceptVariant,
     ConceptVariantRegenerationResult,
     CreationIntent,
+    CreativeIssue,
+    CreativeRepairProposal,
+    CreativeRepairRun,
     RelationshipBlueprintEdge,
     RelationshipConflictReport,
     RelationshipPendingItem,
@@ -136,3 +139,25 @@ class RelationshipReplanResponse(BaseModel):
     request_id: int
     request: dict[str, object]
     proposal: RelationshipRetconProposal
+
+
+class CreativeIssueListResponse(BaseModel):
+    """统一闭环控制面的问题列表响应。"""
+
+    items: list[CreativeIssue]
+
+
+class PlanCreativeRepairsRequest(BaseModel):
+    """生成修复提案时可指定只处理部分 issue。"""
+
+    issue_ids: list[str] = []
+
+
+class CreativeRepairProposalResponse(CreativeRepairProposal):
+    """单条修复提案响应。"""
+
+
+class CreativeRepairRunListResponse(BaseModel):
+    """执行记录列表。"""
+
+    items: list[CreativeRepairRun]

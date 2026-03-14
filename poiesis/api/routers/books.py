@@ -20,6 +20,9 @@ from poiesis.api.schemas.blueprint import (
     ConfirmRoadmapRequest,
     ConfirmWorldBlueprintRequest,
     CreationIntentRequest,
+    CreativeIssueListResponse,
+    CreativeRepairProposalResponse,
+    PlanCreativeRepairsRequest,
     RegenerateConceptVariantResponse,
     RelationshipGraphResponse,
     RelationshipPendingListResponse,
@@ -115,6 +118,111 @@ def get_book_blueprint(book_id: int, db: Database = Depends(get_db)) -> BookBlue
     if db.get_book(book_id) is None:
         raise HTTPException(status_code=404, detail="书籍不存在")
     return BookBlueprintResponse(**blueprint_service.get_book_blueprint(db, book_id).model_dump(mode="json"))
+
+
+@router.get("/{book_id}/creative-issues", response_model=CreativeIssueListResponse)
+def list_creative_issues(book_id: int, db: Database = Depends(get_db)) -> CreativeIssueListResponse:
+    """读取统一闭环控制面的问题队列。"""
+    if db.get_book(book_id) is None:
+        raise HTTPException(status_code=404, detail="书籍不存在")
+    return CreativeIssueListResponse(items=blueprint_service.list_creative_issues(db, book_id))
+
+
+@router.post("/{book_id}/creative-issues:plan-repairs", response_model=BookBlueprintResponse)
+def plan_creative_repairs(
+    book_id: int,
+    body: PlanCreativeRepairsRequest,
+    db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
+) -> BookBlueprintResponse:
+    """为当前问题队列生成修复提案。"""
+    try:
+        payload = blueprint_service.plan_creative_repairs(
+            db,
+            _config_path(),
+            book_id,
+            body.issue_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BookBlueprintResponse(**payload.model_dump(mode="json"))
+
+
+@router.get("/{book_id}/repair-proposals/{proposal_id}", response_model=CreativeRepairProposalResponse)
+def get_creative_repair_proposal(
+    book_id: int,
+    proposal_id: str,
+    db: Database = Depends(get_db),
+) -> CreativeRepairProposalResponse:
+    """读取单条修复提案详情。"""
+    try:
+        payload = blueprint_service.get_creative_repair_proposal(
+            db,
+            _config_path(),
+            book_id,
+            proposal_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CreativeRepairProposalResponse.model_validate(payload)
+
+
+@router.post("/{book_id}/repair-proposals/{proposal_id}:apply", response_model=BookBlueprintResponse)
+def apply_creative_repair_proposal(
+    book_id: int,
+    proposal_id: str,
+    db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
+) -> BookBlueprintResponse:
+    """执行指定修复提案并自动复验。"""
+    try:
+        payload = blueprint_service.apply_creative_repair_proposal(
+            db,
+            _config_path(),
+            book_id,
+            proposal_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BookBlueprintResponse(**payload.model_dump(mode="json"))
+
+
+@router.post("/{book_id}/repair-runs/{run_id}:rollback", response_model=BookBlueprintResponse)
+def rollback_creative_repair_run(
+    book_id: int,
+    run_id: str,
+    db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
+) -> BookBlueprintResponse:
+    """把一次修复执行回滚到 apply 前快照。"""
+    try:
+        payload = blueprint_service.rollback_creative_repair_run(
+            db,
+            _config_path(),
+            book_id,
+            run_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BookBlueprintResponse(**payload.model_dump(mode="json"))
+
+
+@router.post("/{book_id}/creative-issues:reverify", response_model=BookBlueprintResponse)
+def reverify_creative_issues(
+    book_id: int,
+    db: Database = Depends(get_db),
+    _: Any = Depends(require_admin),
+) -> BookBlueprintResponse:
+    """重新扫描当前章节路线，刷新问题队列。"""
+    try:
+        payload = blueprint_service.reverify_creative_issues(
+            db,
+            _config_path(),
+            book_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BookBlueprintResponse(**payload.model_dump(mode="json"))
 
 
 @router.post("/{book_id}/creation-intent", response_model=BookBlueprintResponse)

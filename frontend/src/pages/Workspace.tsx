@@ -4,12 +4,13 @@
  */
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Sparkles } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
-import { BookOpenText, Sparkles } from 'lucide-react'
 import { BookBlueprintWorkspace } from '@/components/BookBlueprintWorkspace'
 import { ErrorMessage, LoadingSpinner } from '@/components/Feedback'
+import { WorkspaceTopStatusBar } from '@/components/workspace/WorkspaceTopStatusBar'
 import { useActiveBook, resolveActiveBookId } from '@/contexts/ActiveBookContext'
-import { formatLanguageLabel, formatStylePresetLabel } from '@/lib/display-labels'
+import { formatBlueprintStatusLabel, formatBlueprintStepLabel, formatLanguageLabel, formatStylePresetLabel } from '@/lib/display-labels'
 import { fetchBookBlueprint, fetchBooks } from '@/services/books'
 import type { BookItem } from '@/types'
 
@@ -87,49 +88,37 @@ export default function WorkspacePage() {
   if (blueprintError) {
     return <ErrorMessage message={(blueprintError as Error).message} />
   }
+  if (!blueprint) {
+    return <LoadingSpinner text="整理当前作品工作台中…" />
+  }
 
   const activeBook = books.find((item) => item.id === resolvedBookId) ?? books[0]!
+  const fatalCount = blueprint.roadmap_validation_issues.filter((item) => item.severity === 'fatal').length
+  const warningCount = blueprint.roadmap_validation_issues.filter((item) => item.severity === 'warning').length
+  const pendingRepairCount = blueprint.creative_repair_proposals.filter((item) => item.status === 'awaiting_approval').length
 
   return (
     <div className="space-y-5">
-      <section className="rounded-[28px] border border-stone-200 bg-white px-6 py-5 shadow-sm">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
-              <BookOpenText className="h-3.5 w-3.5" />
-              蓝图驱动写作主工作台
-            </div>
-            <h2 className="mt-3 text-2xl font-semibold text-stone-900">围绕当前作品逐层推进整书蓝图</h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-600">
-              这里承接创作意图、候选方向、世界观、人物、关系图谱、章节路线与连续性校对。
-              页面外的“章节总览”和“设定总览”仅作为资产页，不再承担主流程。
-            </p>
-          </div>
-          <div className="min-w-[280px] rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3">
-            <label className="block text-xs font-medium uppercase tracking-[0.18em] text-stone-500">
-              当前作品
-            </label>
-            <select
-              value={resolvedBookId}
-              onChange={(event) => {
-                const nextBookId = Number(event.target.value)
-                setActiveBookId(nextBookId)
-                setSearchParams({ book: String(nextBookId) }, { replace: true })
-              }}
-              className="mt-2 w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm text-stone-800"
-            >
-              {books.map((book) => (
-                <option key={book.id} value={book.id}>
-                  {book.name}（{formatLanguageLabel(book.language)} / {formatStylePresetLabel(book.style_preset)}）
-                </option>
-              ))}
-            </select>
-            <p className="mt-2 text-xs text-stone-500">
-              当前书名：{activeBook.name} · 文风：{formatStylePresetLabel(activeBook.style_preset)}
-            </p>
-          </div>
-        </div>
-      </section>
+      <WorkspaceTopStatusBar
+        bookOptions={books.map((book) => ({
+          id: book.id,
+          name: book.name,
+          languageLabel: formatLanguageLabel(book.language),
+          styleLabel: formatStylePresetLabel(book.style_preset),
+        }))}
+        activeBookName={activeBook.name}
+        activeBookStyleLabel={formatStylePresetLabel(activeBook.style_preset)}
+        activeBookId={resolvedBookId}
+        blueprintStatusLabel={formatBlueprintStatusLabel(blueprint.status)}
+        blueprintStepLabel={formatBlueprintStepLabel(blueprint.current_step)}
+        fatalCount={fatalCount}
+        warningCount={warningCount}
+        pendingRepairCount={pendingRepairCount}
+        onSelectBook={(nextBookId) => {
+          setActiveBookId(nextBookId)
+          setSearchParams({ book: String(nextBookId) }, { replace: true })
+        }}
+      />
 
       <BookBlueprintWorkspace bookId={resolvedBookId} blueprint={blueprint} activeBook={activeBook} />
     </div>

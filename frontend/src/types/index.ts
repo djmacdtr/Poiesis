@@ -714,6 +714,77 @@ export interface BlueprintRevision {
   created_at: string
 }
 
+export interface CreativeIssue {
+  issue_id: string
+  book_id: number
+  source_layer: 'blueprint' | 'roadmap' | 'scene' | 'review' | 'canon'
+  target_type:
+    | 'roadmap_chapter'
+    | 'roadmap_arc'
+    | 'scene_chapter'
+    | 'character'
+    | 'relationship'
+    | 'world'
+    | 'canon_fact'
+  target_ref: Record<string, unknown>
+  issue_type: string
+  severity: 'fatal' | 'warning'
+  message: string
+  detected_by: string
+  repairability: 'deterministic' | 'llm' | 'manual'
+  status: 'open' | 'planned' | 'awaiting_approval' | 'applied' | 'verified' | 'escalated' | 'dismissed'
+  suggested_strategy: 'field_patch' | 'chapter_rewrite' | 'arc_rewrite' | 'scene_rewrite' | 'canon_sync' | null
+  /**
+   * 只读详情载荷：
+   * - target_ref 继续只承担“定位到哪个对象”的职责；
+   * - 这里承接 review / scene / canon 这些跨层问题需要展示的额外上下文；
+   * - roadmap 当前可以不依赖它，但后续接入其他层时不用再把详情塞回 message。
+   */
+  context_payload: Record<string, unknown>
+}
+
+export interface RepairOperation {
+  op_type:
+    | 'set_field'
+    | 'append_item'
+    | 'remove_item'
+    | 'rewrite_chapter'
+    | 'rewrite_arc'
+    | 'rewrite_scene'
+    | 'sync_canon'
+  target_ref: Record<string, unknown>
+  payload: Record<string, unknown>
+  reason: string
+}
+
+export interface CreativeRepairProposal {
+  proposal_id: string
+  book_id: number
+  issue_ids: string[]
+  strategy_type: 'field_patch' | 'chapter_rewrite' | 'arc_rewrite' | 'scene_rewrite' | 'canon_sync'
+  risk_level: 'low' | 'medium' | 'high'
+  status: 'draft' | 'awaiting_approval' | 'applied' | 'failed' | 'rolled_back'
+  operations: RepairOperation[]
+  summary: string
+  diff_preview: Array<Record<string, unknown>>
+  expected_post_conditions: string[]
+  requires_llm: boolean
+  created_at: string
+}
+
+export interface CreativeRepairRun {
+  run_id: string
+  book_id: number
+  proposal_id: string
+  execution_mode: 'preview' | 'apply'
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'rolled_back'
+  logs: string[]
+  before_snapshot_ref: string | null
+  after_snapshot_ref: string | null
+  created_at: string
+  error_message: string
+}
+
 export interface BookBlueprint {
   book_id: number
   status: string
@@ -737,6 +808,9 @@ export interface BookBlueprint {
   roadmap_confirmed: ChapterRoadmapItem[]
   continuity_state: BlueprintContinuityState
   roadmap_validation_issues: RoadmapValidationIssue[]
+  creative_issues: CreativeIssue[]
+  creative_repair_proposals: CreativeRepairProposal[]
+  creative_repair_runs: CreativeRepairRun[]
   revisions: BlueprintRevision[]
 }
 

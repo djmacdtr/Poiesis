@@ -19,6 +19,30 @@ BlueprintStatus = Literal[
     "roadmap_ready",
     "locked",
 ]
+CreativeIssueSourceLayer = Literal["blueprint", "roadmap", "scene", "review", "canon"]
+CreativeIssueTargetType = Literal[
+    "roadmap_chapter",
+    "roadmap_arc",
+    "scene_chapter",
+    "character",
+    "relationship",
+    "world",
+    "canon_fact",
+]
+CreativeRepairability = Literal["deterministic", "llm", "manual"]
+CreativeIssueStatus = Literal["open", "planned", "awaiting_approval", "applied", "verified", "escalated", "dismissed"]
+CreativeRepairStrategy = Literal["field_patch", "chapter_rewrite", "arc_rewrite", "scene_rewrite", "canon_sync"]
+CreativeRepairRiskLevel = Literal["low", "medium", "high"]
+CreativeRepairRunStatus = Literal["queued", "running", "succeeded", "failed", "rolled_back"]
+RepairOperationType = Literal[
+    "set_field",
+    "append_item",
+    "remove_item",
+    "rewrite_chapter",
+    "rewrite_arc",
+    "rewrite_scene",
+    "sync_canon",
+]
 
 
 class CreationIntent(BaseModel):
@@ -440,6 +464,94 @@ class BlueprintRevision(BaseModel):
     created_at: str = ""
 
 
+class CreativeIssue(BaseModel):
+    """统一闭环控制面中的问题项。
+
+    设计约束：
+    1. 这里不只服务 roadmap，字段必须能覆盖 scene / review / canon 的后续接入；
+    2. status 是控制面状态，不等于 verifier 严重级别；
+    3. suggested_strategy / repairability 直接供前端展示，避免工作台再自己猜一遍。
+    4. target_ref 只承担“定位引用”职责，详细只读上下文统一放到 context_payload，
+       避免后续把 review / scene 的展示细节继续硬塞进 message 或 target_ref。
+    """
+
+    issue_id: str
+    book_id: int
+    source_layer: CreativeIssueSourceLayer
+    target_type: CreativeIssueTargetType
+    target_ref: dict[str, object] = Field(default_factory=dict)
+    issue_type: str
+    severity: Literal["fatal", "warning"] = "warning"
+    message: str = ""
+    detected_by: str = ""
+    repairability: CreativeRepairability = "manual"
+    status: CreativeIssueStatus = "open"
+    suggested_strategy: CreativeRepairStrategy | None = None
+    context_payload: dict[str, object] = Field(default_factory=dict)
+
+
+class RepairOperation(BaseModel):
+    """修复提案中的原子操作。
+
+    第一阶段虽然主要落在 roadmap，但操作类型提前按全栈闭环留齐，
+    这样后续接入 scene / canon 时不用再推翻已有协议。
+    """
+
+    op_type: RepairOperationType
+    target_ref: dict[str, object] = Field(default_factory=dict)
+    payload: dict[str, object] = Field(default_factory=dict)
+    reason: str = ""
+
+
+class CreativeRepairProposal(BaseModel):
+    """面向作者展示和确认的修复提案。
+
+    默认自治级别是“建议后执行”，因此提案必须包含足够的 diff 和预期结果，
+    让作者能先看清楚系统打算怎么改，再决定是否接受。
+    """
+
+    proposal_id: str
+    book_id: int
+    issue_ids: list[str] = Field(default_factory=list)
+    strategy_type: CreativeRepairStrategy
+    risk_level: CreativeRepairRiskLevel = "medium"
+    status: Literal["draft", "awaiting_approval", "applied", "failed", "rolled_back"] = "awaiting_approval"
+    operations: list[RepairOperation] = Field(default_factory=list)
+    summary: str = ""
+    diff_preview: list[dict[str, object]] = Field(default_factory=list)
+    expected_post_conditions: list[str] = Field(default_factory=list)
+    requires_llm: bool = False
+    created_at: str = ""
+
+
+class CreativeRepairRun(BaseModel):
+    """记录一次修复提案的执行结果与回滚锚点。"""
+
+    run_id: str
+    book_id: int
+    proposal_id: str
+    execution_mode: Literal["preview", "apply"] = "apply"
+    status: CreativeRepairRunStatus = "queued"
+    logs: list[str] = Field(default_factory=list)
+    before_snapshot_ref: str | None = None
+    after_snapshot_ref: str | None = None
+    created_at: str = ""
+    error_message: str = ""
+
+
+class CreativeStateSnapshot(BaseModel):
+    """闭环控制面使用的轻量快照。
+
+    这里保存的是“蓝图工作态业务真源”，不把 proposals / runs 自己也卷进快照，
+    否则回滚时会把执行历史一并抹掉，后续就无法审计。
+    """
+
+    snapshot_id: str
+    book_id: int
+    payload: dict[str, object] = Field(default_factory=dict)
+    created_at: str = ""
+
+
 class BookBlueprint(BaseModel):
     """当前作品的创作蓝图聚合。"""
 
@@ -465,6 +577,9 @@ class BookBlueprint(BaseModel):
     roadmap_confirmed: list[ChapterRoadmapItem] = Field(default_factory=list)
     continuity_state: BlueprintContinuityState = Field(default_factory=BlueprintContinuityState)
     roadmap_validation_issues: list[RoadmapValidationIssue] = Field(default_factory=list)
+    creative_issues: list[CreativeIssue] = Field(default_factory=list)
+    creative_repair_proposals: list[CreativeRepairProposal] = Field(default_factory=list)
+    creative_repair_runs: list[CreativeRepairRun] = Field(default_factory=list)
     revisions: list[BlueprintRevision] = Field(default_factory=list)
 
 

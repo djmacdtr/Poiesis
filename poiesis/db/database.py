@@ -134,6 +134,9 @@ class Database:
         self._ensure_column(conn, "book_blueprints", "expanded_arc_numbers_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "book_blueprints", "blueprint_continuity_state_json", "JSON DEFAULT '{}'")
         self._ensure_column(conn, "book_blueprints", "roadmap_validation_issues_json", "JSON DEFAULT '[]'")
+        self._ensure_column(conn, "book_blueprints", "creative_repair_proposals_json", "JSON DEFAULT '[]'")
+        self._ensure_column(conn, "book_blueprints", "creative_repair_runs_json", "JSON DEFAULT '[]'")
+        self._ensure_column(conn, "book_blueprints", "creative_control_snapshots_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "book_blueprint_revisions", "relationship_graph_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "blueprint_chapter_roadmap", "relationship_progress_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "story_state_snapshots", "blueprint_revision_id", "INTEGER")
@@ -951,12 +954,19 @@ class Database:
         story_arcs_draft: list[dict[str, Any]] | None = None,
         story_arcs_confirmed: list[dict[str, Any]] | None = None,
         expanded_arc_numbers: list[int] | None = None,
-        roadmap_draft: list[dict[str, Any]] | None = None,
-        roadmap_confirmed: list[dict[str, Any]] | None = None,
-        blueprint_continuity_state: dict[str, Any] | None = None,
-        roadmap_validation_issues: list[dict[str, Any]] | None = None,
-    ) -> int:
-        """保存蓝图工作态，供控制台逐层确认。"""
+          roadmap_draft: list[dict[str, Any]] | None = None,
+          roadmap_confirmed: list[dict[str, Any]] | None = None,
+          blueprint_continuity_state: dict[str, Any] | None = None,
+          roadmap_validation_issues: list[dict[str, Any]] | None = None,
+          creative_repair_proposals: list[dict[str, Any]] | None = None,
+          creative_repair_runs: list[dict[str, Any]] | None = None,
+          creative_control_snapshots: list[dict[str, Any]] | None = None,
+      ) -> int:
+        """保存蓝图工作态，供控制台逐层确认。
+
+        闭环控制面的 proposals / runs / snapshots 也挂在同一行上，
+        目的是先用统一真源把第一阶段 roadmap 闭环跑通，再逐层接入 scene / canon。
+        """
         existing = self.get_book_blueprint_state(book_id) or {}
         with self._cursor() as cur:
             cur.execute(
@@ -966,9 +976,10 @@ class Database:
                     world_draft_json, world_confirmed_json, character_draft_json, character_confirmed_json,
                     relationship_graph_draft_json, relationship_graph_confirmed_json,
                     story_arcs_draft_json, story_arcs_confirmed_json, expanded_arc_numbers_json,
-                    roadmap_draft_json, roadmap_confirmed_json, blueprint_continuity_state_json, roadmap_validation_issues_json
+                    roadmap_draft_json, roadmap_confirmed_json, blueprint_continuity_state_json, roadmap_validation_issues_json,
+                    creative_repair_proposals_json, creative_repair_runs_json, creative_control_snapshots_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(book_id) DO UPDATE SET
                     status = excluded.status,
                     current_step = excluded.current_step,
@@ -987,6 +998,9 @@ class Database:
                     roadmap_confirmed_json = excluded.roadmap_confirmed_json,
                     blueprint_continuity_state_json = excluded.blueprint_continuity_state_json,
                     roadmap_validation_issues_json = excluded.roadmap_validation_issues_json,
+                    creative_repair_proposals_json = excluded.creative_repair_proposals_json,
+                    creative_repair_runs_json = excluded.creative_repair_runs_json,
+                    creative_control_snapshots_json = excluded.creative_control_snapshots_json,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -1042,6 +1056,19 @@ class Database:
                         if roadmap_validation_issues is not None
                         else existing.get("roadmap_validation_issues") or []
                     ),
+                    json.dumps(
+                        creative_repair_proposals
+                        if creative_repair_proposals is not None
+                        else existing.get("creative_repair_proposals") or []
+                    ),
+                    json.dumps(
+                        creative_repair_runs if creative_repair_runs is not None else existing.get("creative_repair_runs") or []
+                    ),
+                    json.dumps(
+                        creative_control_snapshots
+                        if creative_control_snapshots is not None
+                        else existing.get("creative_control_snapshots") or []
+                    ),
                 ),
             )
             return cur.lastrowid or 0
@@ -1067,6 +1094,9 @@ class Database:
         item["roadmap_confirmed"] = json.loads(item.pop("roadmap_confirmed_json", "[]") or "[]")
         item["blueprint_continuity_state"] = json.loads(item.pop("blueprint_continuity_state_json", "{}") or "{}")
         item["roadmap_validation_issues"] = json.loads(item.pop("roadmap_validation_issues_json", "[]") or "[]")
+        item["creative_repair_proposals"] = json.loads(item.pop("creative_repair_proposals_json", "[]") or "[]")
+        item["creative_repair_runs"] = json.loads(item.pop("creative_repair_runs_json", "[]") or "[]")
+        item["creative_control_snapshots"] = json.loads(item.pop("creative_control_snapshots_json", "[]") or "[]")
         return item
 
     def create_blueprint_revision(

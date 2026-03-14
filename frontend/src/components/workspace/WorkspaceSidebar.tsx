@@ -40,15 +40,13 @@ const toneClassName: Record<WorkspaceSidebarItem['tone'], string> = {
 
 export function WorkspaceSidebar({ items, activeKey, onChange }: WorkspaceSidebarProps) {
   return (
-    <aside className="rounded-[28px] border border-stone-200 bg-white p-4 shadow-sm">
+    <aside className="rounded-[24px] border border-stone-200 bg-white p-3 shadow-sm">
       <div className="border-b border-stone-200 px-2 pb-3">
         <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-stone-400">工作台导航</p>
-        <p className="mt-2 text-sm leading-6 text-stone-600">
-          用固定步骤把蓝图工作流拆开，避免世界观、人物、路线和连续性同时挤在一页里。
-        </p>
+        <p className="mt-2 text-xs leading-5 text-stone-500">按步骤推进整书蓝图，优先处理有风险或被阻塞的环节。</p>
       </div>
 
-      <div className="mt-4 space-y-2">
+      <div className="mt-3 space-y-2">
         {items.map((item) => {
           const isActive = item.key === activeKey
           return (
@@ -57,16 +55,16 @@ export function WorkspaceSidebar({ items, activeKey, onChange }: WorkspaceSideba
               type="button"
               onClick={() => onChange(item.key)}
               className={cn(
-                'w-full rounded-2xl border px-4 py-3 text-left transition-all',
+                'w-full rounded-2xl border px-3.5 py-3 text-left transition-all',
                 isActive
                   ? 'border-emerald-200 bg-emerald-50/80 shadow-sm'
                   : 'border-transparent bg-stone-50 hover:border-stone-200 hover:bg-white',
               )}
             >
               <div className="flex items-start justify-between gap-3">
-                <div>
+                <div className="min-w-0">
                   <p className="text-sm font-semibold text-stone-900">{item.label}</p>
-                  <p className="mt-1 text-xs leading-5 text-stone-500">{item.description}</p>
+                  <p className="mt-1 line-clamp-1 text-[11px] leading-5 text-stone-500">{item.description}</p>
                 </div>
                 <span className={cn('shrink-0 rounded-full px-2 py-1 text-[11px] font-medium', toneClassName[item.tone])}>
                   {item.statusLabel}
@@ -89,4 +87,3 @@ export function WorkspaceSidebar({ items, activeKey, onChange }: WorkspaceSideba
     </aside>
   )
 }
-

@@ -14,13 +14,12 @@ interface WorkspaceSummaryRailProps {
 export function WorkspaceSummaryRail({ title, description, children }: WorkspaceSummaryRailProps) {
   return (
     <aside className="space-y-4">
-      <section className="rounded-[28px] border border-stone-200 bg-white p-5 shadow-sm">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-stone-400">上下文摘要</p>
-        <h3 className="mt-3 text-base font-semibold text-stone-900">{title}</h3>
-        <p className="mt-2 text-sm leading-6 text-stone-600">{description}</p>
+      <section className="rounded-[24px] border border-stone-200 bg-white px-4 py-3 shadow-sm">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-stone-400">Inspector</p>
+        <h3 className="mt-2 text-sm font-semibold text-stone-900">{title}</h3>
+        <p className="mt-1 text-xs leading-5 text-stone-600">{description}</p>
       </section>
       <div className="space-y-4">{children}</div>
     </aside>
   )
 }
-
