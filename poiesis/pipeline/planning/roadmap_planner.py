@@ -546,7 +546,13 @@ class RoadmapPlanner:
         chapter_count: int = 12,
         existing_roadmap: list[ChapterRoadmapItem] | None = None,
     ) -> list[StoryArcPlan]:
-        """重生成整书阶段骨架后，仅替换目标阶段。"""
+        """重生成目标阶段骨架，但显式锁定该幕原有章号区间。
+
+        这里的语义必须和 UI 保持一致：
+        - “重生成本阶段骨架”只代表重写这一幕的结构内容；
+        - 不代表允许模型顺手改掉这一幕的 start/end chapter；
+        - 如果未来要支持整书分幕重排，必须走独立动作，不能复用当前入口。
+        """
         regenerated = self.generate_story_arcs_only(
             intent=intent,
             variant=variant,
@@ -564,10 +570,65 @@ class RoadmapPlanner:
         merged: list[StoryArcPlan] = []
         for arc in story_arcs:
             if arc.arc_number == arc_number:
-                merged.append(replacement)
+                merged.append(self.preserve_story_arc_range(arc, replacement))
             else:
                 merged.append(arc)
+        self.validate_story_arc_ranges(merged)
         return merged
+
+    def preserve_story_arc_range(self, original: StoryArcPlan, rewritten: StoryArcPlan) -> StoryArcPlan:
+        """把单幕骨架重写结果强制锁回原章号区间。
+
+        设计原因：
+        - 当前动作的产品语义是“只重写本幕内容”；
+        - 如果允许模型同时改区间，就会造成后续幕的章号不再连续；
+        - 因此 start/end/目标章数等边界字段都必须以原幕为准。
+        """
+
+        chapter_target_count = max(1, original.end_chapter - original.start_chapter + 1)
+        return rewritten.model_copy(
+            update={
+                "arc_number": original.arc_number,
+                "start_chapter": original.start_chapter,
+                "end_chapter": original.end_chapter,
+                "status": "draft",
+                "has_chapters": False,
+                "generated_chapter_count": 0,
+                "chapter_target_count": chapter_target_count,
+                "next_chapter_number": original.start_chapter,
+                "can_generate_next_chapter": False,
+                "blocking_arc_number": None,
+                "expansion_issue_count": 0,
+            }
+        )
+
+    def validate_story_arc_ranges(self, story_arcs: list[StoryArcPlan]) -> None:
+        """校验阶段区间必须连续且无重叠。
+
+        单幕骨架重写和闭环 proposal apply 都会用到这条保护：
+        一旦区间断裂或重叠，就说明“单幕重写”已经越过了它应该守住的边界，
+        此时宁可直接失败，也不能把坏状态落到工作态里。
+        """
+
+        if not story_arcs:
+            return
+        ordered = sorted(story_arcs, key=lambda item: item.start_chapter)
+        previous: StoryArcPlan | None = None
+        for arc in ordered:
+            if arc.start_chapter > arc.end_chapter:
+                raise ValueError(f"第 {arc.arc_number} 幕的章号区间非法：起始章晚于结束章。")
+            if previous is None:
+                previous = arc
+                continue
+            if arc.start_chapter <= previous.end_chapter:
+                raise ValueError(
+                    f"第 {previous.arc_number} 幕与第 {arc.arc_number} 幕的章号区间发生重叠。"
+                )
+            if arc.start_chapter != previous.end_chapter + 1:
+                raise ValueError(
+                    f"第 {previous.arc_number} 幕与第 {arc.arc_number} 幕之间出现章号断裂。"
+                )
+            previous = arc
 
     def regenerate_story_arc(
         self,

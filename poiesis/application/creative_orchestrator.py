@@ -272,7 +272,12 @@ class CreativeOrchestrator:
         roadmap: list[ChapterRoadmapItem],
         expanded_arc_numbers: list[int],
     ) -> tuple[list[StoryArcPlan], list[ChapterRoadmapItem], list[int]]:
-        """把提案操作真正应用到 roadmap 工作态。"""
+        """把提案操作真正应用到 roadmap 工作态。
+
+        对 rewrite_arc 这里额外补一层区间保护：
+        - proposal 虽然来自 planner，但 apply 仍要防守“坏提案/旧提案/手工篡改提案”；
+        - 一旦发现阶段区间断裂或重叠，直接中止执行，不把损坏的分幕状态写回。
+        """
         next_story_arcs = [arc.model_copy(deep=True) for arc in story_arcs]
         next_roadmap = [chapter.model_copy(deep=True) for chapter in roadmap]
         next_expanded_arc_numbers = list(expanded_arc_numbers)
@@ -291,6 +296,10 @@ class CreativeOrchestrator:
                 target_arc_number = int(operation.target_ref.get("arc_number") or 0)
                 payload = operation.payload.get("story_arc") or {}
                 replacement = StoryArcPlan.model_validate(payload)
+                original_arc = next((arc for arc in next_story_arcs if arc.arc_number == target_arc_number), None)
+                if original_arc is None:
+                    raise ValueError(f"待重写的第 {target_arc_number} 幕不存在。")
+                replacement = self._planner.preserve_story_arc_range(original_arc, replacement)
                 next_story_arcs = [
                     replacement if arc.arc_number == target_arc_number else arc
                     for arc in next_story_arcs
@@ -309,6 +318,7 @@ class CreativeOrchestrator:
 
         next_roadmap.sort(key=lambda item: item.chapter_number)
         next_story_arcs.sort(key=lambda item: item.arc_number)
+        self._planner.validate_story_arc_ranges(next_story_arcs)
         return next_story_arcs, next_roadmap, next_expanded_arc_numbers
 
     def build_snapshot_payload(self, state: dict[str, Any]) -> dict[str, object]:
@@ -604,6 +614,8 @@ class CreativeOrchestrator:
             arc = next((item for item in story_arcs if item.arc_number == arc_number), None)
             if arc is None:
                 continue
+            total_start_chapter = min((item.start_chapter for item in story_arcs), default=arc.start_chapter)
+            total_end_chapter = max((item.end_chapter for item in story_arcs), default=arc.end_chapter)
             feedback = self._build_rewrite_feedback([issue_map[item.issue_id] for item in issues if item.issue_id in issue_map])
             proposal_signature = _build_proposal_signature(
                 [issue.issue_signature for issue in issues],
@@ -624,6 +636,8 @@ class CreativeOrchestrator:
                 story_arcs=story_arcs,
                 arc_number=arc_number,
                 feedback=feedback,
+                starting_chapter=total_start_chapter,
+                chapter_count=total_end_chapter - total_start_chapter + 1,
                 existing_roadmap=[item for item in roadmap if item.chapter_number < arc.start_chapter],
             )
             replacement = next((item for item in regenerated_arcs if item.arc_number == arc_number), None)
@@ -654,9 +668,12 @@ class CreativeOrchestrator:
                             reason=feedback,
                         )
                     ],
-                    summary=f"重写第 {arc_number} 幕骨架，并清空该幕已生成章节以重新展开",
+                    summary=f"重写第 {arc_number} 幕骨架（保留本幕章号区间），并清空该幕已生成章节以重新展开",
                     diff_preview=self._build_arc_rewrite_preview(arc, replacement, clear_numbers),
-                    expected_post_conditions=["该幕的结构性重复或停滞问题应通过重新展开得到缓解。"],
+                    expected_post_conditions=[
+                        "该幕的结构性重复或停滞问题应通过重新展开得到缓解。",
+                        "当前幕的章号区间保持不变，后续幕的分幕范围不会被一起改写。",
+                    ],
                     requires_llm=True,
                     created_at=_now_iso(),
                 )

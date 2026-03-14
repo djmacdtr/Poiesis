@@ -11,12 +11,16 @@ from poiesis.application.blueprint_contracts import (
     CharacterBlueprint,
     ConceptVariant,
     CreationIntent,
+    CreativeRepairProposal,
+    RepairOperation,
     StoryArcPlan,
     WorldBlueprint,
 )
 from poiesis.application.blueprint_use_cases import (
+    ApplyCreativeRepairProposalUseCase,
     BlueprintContext,
     PlanCreativeRepairsUseCase,
+    RegenerateStoryArcUseCase,
     ReverifyCreativeIssuesUseCase,
     build_book_blueprint,
 )
@@ -1255,6 +1259,264 @@ def test_build_book_blueprint_normalizes_stored_half_structured_roadmap(tmp_db: 
     assert blueprint.roadmap_draft[0].character_progress == ["林寒开始主动追查", "苏璃第一次公开站队"]
     assert blueprint.roadmap_draft[0].planned_loops[0].title == "裂碑渡异动"
     assert blueprint.continuity_state.open_tasks[0].task_id == "chapter-3-task-1"
+
+
+def test_regenerate_story_arc_skeleton_preserves_original_ranges() -> None:
+    """单幕骨架重写必须锁住原章号区间，不能让模型顺手改边界。"""
+    planner = RoadmapPlanner()
+    original_arcs = [
+        StoryArcPlan(
+            arc_number=1,
+            title="血月旧案开启",
+            purpose="卷入主线",
+            start_chapter=1,
+            end_chapter=12,
+            chapter_target_count=12,
+            next_chapter_number=1,
+        ),
+        StoryArcPlan(
+            arc_number=2,
+            title="天机令迷雾",
+            purpose="追查真相",
+            start_chapter=13,
+            end_chapter=24,
+            chapter_target_count=12,
+            next_chapter_number=13,
+        ),
+    ]
+
+    regenerated = planner.regenerate_story_arc_skeleton(
+        intent=CreationIntent(
+            genre="武侠",
+            themes=["成长"],
+            tone="冷峻",
+            protagonist_prompt="少年剑客",
+            conflict_prompt="追查旧案",
+            ending_preference="代价胜利",
+            forbidden_elements=[],
+            length_preference="24",
+            target_experience="层层揭晓",
+            variant_preference="",
+        ),
+        variant=ConceptVariant(
+            variant_no=1,
+            hook="裂碑夜雨",
+            world_pitch="旧案引动暗流",
+            main_arc_pitch="主角被迫卷入真相",
+            ending_pitch="代价胜利",
+        ),
+        world=WorldBlueprint(setting_summary="暗网江湖浮出水面。"),
+        characters=[],
+        llm=MockLLMClient(
+            json_response={
+                "story_arcs": [
+                    {
+                        "arc_number": 1,
+                        "title": "血月旧案再启",
+                        "purpose": "让主角更早卷入主线并建立江湖格局",
+                        "start_chapter": 1,
+                        "end_chapter": 3,
+                        "main_progress": ["旧案从传闻升级为可验证线索"],
+                        "relationship_progress": ["与师妹建立互信"],
+                        "loop_progress": ["残谱异动提前浮现"],
+                        "timeline_milestones": ["入秋初夜", "入秋次日"],
+                        "arc_climax": "主角在第 3 章确认幕后有人提前布局",
+                    }
+                ]
+            }
+        ),
+        story_arcs=original_arcs,
+        arc_number=1,
+        feedback="请让第一幕更集中，但不要改动分幕边界",
+        starting_chapter=1,
+        chapter_count=24,
+        existing_roadmap=[],
+    )
+
+    assert regenerated[0].title == "血月旧案再启"
+    assert regenerated[0].start_chapter == 1
+    assert regenerated[0].end_chapter == 12
+    assert regenerated[0].chapter_target_count == 12
+    assert regenerated[0].next_chapter_number == 1
+    assert regenerated[1].start_chapter == 13
+    assert regenerated[1].end_chapter == 24
+
+
+def test_regenerate_story_arc_use_case_keeps_later_arc_ranges(tmp_db: Database) -> None:
+    """手动重生成本阶段骨架后，后续阶段章号区间必须保持不变。"""
+    book_id = tmp_db.create_book("单幕重生成区间保护", "zh-CN", "literary_cn", "", "localized_zh")
+    tmp_db.upsert_creation_intent(
+        book_id,
+        {
+            "genre": "武侠",
+            "themes": ["成长"],
+            "tone": "冷峻",
+            "protagonist_prompt": "被卷入旧案的少年",
+            "conflict_prompt": "追查父母之死与残谱",
+            "ending_preference": "代价胜利",
+            "forbidden_elements": [],
+            "length_preference": "24",
+            "target_experience": "层层揭晓",
+            "variant_preference": "",
+        },
+    )
+    tmp_db.replace_concept_variants(
+        book_id,
+        [
+            {
+                "variant_no": 1,
+                "hook": "裂碑夜雨",
+                "world_pitch": "表层江湖平静，暗网秩序暗流涌动。",
+                "main_arc_pitch": "主角在旧案追查中不断被迫介入各方势力的博弈。",
+                "ending_pitch": "代价胜利",
+            }
+        ],
+    )
+    variant_id = tmp_db.list_concept_variants(book_id)[0]["id"]
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="story_arcs_ready",
+        current_step="roadmap",
+        selected_variant_id=variant_id,
+        world_confirmed=WorldBlueprint(setting_summary="暗网江湖浮出水面。").model_dump(mode="json"),
+        character_confirmed=[
+            CharacterBlueprint(name="林寒", role="主角").model_dump(mode="json"),
+            CharacterBlueprint(name="苏璃", role="师妹").model_dump(mode="json"),
+        ],
+        story_arcs_draft=[
+            StoryArcPlan(arc_number=1, title="血月旧案开启", purpose="卷入主线", start_chapter=1, end_chapter=12).model_dump(mode="json"),
+            StoryArcPlan(arc_number=2, title="天机令迷雾", purpose="追查真相", start_chapter=13, end_chapter=24).model_dump(mode="json"),
+        ],
+        roadmap_draft=[
+            {
+                "chapter_number": 1,
+                "title": "裂碑夜雨",
+                "story_stage": "血月旧案开启",
+                "timeline_anchor": "入秋初夜",
+                "depends_on_chapters": [],
+                "goal": "让主角卷入主线",
+                "core_conflict": "主角想置身事外，但黑市逼近",
+                "turning_point": "残谱异动",
+                "story_progress": "父母旧案与血月门第一次产生明确联系",
+                "key_events": ["主角第一次看见残谱异动"],
+                "chapter_tasks": [],
+                "relationship_beats": [],
+                "character_progress": [],
+                "relationship_progress": [],
+                "new_reveals": [],
+                "world_updates": [],
+                "status_shift": [],
+                "chapter_function": "开局",
+                "anti_repeat_signature": "血月旧案开启:卷入主线",
+                "planned_loops": [
+                    {
+                        "loop_id": "loop-1",
+                        "title": "残谱异动",
+                        "summary": "残谱对主角血脉产生共鸣",
+                        "status": "open",
+                        "priority": 1,
+                        "due_start_chapter": 1,
+                        "due_end_chapter": 3,
+                        "related_characters": ["林寒"],
+                        "resolution_requirements": ["揭示血脉来源"],
+                    }
+                ],
+                "closure_function": "抛出下一章钩子",
+            }
+        ],
+        expanded_arc_numbers=[],
+    )
+
+    result = RegenerateStoryArcUseCase(
+        BlueprintContext(
+            db=tmp_db,
+            llm=MockLLMClient(
+                json_response={
+                    "story_arcs": [
+                        {
+                            "arc_number": 1,
+                            "title": "血月旧案再启",
+                            "purpose": "让主角更早卷入主线并建立江湖格局",
+                            "start_chapter": 1,
+                            "end_chapter": 3,
+                            "main_progress": ["旧案从传闻升级为可验证线索"],
+                            "relationship_progress": ["主角与师妹建立互信"],
+                            "loop_progress": ["残谱异动提前浮现"],
+                            "timeline_milestones": ["入秋初夜", "入秋次日"],
+                            "arc_climax": "主角在血月谷遗迹与天机阁傀儡鏖战并确认幕后布局",
+                        }
+                    ]
+                }
+            ),
+            book_id=book_id,
+            planner=RoadmapPlanner(),
+        )
+    ).execute(1, "请加强第一幕，但不要改动分幕章号")
+
+    assert result.story_arcs_draft[0].title == "血月旧案再启"
+    assert result.story_arcs_draft[0].start_chapter == 1
+    assert result.story_arcs_draft[0].end_chapter == 12
+    assert result.story_arcs_draft[1].start_chapter == 13
+    assert result.story_arcs_draft[1].end_chapter == 24
+
+
+def test_apply_creative_repair_proposal_rejects_discontinuous_arc_ranges(tmp_db: Database) -> None:
+    """闭环 proposal apply 后若整条分幕仍存在断裂，应直接失败并保留失败 run。"""
+    book_id = tmp_db.create_book("闭环提案区间保护", "zh-CN", "literary_cn", "", "localized_zh")
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="story_arcs_ready",
+        current_step="roadmap",
+        story_arcs_draft=[
+            StoryArcPlan(arc_number=1, title="血月旧案开启", purpose="卷入主线", start_chapter=1, end_chapter=12).model_dump(mode="json"),
+            StoryArcPlan(arc_number=2, title="天机令迷雾", purpose="追查真相", start_chapter=14, end_chapter=24).model_dump(mode="json"),
+        ],
+        creative_repair_proposals=[
+            CreativeRepairProposal(
+                proposal_id="proposal-invalid-arc-range",
+                book_id=book_id,
+                issue_ids=["issue-1"],
+                strategy_type="arc_rewrite",
+                risk_level="high",
+                status="awaiting_approval",
+                proposal_signature="proposal-signature-invalid-arc-range",
+                operations=[
+                    RepairOperation(
+                        op_type="rewrite_arc",
+                        target_ref={"arc_number": 1},
+                        payload={
+                            "story_arc": StoryArcPlan(
+                                arc_number=1,
+                                title="血月旧案再启",
+                                purpose="卷入主线",
+                                start_chapter=1,
+                                end_chapter=3,
+                            ).model_dump(mode="json"),
+                            "clear_chapter_numbers": [],
+                        },
+                        reason="测试执行层区间一致性保护",
+                    )
+                ],
+                summary="重写第 1 幕骨架",
+                diff_preview=[],
+                expected_post_conditions=[],
+                requires_llm=True,
+                created_at="2026-03-14T12:00:00",
+            ).model_dump(mode="json")
+        ],
+        creative_repair_runs=[],
+    )
+
+    with pytest.raises(ValueError, match="章号断裂"):
+        ApplyCreativeRepairProposalUseCase(
+            BlueprintContext(db=tmp_db, llm=MockLLMClient(), book_id=book_id, planner=RoadmapPlanner())
+        ).execute("proposal-invalid-arc-range")
+
+    blueprint = build_book_blueprint(tmp_db, book_id)
+    assert blueprint.story_arcs_draft[0].end_chapter == 12
+    assert blueprint.story_arcs_draft[1].start_chapter == 14
+    assert blueprint.creative_repair_proposals[0].status == "failed"
+    assert blueprint.creative_repair_runs[-1].status == "failed"
 
 
 def test_build_book_blueprint_blocks_future_arc_generation_and_expand_api_rejects_it(

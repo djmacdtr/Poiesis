@@ -129,6 +129,11 @@ export function RoadmapInspectorPanel({
               风险等级：{formatCreativeRiskLabel(state.proposal.risk_level)} ·
               {state.proposal.requires_llm ? ' 需要模型改写' : ' 结构补丁'}
             </div>
+            {state.proposal.strategy_type === 'arc_rewrite' ? (
+              <div className="rounded-2xl bg-sky-50 px-3 py-3 text-sky-800">
+                本提案只会重写当前幕的结构内容，并清空该幕已生成章节以重新展开；不会改动整书分幕章号，也不会重排后续幕。
+              </div>
+            ) : null}
             {state.proposal.diff_preview.map((item, index) => (
               <div key={`${state.proposal?.proposal_id}-${index}`} className="rounded-2xl bg-stone-50 px-3 py-3">
                 <p className="font-medium text-stone-800">

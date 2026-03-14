@@ -1040,6 +1040,10 @@ class RegenerateStoryArcUseCase(_BlueprintLayerBase):
         target_arc = next((item for item in story_arcs if item.arc_number == arc_number), None)
         if target_arc is None:
             raise ValueError(f"第 {arc_number} 幕不存在。")
+        # 单幕骨架重写必须锁死原区间：
+        # - 当前动作只允许重写这一幕的结构内容；
+        # - 不允许顺带把后续幕的章号边界一起打乱；
+        # - 因此生成后要立刻做区间一致性校验，再决定是否落库。
         regenerated_arcs = self._context.planner.regenerate_story_arc_skeleton(
             intent=intent,
             variant=variant,
@@ -1052,6 +1056,7 @@ class RegenerateStoryArcUseCase(_BlueprintLayerBase):
             chapter_count=self._length_to_chapter_count(intent),
             existing_roadmap=[item for item in current_roadmap if item.chapter_number < target_arc.start_chapter],
         )
+        self._context.planner.validate_story_arc_ranges(regenerated_arcs)
         preserved_roadmap = [
             item
             for item in current_roadmap
