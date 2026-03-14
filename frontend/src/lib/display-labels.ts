@@ -173,6 +173,27 @@ const CREATIVE_ISSUE_TYPE_LABELS: Record<string, string> = {
   scene_review_pending: '待审阅场景',
 }
 
+/**
+ * 修复提案 diff 里的字段名本质上是后端稳定键值。
+ * 作者界面需要看的是“这次到底改了哪一项”，因此这里统一翻成中文标签，
+ * 避免控制面继续把 purpose / due_end_chapter 这类内部字段直接暴露出来。
+ */
+const CREATIVE_DIFF_FIELD_LABELS: Record<string, string> = {
+  title: '标题',
+  chapter_function: '章节功能',
+  story_progress: '主线推进',
+  key_events: '关键事件',
+  purpose: '阶段目的',
+  main_progress: '主线推进',
+  arc_climax: '阶段高潮',
+  clear_chapter_numbers: '清空章节',
+  status: '状态',
+  depends_on_chapters: '承接章节',
+  due_end_chapter: '最迟兑现章',
+  due_start_chapter: '开始进入章',
+  summary: '摘要',
+}
+
 export function formatLanguageLabel(language?: string | null): string {
   if (!language) return '未填写'
   return LANGUAGE_LABELS[language] ?? language
@@ -302,4 +323,37 @@ export function formatReviewStatusLabel(status?: string | null): string {
 export function formatCreativeIssueTypeLabel(issueType?: string | null): string {
   if (!issueType) return '未标注问题类型'
   return CREATIVE_ISSUE_TYPE_LABELS[issueType] ?? issueType
+}
+
+export function formatCreativeDiffFieldLabel(fieldName?: string | null): string {
+  if (!fieldName) return '变更字段'
+  return CREATIVE_DIFF_FIELD_LABELS[fieldName] ?? fieldName
+}
+
+/**
+ * diff 预览里的 before / after 可能还是后端稳定枚举。
+ * 这里按字段语义做最小必要的中文化：
+ * - status 优先尝试任务状态，再尝试伏笔状态；
+ * - 数组继续保持可扫读的中文分隔；
+ * - 其他字段维持原值，避免前端擅自改写业务内容。
+ */
+export function formatCreativeDiffValue(fieldName: string | null | undefined, value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map((item) => formatCreativeDiffValue(fieldName, item)).join('；') || '空'
+  }
+  if (value === null || value === undefined || value === '') {
+    return '空'
+  }
+  if (fieldName === 'status') {
+    const raw = String(value)
+    const taskLabel = TASK_STATUS_LABELS[raw]
+    if (taskLabel) {
+      return taskLabel
+    }
+    const loopLabel = LOOP_STATUS_LABELS[raw]
+    if (loopLabel) {
+      return loopLabel
+    }
+  }
+  return String(value)
 }

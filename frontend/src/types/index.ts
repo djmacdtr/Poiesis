@@ -734,6 +734,7 @@ export interface CreativeIssue {
   repairability: 'deterministic' | 'llm' | 'manual'
   status: 'open' | 'planned' | 'awaiting_approval' | 'applied' | 'verified' | 'escalated' | 'dismissed'
   suggested_strategy: 'field_patch' | 'chapter_rewrite' | 'arc_rewrite' | 'scene_rewrite' | 'canon_sync' | null
+  issue_signature: string
   /**
    * 只读详情载荷：
    * - target_ref 继续只承担“定位到哪个对象”的职责；
@@ -764,6 +765,7 @@ export interface CreativeRepairProposal {
   strategy_type: 'field_patch' | 'chapter_rewrite' | 'arc_rewrite' | 'scene_rewrite' | 'canon_sync'
   risk_level: 'low' | 'medium' | 'high'
   status: 'draft' | 'awaiting_approval' | 'applied' | 'failed' | 'rolled_back'
+  proposal_signature: string
   operations: RepairOperation[]
   summary: string
   diff_preview: Array<Record<string, unknown>>

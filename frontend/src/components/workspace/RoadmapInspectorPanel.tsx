@@ -24,6 +24,8 @@ import type {
   RoadmapValidationIssue,
 } from '@/types'
 import {
+  formatCreativeDiffFieldLabel,
+  formatCreativeDiffValue,
   formatCreativeIssueStatusLabel,
   formatCreativeIssueTypeLabel,
   formatCreativeRepairabilityLabel,
@@ -75,16 +77,6 @@ interface RoadmapInspectorPanelProps {
   removeRoadmapLoop: (chapterNumber: number, loopIndex: number) => void
   onRegenerateChapter: (arcNumber: number, chapterNumber: number) => void
   reviewQueueHref: string
-}
-
-function previewValue(value: unknown): string {
-  if (Array.isArray(value)) {
-    return value.join('；') || '空'
-  }
-  if (value === null || value === undefined || value === '') {
-    return '空'
-  }
-  return String(value)
 }
 
 export function RoadmapInspectorPanel({
@@ -139,11 +131,13 @@ export function RoadmapInspectorPanel({
             </div>
             {state.proposal.diff_preview.map((item, index) => (
               <div key={`${state.proposal?.proposal_id}-${index}`} className="rounded-2xl bg-stone-50 px-3 py-3">
-                <p className="font-medium text-stone-800">{String(item.field_name ?? item.kind ?? '变更字段')}</p>
+                <p className="font-medium text-stone-800">
+                  {formatCreativeDiffFieldLabel(String(item.field_name ?? item.kind ?? ''))}
+                </p>
                 <p className="mt-1 leading-5">
-                  变更前：{previewValue(item.before)}
+                  变更前：{formatCreativeDiffValue(String(item.field_name ?? ''), item.before)}
                   <br />
-                  变更后：{previewValue(item.after)}
+                  变更后：{formatCreativeDiffValue(String(item.field_name ?? ''), item.after)}
                 </p>
               </div>
             ))}
@@ -229,6 +223,11 @@ export function RoadmapInspectorPanel({
               修复方式：{formatCreativeRepairabilityLabel(state.issue.repairability)}
               {state.issue.suggested_strategy ? ` · 建议策略：${formatCreativeStrategyLabel(state.issue.suggested_strategy)}` : ''}
             </div>
+            {state.issue.source_layer === 'roadmap' && state.issue.suggested_strategy === 'arc_rewrite' ? (
+              <div className="rounded-2xl bg-amber-50 px-3 py-3 text-amber-800">
+                这类阶段级问题默认只作为审查提示，不会自动混入“为当前问题生成修复方案”。如果你判断这一幕骨架确实已经写偏，再单独生成骨架修复方案会更稳妥。
+              </div>
+            ) : null}
             {state.issue.source_layer === 'review' ? (
               <>
                 <div className="rounded-2xl bg-sky-50 px-3 py-3 text-sky-800">

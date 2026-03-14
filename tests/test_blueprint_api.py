@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from poiesis.api.main import app
 from poiesis.application.blueprint_contracts import (
+    ChapterRoadmapItem,
     CharacterBlueprint,
     ConceptVariant,
     CreationIntent,
@@ -18,6 +20,7 @@ from poiesis.application.blueprint_use_cases import (
     ReverifyCreativeIssuesUseCase,
     build_book_blueprint,
 )
+from poiesis.application.creative_orchestrator import CreativeOrchestrator
 from poiesis.db.database import Database
 from poiesis.llm.base import LLMClient
 from poiesis.pipeline.planning.roadmap_planner import RoadmapPlanner
@@ -2413,6 +2416,360 @@ def test_creative_repair_planner_marks_semantic_issue_as_rewrite(tmp_db: Databas
     repeated_issue = next(item for item in issues if item["issue_type"] == "repeated_chapter_function")
     assert repeated_issue["repairability"] == "llm"
     assert repeated_issue["suggested_strategy"] == "chapter_rewrite"
+
+
+def test_global_repair_planning_skips_arc_rewrite_issue_by_default() -> None:
+    """全量生成修复方案时，不应自动把阶段级骨架重写问题卷进去。"""
+    planner = RoadmapPlanner()
+    orchestrator = CreativeOrchestrator(planner)
+    story_arcs = [
+        StoryArcPlan(
+            arc_number=1,
+            title="第一幕",
+            purpose="卷入主线",
+            start_chapter=1,
+            end_chapter=3,
+            main_progress=["旧案从传闻升级为可验证线索"],
+            relationship_progress=[],
+            loop_progress=[],
+            timeline_milestones=["入秋初夜"],
+            arc_climax="发现布局者比预想更近",
+        )
+    ]
+    roadmap = [
+        ChapterRoadmapItem(
+            chapter_number=1,
+            title="旧案初现",
+            story_stage="第一幕",
+            timeline_anchor="入秋初夜",
+            depends_on_chapters=[],
+            goal="卷入主线",
+            core_conflict="主角不敢惊动师门",
+            turning_point="残谱异动",
+            story_progress="主角继续确认旧案并非巧合",
+            key_events=["主角第一次看见残谱异动"],
+            chapter_tasks=[],
+            relationship_beats=[],
+            character_progress=[],
+            relationship_progress=[],
+            new_reveals=[],
+            world_updates=[],
+            status_shift=[],
+            chapter_function="开局",
+            anti_repeat_signature="第一幕:调查旧案",
+            planned_loops=[
+                {
+                    "loop_id": "loop-1",
+                    "title": "残谱异动",
+                    "summary": "残谱第一次在主角面前异动。",
+                    "status": "open",
+                    "priority": 1,
+                    "due_start_chapter": 1,
+                    "due_end_chapter": 4,
+                    "related_characters": ["林寒"],
+                    "resolution_requirements": ["解释残谱与血脉的关系"],
+                }
+            ],
+            closure_function="继续调查",
+        ),
+        ChapterRoadmapItem(
+            chapter_number=2,
+            title="再查旧案",
+            story_stage="第一幕",
+            timeline_anchor="入秋次日清晨",
+            depends_on_chapters=[1],
+            goal="继续追查",
+            core_conflict="主角仍不敢惊动师门",
+            turning_point="账册缺页",
+            story_progress="主角继续确认旧案并非巧合",
+            key_events=["渡口账册出现缺页"],
+            chapter_tasks=[],
+            relationship_beats=[],
+            character_progress=[],
+            relationship_progress=[],
+            new_reveals=[],
+            world_updates=[],
+            status_shift=[],
+            chapter_function="推进",
+            anti_repeat_signature="第一幕:继续追查",
+            planned_loops=[
+                {
+                    "loop_id": "loop-2",
+                    "title": "账册缺页",
+                    "summary": "缺页账册背后有人刻意掩盖资金流向。",
+                    "status": "open",
+                    "priority": 1,
+                    "due_start_chapter": 2,
+                    "due_end_chapter": 4,
+                    "related_characters": ["林寒"],
+                    "resolution_requirements": ["确认是谁取走了缺失账页"],
+                }
+            ],
+            closure_function="继续调查",
+        ),
+        ChapterRoadmapItem(
+            chapter_number=3,
+            title="旧案余震",
+            story_stage="第一幕",
+            timeline_anchor="入秋次日傍晚",
+            depends_on_chapters=[2],
+            goal="继续追查",
+            core_conflict="主角仍不敢惊动师门",
+            turning_point="线索暂时断裂",
+            story_progress="主角继续确认旧案并非巧合",
+            key_events=["主角发现账册缺页背后另有掩护者"],
+            chapter_tasks=[],
+            relationship_beats=[],
+            character_progress=[],
+            relationship_progress=[],
+            new_reveals=[],
+            world_updates=[],
+            status_shift=[],
+            chapter_function="施压",
+            anti_repeat_signature="第一幕:线索受阻",
+            planned_loops=[
+                {
+                    "loop_id": "loop-3",
+                    "title": "掩护者现身",
+                    "summary": "账册缺页背后显然有专门掩护者在场外压线。",
+                    "status": "open",
+                    "priority": 1,
+                    "due_start_chapter": 3,
+                    "due_end_chapter": 5,
+                    "related_characters": ["林寒"],
+                    "resolution_requirements": ["确认掩护者身份及其阵营"],
+                }
+            ],
+            closure_function="留下后续压力",
+        ),
+    ]
+    issues = planner.verify_roadmap(story_arcs, roadmap)
+    assert any(item.type in {"arc_story_progress_stagnation", "arc_missing_climax"} for item in issues)
+
+    with pytest.raises(ValueError, match="当前没有可生成修复方案的问题"):
+        orchestrator.plan_roadmap_repairs(
+            book_id=1,
+            story_arcs=story_arcs,
+            roadmap=roadmap,
+            roadmap_issues=issues,
+            stored_proposals=[],
+            issue_ids=[],
+            intent=CreationIntent(
+                genre="武侠",
+                themes=["成长"],
+                tone="冷峻",
+                protagonist_prompt="少年剑客",
+                conflict_prompt="追查旧案",
+                ending_preference="代价胜利",
+                forbidden_elements=[],
+                length_preference="3",
+                target_experience="递进",
+                variant_preference="",
+            ),
+            variant=ConceptVariant(
+                variant_no=1,
+                hook="少年剑客误入风暴",
+                world_pitch="旧案引动暗流",
+                main_arc_pitch="主角被迫卷入真相",
+                ending_pitch="代价胜利",
+            ),
+            world=WorldBlueprint(setting_summary="旧案背后有江湖暗网。"),
+            characters=[],
+            llm=MockLLMClient(json_response={"story_arcs": []}),
+        )
+
+
+def test_explicit_arc_rewrite_generation_deduplicates_pending_and_applied_proposals() -> None:
+    """显式点阶段问题时仍可生成骨架修复方案，但同签名方案不应重复堆叠。"""
+    planner = RoadmapPlanner()
+    orchestrator = CreativeOrchestrator(planner)
+    story_arcs = [
+        StoryArcPlan(
+            arc_number=1,
+            title="第一幕",
+            purpose="卷入主线",
+            start_chapter=1,
+            end_chapter=3,
+            main_progress=["旧案从传闻升级为可验证线索"],
+            relationship_progress=[],
+            loop_progress=[],
+            timeline_milestones=["入秋初夜"],
+            arc_climax="发现布局者比预想更近",
+        )
+    ]
+    roadmap = [
+        ChapterRoadmapItem(
+            chapter_number=1,
+            title="旧案初现",
+            story_stage="第一幕",
+            timeline_anchor="入秋初夜",
+            depends_on_chapters=[],
+            goal="卷入主线",
+            core_conflict="主角不敢惊动师门",
+            turning_point="残谱异动",
+            story_progress="主角第一次确认旧案并非巧合",
+            key_events=["主角第一次看见残谱异动"],
+            chapter_tasks=[],
+            relationship_beats=[],
+            character_progress=[],
+            relationship_progress=[],
+            new_reveals=[],
+            world_updates=[],
+            status_shift=[],
+            chapter_function="调查",
+            anti_repeat_signature="第一幕:调查旧案",
+            planned_loops=[],
+            closure_function="继续调查",
+        ),
+        ChapterRoadmapItem(
+            chapter_number=2,
+            title="再查旧案",
+            story_stage="第一幕",
+            timeline_anchor="入秋次日清晨",
+            depends_on_chapters=[1],
+            goal="继续追查",
+            core_conflict="主角仍不敢惊动师门",
+            turning_point="账册缺页",
+            story_progress="主角继续确认旧案并非巧合",
+            key_events=["渡口账册出现缺页"],
+            chapter_tasks=[],
+            relationship_beats=[],
+            character_progress=[],
+            relationship_progress=[],
+            new_reveals=[],
+            world_updates=[],
+            status_shift=[],
+            chapter_function="调查",
+            anti_repeat_signature="第一幕:继续调查",
+            planned_loops=[],
+            closure_function="继续调查",
+        ),
+    ]
+    issues = planner.verify_roadmap(story_arcs, roadmap)
+    creative_issues = orchestrator.build_creative_issues(
+        book_id=1,
+        story_arcs=story_arcs,
+        roadmap=roadmap,
+        roadmap_issues=issues,
+        stored_proposals=[],
+    )
+    target_issue = next(item for item in creative_issues if item.issue_type == "arc_function_monotony")
+
+    proposals = orchestrator.plan_roadmap_repairs(
+        book_id=1,
+        story_arcs=story_arcs,
+        roadmap=roadmap,
+        roadmap_issues=issues,
+        stored_proposals=[],
+        issue_ids=[target_issue.issue_id],
+        intent=CreationIntent(
+            genre="武侠",
+            themes=["成长"],
+            tone="冷峻",
+            protagonist_prompt="少年剑客",
+            conflict_prompt="追查旧案",
+            ending_preference="代价胜利",
+            forbidden_elements=[],
+            length_preference="3",
+            target_experience="递进",
+            variant_preference="",
+        ),
+        variant=ConceptVariant(
+            variant_no=1,
+            hook="少年剑客误入风暴",
+            world_pitch="旧案引动暗流",
+            main_arc_pitch="主角被迫卷入真相",
+            ending_pitch="代价胜利",
+        ),
+        world=WorldBlueprint(setting_summary="旧案背后有江湖暗网。"),
+        characters=[],
+        llm=MockLLMClient(
+            json_response={
+                "story_arcs": [
+                    {
+                        "arc_number": 1,
+                        "title": "第一幕",
+                        "purpose": "卷入主线并建立江湖格局",
+                        "start_chapter": 1,
+                        "end_chapter": 3,
+                        "main_progress": ["旧案从传闻升级为可验证线索", "主角确认幕后布局正在逼近"],
+                        "relationship_progress": ["主角与线人建立初步互信"],
+                        "loop_progress": ["血脉异动从异常现象转向明确线索"],
+                        "timeline_milestones": ["入秋初夜", "入秋次日夜"],
+                        "arc_climax": "主角在渡口确认布局者早已盯上自己",
+                    }
+                ]
+            }
+        ),
+    )
+
+    arc_rewrite = next(item for item in proposals if item.strategy_type == "arc_rewrite")
+    assert arc_rewrite.proposal_signature
+
+    with pytest.raises(ValueError, match="当前没有可生成修复方案的问题"):
+        orchestrator.plan_roadmap_repairs(
+            book_id=1,
+            story_arcs=story_arcs,
+            roadmap=roadmap,
+            roadmap_issues=issues,
+            stored_proposals=proposals,
+            issue_ids=[target_issue.issue_id],
+            intent=CreationIntent(
+                genre="武侠",
+                themes=["成长"],
+                tone="冷峻",
+                protagonist_prompt="少年剑客",
+                conflict_prompt="追查旧案",
+                ending_preference="代价胜利",
+                forbidden_elements=[],
+                length_preference="3",
+                target_experience="递进",
+                variant_preference="",
+            ),
+            variant=ConceptVariant(
+                variant_no=1,
+                hook="少年剑客误入风暴",
+                world_pitch="旧案引动暗流",
+                main_arc_pitch="主角被迫卷入真相",
+                ending_pitch="代价胜利",
+            ),
+            world=WorldBlueprint(setting_summary="旧案背后有江湖暗网。"),
+            characters=[],
+            llm=MockLLMClient(json_response={"story_arcs": []}),
+        )
+
+    applied_proposal = proposals[0].model_copy(update={"status": "applied"})
+    with pytest.raises(ValueError, match="暂无新的修复方案"):
+        orchestrator.plan_roadmap_repairs(
+            book_id=1,
+            story_arcs=story_arcs,
+            roadmap=roadmap,
+            roadmap_issues=issues,
+            stored_proposals=[applied_proposal],
+            issue_ids=[target_issue.issue_id],
+            intent=CreationIntent(
+                genre="武侠",
+                themes=["成长"],
+                tone="冷峻",
+                protagonist_prompt="少年剑客",
+                conflict_prompt="追查旧案",
+                ending_preference="代价胜利",
+                forbidden_elements=[],
+                length_preference="3",
+                target_experience="递进",
+                variant_preference="",
+            ),
+            variant=ConceptVariant(
+                variant_no=1,
+                hook="少年剑客误入风暴",
+                world_pitch="旧案引动暗流",
+                main_arc_pitch="主角被迫卷入真相",
+                ending_pitch="代价胜利",
+            ),
+            world=WorldBlueprint(setting_summary="旧案背后有江湖暗网。"),
+            characters=[],
+            llm=MockLLMClient(json_response={"story_arcs": []}),
+        )
 
 
 def test_reverify_keeps_waiting_roadmap_proposal_binding(tmp_db: Database) -> None:

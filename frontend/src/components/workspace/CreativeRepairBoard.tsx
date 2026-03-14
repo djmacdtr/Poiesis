@@ -5,6 +5,8 @@
 import { Link } from 'react-router-dom'
 import type { CreativeIssue, CreativeRepairProposal, CreativeRepairRun } from '@/types'
 import {
+  formatCreativeDiffFieldLabel,
+  formatCreativeDiffValue,
   formatCreativeIssueStatusLabel,
   formatCreativeRepairabilityLabel,
   formatCreativeRiskLabel,
@@ -46,12 +48,6 @@ function issueCardTone(issue: CreativeIssue): string {
     : 'border-amber-200 bg-amber-50 text-amber-700'
 }
 
-function previewValue(value: unknown): string {
-  if (Array.isArray(value)) return value.join('；') || '空'
-  if (value === null || value === undefined || value === '') return '空'
-  return String(value)
-}
-
 function emptyIssueHint(sourceFilter: CreativeIssueSourceFilter): string {
   if (sourceFilter === 'scene') {
     return 'scene verifier 原始问题目前还没有稳定的持久化真源，因此这一层暂时只保留接入预留。'
@@ -63,6 +59,14 @@ function emptyIssueHint(sourceFilter: CreativeIssueSourceFilter): string {
     return '当前作品没有待处理的审阅项。'
   }
   return '当前筛选条件下没有待处理问题。'
+}
+
+function isArcRewriteGuidanceIssue(issue: CreativeIssue): boolean {
+  return issue.source_layer === 'roadmap' && issue.suggested_strategy === 'arc_rewrite'
+}
+
+function canAutoPlanIssue(issue: CreativeIssue): boolean {
+  return issue.source_layer === 'roadmap' && issue.repairability !== 'manual' && !isArcRewriteGuidanceIssue(issue)
 }
 
 export function CreativeRepairBoard({
@@ -96,10 +100,24 @@ export function CreativeRepairBoard({
    */
   const filteredIssues =
     sourceFilter === 'all' ? issues : issues.filter((item) => item.source_layer === sourceFilter)
-  const visibleProposals = sourceFilter === 'all' || sourceFilter === 'roadmap' ? proposals : []
+  /**
+   * 当前提案列只展示“待确认”的活动方案：
+   * - 已执行、失败、回滚的方案都已经进入执行结果或历史语义；
+   * - 如果继续留在当前提案列，作者会误以为系统还在重复推同一方案。
+   */
+  const visibleProposals =
+    sourceFilter === 'all' || sourceFilter === 'roadmap'
+      ? proposals
+          .filter((item) => item.status === 'awaiting_approval')
+          .filter((item, index, items) => {
+            const signature = item.proposal_signature || item.proposal_id
+            return items.findIndex((candidate) => (candidate.proposal_signature || candidate.proposal_id) === signature) === index
+          })
+      : []
   const visibleRuns = sourceFilter === 'all' || sourceFilter === 'roadmap' ? runs : []
   const recentRuns = visibleRuns.slice(0, 1)
   const archivedRuns = visibleRuns.slice(1)
+  const hasAutoPlannableRoadmapIssues = issues.some((item) => item.status === 'open' && canAutoPlanIssue(item))
   const filterOptions: Array<{ key: CreativeIssueSourceFilter; label: string; count: number }> = [
     { key: 'all', label: '全部', count: issues.length },
     {
@@ -137,7 +155,7 @@ export function CreativeRepairBoard({
           disabled={
             roadmapDraftDirty ||
             !['all', 'roadmap'].includes(sourceFilter) ||
-            issues.every((item) => item.source_layer !== 'roadmap') ||
+            !hasAutoPlannableRoadmapIssues ||
             isPlanningRepairs
           }
           className="rounded-xl bg-stone-900 px-3.5 py-2.5 text-sm font-medium text-white hover:bg-stone-800 disabled:opacity-50"
@@ -172,6 +190,12 @@ export function CreativeRepairBoard({
       {sourceFilter !== 'all' && sourceFilter !== 'roadmap' ? (
         <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
           当前筛选的是{formatCreativeSourceLayerLabel(sourceFilter)}。这一层已经接入统一问题队列，但暂未接入可执行修复，因此这里只提供只读排查入口。
+        </div>
+      ) : null}
+
+      {visibleProposals.length > 0 && (sourceFilter === 'all' || sourceFilter === 'roadmap') ? (
+        <div className="rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
+          当前已有待确认修复方案。系统不会重复生成同类提案；请先执行、回滚或继续排查后再生成新的方案。
         </div>
       ) : null}
 
@@ -210,6 +234,11 @@ export function CreativeRepairBoard({
                         {formatCreativeStrategyLabel(issue.suggested_strategy)}
                       </span>
                     ) : null}
+                    {isArcRewriteGuidanceIssue(issue) ? (
+                      <span className="rounded-full bg-white px-2 py-1 text-[11px] text-stone-600">
+                        默认先继续推进或手动判断
+                      </span>
+                    ) : null}
                     {chapterNumber ? (
                       <button
                         type="button"
@@ -234,7 +263,7 @@ export function CreativeRepairBoard({
                         查看第 {arcNumber} 幕
                       </button>
                     ) : null}
-                    {issue.repairability !== 'manual' && issue.source_layer === 'roadmap' ? (
+                    {issue.source_layer === 'roadmap' && issue.repairability !== 'manual' && issue.status === 'open' ? (
                       <button
                         type="button"
                         onClick={(event) => {
@@ -244,7 +273,7 @@ export function CreativeRepairBoard({
                         disabled={isPlanningRepairs}
                         className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-stone-800 disabled:opacity-50"
                       >
-                        生成修复方案
+                        {isArcRewriteGuidanceIssue(issue) ? '单独生成骨架修复方案' : '生成修复方案'}
                       </button>
                     ) : null}
                     {issue.source_layer === 'review' ? (
@@ -316,9 +345,12 @@ export function CreativeRepairBoard({
                   <div className="mt-3 rounded-2xl bg-stone-50 p-3">
                     {proposal.diff_preview.slice(0, 3).map((item, index) => (
                       <div key={`${proposal.proposal_id}-${index}`} className="text-xs text-stone-600">
-                        <span className="font-medium text-stone-800">{String(item.field_name ?? item.kind ?? '变更')}</span>
+                        <span className="font-medium text-stone-800">
+                          {formatCreativeDiffFieldLabel(String(item.field_name ?? item.kind ?? ''))}
+                        </span>
                         {'：'}
-                        {previewValue(item.before)} → {previewValue(item.after)}
+                        {formatCreativeDiffValue(String(item.field_name ?? ''), item.before)} →{' '}
+                        {formatCreativeDiffValue(String(item.field_name ?? ''), item.after)}
                       </div>
                     ))}
                   </div>

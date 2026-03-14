@@ -48,10 +48,41 @@ def _build_issue_id(issue: RoadmapValidationIssue) -> str:
     return f"roadmap-issue-{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:12]}"
 
 
+def _normalize_signature_text(value: str) -> str:
+    """把展示文案规整成稳定签名片段，避免空白差异导致重复提案判定失效。"""
+    return " ".join(value.strip().split())
+
+
+def _build_issue_signature(issue: RoadmapValidationIssue) -> str:
+    """为问题生成稳定签名，供控制面做去重和冷却。"""
+    raw = "|".join(
+        [
+            issue.type,
+            str(issue.chapter_number or 0),
+            str(issue.arc_number or 0),
+            issue.story_stage.strip(),
+            issue.scope,
+            _normalize_signature_text(issue.message),
+        ]
+    )
+    return f"issue-signature-{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:16]}"
+
+
 def _build_proposal_id(issue_ids: list[str], strategy_type: str) -> str:
     """提案 id 只要保证书内稳定唯一即可，不要求全局可读。"""
     raw = "|".join(sorted(issue_ids) + [strategy_type, _now_iso()])
     return f"proposal-{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _build_proposal_signature(issue_signatures: list[str], strategy_type: str) -> str:
+    """提案签名不带时间戳，专门用来识别“是否已经存在同类方案”。
+
+    提案 id 负责唯一性，proposal_signature 负责“这是同一类方案吗”。
+    两者分开后，控制面才能同时保留历史记录又避免当前提案区重复堆叠。
+    """
+
+    raw = "|".join(sorted(issue_signatures) + [strategy_type])
+    return f"proposal-signature-{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:16]}"
 
 
 def _build_run_id(proposal_id: str) -> str:
@@ -106,6 +137,7 @@ class CreativeOrchestrator:
         "arc_story_progress_stagnation",
         "arc_missing_climax",
     }
+    _AUTO_PLAN_EXCLUDED_ISSUE_TYPES = _ARC_REWRITE_ISSUE_TYPES
 
     def __init__(self, planner: RoadmapPlanner) -> None:
         self._planner = planner
@@ -129,6 +161,7 @@ class CreativeOrchestrator:
         issues: list[CreativeIssue] = []
         for issue in roadmap_issues:
             issue_id = _build_issue_id(issue)
+            issue_signature = _build_issue_signature(issue)
             target_type = "roadmap_chapter" if issue.chapter_number is not None else "roadmap_arc"
             repairability, suggested_strategy = self._classify_issue(issue, story_arcs, roadmap)
             issues.append(
@@ -149,6 +182,7 @@ class CreativeOrchestrator:
                     repairability=repairability,
                     status="awaiting_approval" if issue_id in active_issue_ids else "open",
                     suggested_strategy=suggested_strategy,
+                    issue_signature=issue_signature,
                 )
             )
         issues.sort(
@@ -185,34 +219,39 @@ class CreativeOrchestrator:
             stored_proposals=stored_proposals,
         )
         selectable = [issue for issue in available_issues if issue.status == "open"]
-        selected_ids = set(issue_ids) if issue_ids else {
-            issue.issue_id for issue in selectable if issue.repairability != "manual"
-        }
+        selected_ids = (
+            set(issue_ids)
+            if issue_ids
+            else {
+                issue.issue_id
+                for issue in selectable
+                if issue.repairability != "manual" and issue.issue_type not in self._AUTO_PLAN_EXCLUDED_ISSUE_TYPES
+            }
+        )
         selected_issues = [issue for issue in selectable if issue.issue_id in selected_ids]
         if not selected_issues:
             raise ValueError("当前没有可生成修复方案的问题。")
 
-        next_proposals = [
-            proposal
-            for proposal in stored_proposals
-            if not any(issue_id in selected_ids for issue_id in proposal.issue_ids)
-        ]
-        next_proposals.extend(
+        next_proposals = list(stored_proposals)
+        generated_proposals: list[CreativeRepairProposal] = []
+        generated_proposals.extend(
             self._build_field_patch_proposals(
                 book_id,
                 story_arcs,
                 roadmap,
                 roadmap_issues,
                 selected_issues,
+                stored_proposals,
             )
         )
-        next_proposals.extend(
+        generated_proposals.extend(
             self._build_rewrite_proposals(
                 book_id=book_id,
                 story_arcs=story_arcs,
                 roadmap=roadmap,
                 roadmap_issues=roadmap_issues,
                 selected_issues=selected_issues,
+                stored_proposals=stored_proposals,
                 intent=intent,
                 variant=variant,
                 world=world,
@@ -220,6 +259,9 @@ class CreativeOrchestrator:
                 llm=llm,
             )
         )
+        if not generated_proposals:
+            raise ValueError("当前问题暂无新的修复方案；可能已有待确认方案，或同类骨架重写刚执行过。")
+        next_proposals.extend(generated_proposals)
         return sorted(next_proposals, key=lambda item: item.created_at, reverse=True)
 
     def apply_proposal(
@@ -376,6 +418,8 @@ class CreativeOrchestrator:
         if issue.type in self._DETERMINISTIC_ISSUE_TYPES:
             return "deterministic", "field_patch"
         if issue.type in self._ARC_REWRITE_ISSUE_TYPES:
+            # 阶段级问题仍然保留 arc_rewrite 能力，但默认不再混入“全量生成修复方案”。
+            # 只有作者显式点到该问题时，才会真正规划骨架重写，避免反复打断继续展开。
             return "llm", "arc_rewrite"
         if issue.type in self._CHAPTER_REWRITE_ISSUE_TYPES:
             if issue.chapter_number is not None and self._can_rewrite_as_last_chapter(issue.chapter_number, story_arcs, roadmap):
@@ -404,6 +448,7 @@ class CreativeOrchestrator:
         roadmap: list[ChapterRoadmapItem],
         roadmap_issues: list[RoadmapValidationIssue],
         selected_issues: list[CreativeIssue],
+        stored_proposals: list[CreativeRepairProposal],
     ) -> list[CreativeRepairProposal]:
         issue_map = {_build_issue_id(issue): issue for issue in roadmap_issues}
         grouped: dict[int, list[CreativeIssue]] = {}
@@ -436,6 +481,16 @@ class CreativeOrchestrator:
                 diff_preview.extend(preview_rows)
             if not operations:
                 continue
+            proposal_signature = _build_proposal_signature(
+                [issue.issue_signature for issue in issues],
+                "field_patch",
+            )
+            if self._has_proposal_signature(
+                stored_proposals,
+                proposal_signature,
+                statuses={"awaiting_approval"},
+            ):
+                continue
             proposals.append(
                 CreativeRepairProposal(
                     proposal_id=_build_proposal_id([issue.issue_id for issue in issues], "field_patch"),
@@ -444,6 +499,7 @@ class CreativeOrchestrator:
                     strategy_type="field_patch",
                     risk_level="low",
                     status="awaiting_approval",
+                    proposal_signature=proposal_signature,
                     operations=operations,
                     summary=f"修复第 {chapter_number} 章的 {len(issues)} 个结构问题",
                     diff_preview=diff_preview,
@@ -462,6 +518,7 @@ class CreativeOrchestrator:
         roadmap: list[ChapterRoadmapItem],
         roadmap_issues: list[RoadmapValidationIssue],
         selected_issues: list[CreativeIssue],
+        stored_proposals: list[CreativeRepairProposal],
         intent: Any | None,
         variant: ConceptVariant | None,
         world: WorldBlueprint | None,
@@ -495,6 +552,16 @@ class CreativeOrchestrator:
             if current_chapter is None:
                 continue
             feedback = self._build_rewrite_feedback([issue_map[item.issue_id] for item in issues if item.issue_id in issue_map])
+            proposal_signature = _build_proposal_signature(
+                [issue.issue_signature for issue in issues],
+                "chapter_rewrite",
+            )
+            if self._has_proposal_signature(
+                stored_proposals,
+                proposal_signature,
+                statuses={"awaiting_approval"},
+            ):
+                continue
             rewritten = self._planner.regenerate_last_arc_chapter(
                 intent=intent,
                 variant=variant,
@@ -514,6 +581,7 @@ class CreativeOrchestrator:
                     strategy_type="chapter_rewrite",
                     risk_level="medium",
                     status="awaiting_approval",
+                    proposal_signature=proposal_signature,
                     operations=[
                         RepairOperation(
                             op_type="rewrite_chapter",
@@ -537,6 +605,16 @@ class CreativeOrchestrator:
             if arc is None:
                 continue
             feedback = self._build_rewrite_feedback([issue_map[item.issue_id] for item in issues if item.issue_id in issue_map])
+            proposal_signature = _build_proposal_signature(
+                [issue.issue_signature for issue in issues],
+                "arc_rewrite",
+            )
+            if self._has_proposal_signature(
+                stored_proposals,
+                proposal_signature,
+                statuses={"awaiting_approval", "applied"},
+            ):
+                continue
             regenerated_arcs = self._planner.regenerate_story_arc_skeleton(
                 intent=intent,
                 variant=variant,
@@ -564,6 +642,7 @@ class CreativeOrchestrator:
                     strategy_type="arc_rewrite",
                     risk_level="high",
                     status="awaiting_approval",
+                    proposal_signature=proposal_signature,
                     operations=[
                         RepairOperation(
                             op_type="rewrite_arc",
@@ -584,6 +663,25 @@ class CreativeOrchestrator:
             )
 
         return proposals
+
+    def _has_proposal_signature(
+        self,
+        proposals: list[CreativeRepairProposal],
+        proposal_signature: str,
+        *,
+        statuses: set[str],
+    ) -> bool:
+        """判断当前是否已经存在同签名提案。
+
+        这里把“当前待确认”和“最近已执行”分开控制：
+        - 所有提案至少要避免在 awaiting_approval 状态下重复堆叠；
+        - arc_rewrite 还需要额外避开“刚执行过又立刻再来一次”的噪音。
+        """
+
+        return any(
+            proposal.proposal_signature == proposal_signature and proposal.status in statuses
+            for proposal in proposals
+        )
 
     def _build_field_patch_operations_for_issue(
         self,

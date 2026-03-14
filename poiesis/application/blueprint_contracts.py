@@ -487,6 +487,8 @@ class CreativeIssue(BaseModel):
     repairability: CreativeRepairability = "manual"
     status: CreativeIssueStatus = "open"
     suggested_strategy: CreativeRepairStrategy | None = None
+    # issue_signature 用来识别“是否还是同一类问题”，方便编排器做去重和冷却。
+    issue_signature: str = ""
     context_payload: dict[str, object] = Field(default_factory=dict)
 
 
@@ -516,6 +518,8 @@ class CreativeRepairProposal(BaseModel):
     strategy_type: CreativeRepairStrategy
     risk_level: CreativeRepairRiskLevel = "medium"
     status: Literal["draft", "awaiting_approval", "applied", "failed", "rolled_back"] = "awaiting_approval"
+    # proposal_signature 用来识别“是否已经存在同一类提案”，避免当前提案区持续堆同一方案。
+    proposal_signature: str = ""
     operations: list[RepairOperation] = Field(default_factory=list)
     summary: str = ""
     diff_preview: list[dict[str, object]] = Field(default_factory=list)
