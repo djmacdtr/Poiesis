@@ -169,8 +169,52 @@ const REVIEW_STATUS_LABELS: Record<string, string> = {
   failed: '执行失败',
 }
 
+const GENERATION_EVAL_TASK_TYPE_LABELS: Record<string, string> = {
+  next_chapter: '生成下一章',
+  rewrite_chapter: '单章重写',
+  rewrite_arc: '单幕骨架重写',
+  field_patch: '字段级修补',
+  scene_retry: '场景重试',
+  scene_patch: '场景修补',
+}
+
+const GENERATION_EVAL_ACCEPTED_BY_LABELS: Record<string, string> = {
+  auto: '系统自动采用',
+  user: '用户确认执行',
+  review: '审阅确认采用',
+}
+
 const CREATIVE_ISSUE_TYPE_LABELS: Record<string, string> = {
   scene_review_pending: '待审阅场景',
+  task_status_jump: '任务状态跳变',
+  duplicate_task_creation: '重复创建任务',
+  invalid_task_payload: '任务结构非法',
+  invalid_chapter_dependency: '章节承接关系非法',
+  missing_previous_dependency: '缺少上一章承接',
+  missing_story_progress: '缺少主线推进',
+  missing_key_events: '缺少关键事件',
+  missing_task_or_loop_progress: '缺少任务或伏笔推进',
+  timeline_not_advanced: '时间线未推进',
+  repeated_chapter_function: '章节功能重复',
+  chapter_similarity: '章节相似度过高',
+  arc_function_monotony: '阶段功能单一',
+  arc_story_progress_stagnation: '阶段主线推进停滞',
+  arc_missing_climax: '阶段高潮不足',
+  loop_missing_title: '伏笔缺少标题',
+  loop_missing_summary: '伏笔缺少摘要',
+  loop_missing_due_end: '伏笔缺少最迟兑现章',
+  loop_due_end_before_intro: '伏笔最迟兑现章早于引入章',
+  loop_due_window_invalid: '伏笔兑现窗口非法',
+  loop_overdue: '伏笔已逾期未回收',
+  loop_still_overdue: '伏笔仍然逾期未回收',
+  loop_stagnation: '伏笔长期无推进',
+  loop_resolved_without_context: '伏笔回收缺少上下文',
+  task_overdue: '任务已逾期未解决',
+  task_still_overdue: '任务仍然逾期未解决',
+  task_reopened_without_reset: '任务重开时未重置状态',
+  relationship_break_without_reveal: '关系断裂缺少揭示',
+  relationship_stagnation: '关系推进停滞',
+  world_rule_conflict: '世界规则冲突',
 }
 
 /**
@@ -318,6 +362,16 @@ export function formatSceneStatusLabel(status?: string | null): string {
 export function formatReviewStatusLabel(status?: string | null): string {
   if (!status) return '未标注'
   return REVIEW_STATUS_LABELS[status] ?? status
+}
+
+export function formatGenerationEvalTaskTypeLabel(taskType?: string | null): string {
+  if (!taskType) return '未标注任务'
+  return GENERATION_EVAL_TASK_TYPE_LABELS[taskType] ?? taskType
+}
+
+export function formatGenerationEvalAcceptedByLabel(acceptedBy?: string | null): string {
+  if (!acceptedBy) return '未标注采用方式'
+  return GENERATION_EVAL_ACCEPTED_BY_LABELS[acceptedBy] ?? acceptedBy
 }
 
 export function formatCreativeIssueTypeLabel(issueType?: string | null): string {

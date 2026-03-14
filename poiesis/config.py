@@ -36,6 +36,13 @@ class GenerationConfig(BaseModel):
     target_word_count: int = Field(default=3000, gt=0)
 
 
+class RepairConfig(BaseModel):
+    """Configuration for repair candidate generation and judge filtering."""
+
+    generation_candidate_count: int = Field(default=3, ge=1, le=8)
+    judge_threshold: float = Field(default=0.0, ge=0.0, le=10.0)
+
+
 class DatabaseConfig(BaseModel):
     """Configuration for the SQLite database."""
 
@@ -56,8 +63,12 @@ class Config(BaseModel):
     planner_llm: ModelConfig = Field(
         default_factory=lambda: ModelConfig(temperature=0.3, max_tokens=2000)
     )
+    judge_llm: ModelConfig = Field(
+        default_factory=lambda: ModelConfig(temperature=0.1, max_tokens=1500)
+    )
     similarity: SimilarityConfig = Field(default_factory=SimilarityConfig)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
+    repair: RepairConfig = Field(default_factory=RepairConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     vector_store: VectorStoreConfig = Field(default_factory=VectorStoreConfig)
 

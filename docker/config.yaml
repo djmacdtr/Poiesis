@@ -13,6 +13,12 @@ planner_llm:
   temperature: 0.3
   max_tokens: 2000
 
+judge_llm:
+  provider: "openai"
+  model: "gpt-4o-mini"
+  temperature: 0.1
+  max_tokens: 1500
+
 similarity:
   originality_threshold: 0.85
   fact_retrieval_k: 10
@@ -23,6 +29,10 @@ generation:
   rewrite_retries: 3
   new_rule_budget: 5
   target_word_count: 3000
+
+repair:
+  generation_candidate_count: 3
+  judge_threshold: 0.0
 
 # 数据库文件路径（宿主机 ./data/poiesis.db 挂载到容器内）
 database:

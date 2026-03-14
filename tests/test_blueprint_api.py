@@ -2580,6 +2580,17 @@ def test_creative_repair_control_plane_can_plan_apply_and_rollback(
     assert not any(item["issue_type"] == "task_status_jump" for item in apply_payload["creative_issues"])
     assert apply_payload["roadmap_draft"][0]["chapter_tasks"][0]["status"] == "new"
     assert apply_payload["creative_repair_runs"][-1]["status"] == "succeeded"
+    assert apply_payload["creative_repair_runs"][-1]["eval_summary"]["resolved_issue_count"] == 1
+    assert apply_payload["creative_repair_runs"][-1]["eval_summary"]["residual_issue_count"] == 0
+    assert apply_payload["generation_evals"][-1]["task_type"] == "field_patch"
+    assert apply_payload["generation_evals"][-1]["resolved_issue_count"] == 1
+    assert apply_payload["generation_evals"][-1]["accepted_by"] == "user"
+
+    evals_response = client.get(f"/api/books/{book_id}/generation-evals")
+    assert evals_response.status_code == 200
+    evals_payload = evals_response.json()
+    assert evals_payload["items"][-1]["task_type"] == "field_patch"
+    assert evals_payload["items"][-1]["resolved_issue_count"] == 1
 
     rollback_run = apply_payload["creative_repair_runs"][-1]
     rollback_response = client.post(
@@ -2678,6 +2689,232 @@ def test_creative_repair_planner_marks_semantic_issue_as_rewrite(tmp_db: Databas
     repeated_issue = next(item for item in issues if item["issue_type"] == "repeated_chapter_function")
     assert repeated_issue["repairability"] == "llm"
     assert repeated_issue["suggested_strategy"] == "chapter_rewrite"
+
+
+def test_plan_creative_repairs_generates_ranked_candidates_for_rewrite(tmp_db: Database) -> None:
+    """语义重写提案应生成多个候选，并标记最终被选中的版本。"""
+    book_id = tmp_db.create_book(
+        name="候选评审测试",
+        language="zh-CN",
+        style_preset="literary_cn",
+        style_prompt="",
+        naming_policy="localized_zh",
+        is_default=False,
+    )
+    tmp_db.upsert_creation_intent(
+        book_id,
+        {
+            "genre": "武侠",
+            "themes": ["成长"],
+            "tone": "冷峻",
+            "protagonist_prompt": "少年剑客",
+            "conflict_prompt": "追查旧案",
+            "ending_preference": "代价胜利",
+            "forbidden_elements": [],
+            "length_preference": "3",
+            "target_experience": "递进",
+            "variant_preference": "",
+        },
+    )
+    tmp_db.replace_concept_variants(
+        book_id,
+        [
+            {
+                "variant_no": 1,
+                "hook": "少年剑客误入风暴",
+                "world_pitch": "旧案引动暗流",
+                "main_arc_pitch": "主角被迫卷入真相",
+                "ending_pitch": "代价胜利",
+                "selected": True,
+            }
+        ],
+    )
+    selected_variant_id = tmp_db.list_concept_variants(book_id)[0]["id"]
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="story_arcs_ready",
+        current_step="roadmap",
+        selected_variant_id=selected_variant_id,
+        world_confirmed={"setting_summary": "旧案背后有江湖暗网。"},
+        story_arcs_draft=[
+            {
+                "arc_number": 1,
+                "title": "第一幕",
+                "purpose": "卷入主线",
+                "start_chapter": 1,
+                "end_chapter": 3,
+                "main_progress": ["把旧案从传闻推进到可验证线索"],
+                "relationship_progress": [],
+                "loop_progress": [],
+                "timeline_milestones": ["入秋初夜"],
+                "arc_climax": "在渡口确认幕后有人提前布局",
+            }
+        ],
+        roadmap_draft=[
+            {
+                "chapter_number": 1,
+                "title": "旧案初现",
+                "story_stage": "第一幕",
+                "timeline_anchor": "入秋初夜",
+                "depends_on_chapters": [],
+                "goal": "卷入主线",
+                "core_conflict": "主角不敢惊动师门",
+                "turning_point": "残谱异动",
+                "story_progress": "主角第一次确认旧案并非巧合",
+                "key_events": ["主角第一次看见残谱异动"],
+                "chapter_tasks": [],
+                "relationship_beats": [],
+                "character_progress": [],
+                "relationship_progress": [],
+                "new_reveals": [],
+                "world_updates": [],
+                "status_shift": [],
+                "chapter_function": "调查",
+                "anti_repeat_signature": "第一幕:调查旧案",
+                "planned_loops": [],
+                "closure_function": "继续调查",
+            },
+            {
+                "chapter_number": 2,
+                "title": "再查旧案",
+                "story_stage": "第一幕",
+                "timeline_anchor": "入秋次日清晨",
+                "depends_on_chapters": [1],
+                "goal": "继续追查",
+                "core_conflict": "主角仍不敢惊动师门",
+                "turning_point": "账册缺页",
+                "story_progress": "主角继续确认旧案并非巧合",
+                "key_events": ["渡口账册出现缺页"],
+                "chapter_tasks": [],
+                "relationship_beats": [],
+                "character_progress": [],
+                "relationship_progress": [],
+                "new_reveals": [],
+                "world_updates": [],
+                "status_shift": [],
+                "chapter_function": "调查",
+                "anti_repeat_signature": "第一幕:继续调查",
+                "planned_loops": [],
+                "closure_function": "继续调查",
+            },
+        ],
+        expanded_arc_numbers=[],
+    )
+
+    llm = MockLLMClient(
+        json_responses=[
+            {
+                "chapter_number": 2,
+                "title": "渡口疑云",
+                "story_stage": "第一幕",
+                "timeline_anchor": "入秋次日清晨",
+                "depends_on_chapters": [1],
+                "goal": "继续追查",
+                "core_conflict": "主角需要在隐忍和追查之间做选择",
+                "turning_point": "渡口旧账本指向更大的布局者",
+                "story_progress": "主角第一次意识到旧案背后另有操盘者",
+                "key_events": ["主角在渡口发现被篡改的账页"],
+                "chapter_tasks": [
+                    {
+                        "task_id": "trace-old-case",
+                        "summary": "追查账页背后的操盘者",
+                        "status": "new",
+                        "related_characters": ["主角"],
+                        "due_end_chapter": 3,
+                    }
+                ],
+                "chapter_function": "揭示",
+                "planned_loops": [
+                    {
+                        "loop_id": "loop-1",
+                        "title": "账页缺口",
+                        "summary": "账页缺失暗示操盘者提前布局",
+                        "status": "open",
+                        "priority": 1,
+                        "due_start_chapter": 2,
+                        "due_end_chapter": 3,
+                        "related_characters": ["主角"],
+                        "resolution_requirements": ["找到账页缺失的原因"],
+                    }
+                ],
+                "closure_function": "把压力推向下一章",
+            },
+            {
+                "chapter_number": 2,
+                "title": "账页反咬",
+                "story_stage": "第一幕",
+                "timeline_anchor": "入秋次日清晨",
+                "depends_on_chapters": [1],
+                "goal": "继续追查",
+                "core_conflict": "主角被迫在隐忍和反击之间做抉择",
+                "turning_point": "账页反向暴露主角身份已经被盯上",
+                "story_progress": "主角不只继续调查，还确认自己已经落入幕后者视线",
+                "key_events": ["账页缺口反向暴露主角身份", "主角决定主动试探幕后线人"],
+                "chapter_tasks": [
+                    {
+                        "task_id": "trace-old-case",
+                        "summary": "追查账页背后的操盘者",
+                        "status": "new",
+                        "related_characters": ["主角"],
+                        "due_end_chapter": 3,
+                    }
+                ],
+                "chapter_function": "反转",
+                "planned_loops": [
+                    {
+                        "loop_id": "loop-1",
+                        "title": "账页缺口",
+                        "summary": "账页缺失暗示操盘者提前布局",
+                        "status": "open",
+                        "priority": 1,
+                        "due_start_chapter": 2,
+                        "due_end_chapter": 3,
+                        "related_characters": ["主角"],
+                        "resolution_requirements": ["找到账页缺失的原因"],
+                    }
+                ],
+                "closure_function": "把压力推向下一章",
+            },
+        ]
+    )
+    judge_llm = MockLLMClient(
+        json_responses=[
+            {
+                "summary": "候选一解决了重复问题，但升级幅度一般。",
+                "scores": [
+                    {"dimension": "issue_resolution", "score": 4.0, "rationale": "重复问题已缓解。"},
+                    {"dimension": "structure_upgrade", "score": 2.5, "rationale": "结构升级有限。"},
+                ],
+            },
+            {
+                "summary": "候选二既解决重复，也明显加强了升级和压迫感。",
+                "scores": [
+                    {"dimension": "issue_resolution", "score": 4.5, "rationale": "重复问题已缓解。"},
+                    {"dimension": "structure_upgrade", "score": 4.8, "rationale": "反转带来了更明确升级。"},
+                ],
+            },
+        ]
+    )
+
+    payload = PlanCreativeRepairsUseCase(
+        BlueprintContext(
+            db=tmp_db,
+            llm=llm,
+            judge_llm=judge_llm,
+            book_id=book_id,
+            planner=RoadmapPlanner(),
+            repair_candidate_count=2,
+        )
+    ).execute([])
+
+    rewrite_proposal = next(
+        item for item in payload.creative_repair_proposals if item.strategy_type == "chapter_rewrite"
+    )
+    assert len(rewrite_proposal.candidates) == 2
+    assert sum(1 for item in rewrite_proposal.candidates if item.selected) == 1
+    selected_candidate = next(item for item in rewrite_proposal.candidates if item.selected)
+    assert selected_candidate.prompt_version == "repair.rewrite_chapter.v1"
+    assert selected_candidate.summary == "候选二既解决重复，也明显加强了升级和压迫感。"
 
 
 def test_global_repair_planning_skips_arc_rewrite_issue_by_default() -> None:

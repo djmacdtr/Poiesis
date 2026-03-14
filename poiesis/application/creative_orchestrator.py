@@ -11,7 +11,8 @@ from __future__ import annotations
 import copy
 import hashlib
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
+from uuid import uuid4
 
 from poiesis.application.blueprint_contracts import (
     ChapterRoadmapItem,
@@ -20,6 +21,10 @@ from poiesis.application.blueprint_contracts import (
     CreativeIssue,
     CreativeRepairProposal,
     CreativeRepairRun,
+    GenerationEvalRecord,
+    RepairCandidate,
+    RepairEvalSummary,
+    RepairJudgeScore,
     RepairOperation,
     RoadmapValidationIssue,
     StoryArcPlan,
@@ -86,8 +91,18 @@ def _build_proposal_signature(issue_signatures: list[str], strategy_type: str) -
 
 
 def _build_run_id(proposal_id: str) -> str:
-    raw = f"{proposal_id}|{_now_iso()}"
-    return f"repair-run-{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:12]}"
+    """执行记录需要强唯一性，不能再依赖秒级时间戳。"""
+    return f"repair-run-{uuid4().hex[:12]}"
+
+
+def _build_candidate_id(prefix: str) -> str:
+    """候选会在同一次规划里成批生成，因此必须使用真正唯一的 id。"""
+    return f"candidate-{prefix}-{uuid4().hex[:10]}"
+
+
+def _build_generation_eval_id(book_id: int, task_type: str) -> str:
+    """评测记录允许高频写入，id 需要避免同秒碰撞。"""
+    return f"eval-{book_id}-{task_type}-{uuid4().hex[:10]}"
 
 
 def _build_snapshot_id(book_id: int, kind: str) -> str:
@@ -209,6 +224,10 @@ class CreativeOrchestrator:
         world: WorldBlueprint | None,
         characters: list[CharacterBlueprint],
         llm: LLMClient | None,
+        judge_llm: LLMClient | None,
+        relationship_graph: list[Any] | None = None,
+        candidate_count: int = 3,
+        judge_threshold: float = 0.0,
     ) -> list[CreativeRepairProposal]:
         """为当前 open issue 生成预览提案。"""
         available_issues = self.build_creative_issues(
@@ -257,6 +276,10 @@ class CreativeOrchestrator:
                 world=world,
                 characters=characters,
                 llm=llm,
+                judge_llm=judge_llm,
+                relationship_graph=relationship_graph or [],
+                candidate_count=candidate_count,
+                judge_threshold=judge_threshold,
             )
         )
         if not generated_proposals:
@@ -388,6 +411,7 @@ class CreativeOrchestrator:
         before_snapshot_ref: str,
         after_snapshot_ref: str,
         logs: list[str],
+        eval_summary: RepairEvalSummary | None = None,
     ) -> CreativeRepairRun:
         return CreativeRepairRun(
             run_id=_build_run_id(proposal_id),
@@ -398,6 +422,7 @@ class CreativeOrchestrator:
             logs=logs,
             before_snapshot_ref=before_snapshot_ref,
             after_snapshot_ref=after_snapshot_ref,
+            eval_summary=eval_summary,
             created_at=_now_iso(),
         )
 
@@ -418,6 +443,202 @@ class CreativeOrchestrator:
             created_at=_now_iso(),
             error_message=error_message,
         )
+
+    def build_repair_eval_summary(
+        self,
+        *,
+        before_issues: list[CreativeIssue],
+        after_issues: list[CreativeIssue],
+        target_issue_ids: list[str],
+    ) -> RepairEvalSummary:
+        """把一次执行前后的问题差异收口成作者可读的效果回执。
+
+        这里刻意不把“执行成功”直接等同于“问题已修复”：
+        - run 成功只说明补丁已落库、复验已跑完；
+        - 真正有没有修好，要靠 before / after issue 差异来判定。
+        """
+
+        before_ids = {item.issue_id for item in before_issues}
+        after_ids = {item.issue_id for item in after_issues}
+        target_ids = set(target_issue_ids)
+        resolved_issue_ids = sorted(target_ids - after_ids)
+        residual_issue_ids = sorted(target_ids & after_ids)
+        introduced_issue_ids = sorted(after_ids - before_ids)
+        before_issue_types = sorted({item.issue_type for item in before_issues})
+        after_issue_types = sorted({item.issue_type for item in after_issues})
+
+        if residual_issue_ids:
+            next_action = "提案已执行，但目标问题仍有残留；建议查看右侧详情，决定继续重写、手动细修或推进后再复验。"
+        elif introduced_issue_ids:
+            next_action = "目标问题已缓解，但引入了新的后续问题；建议优先处理新增问题。"
+        else:
+            next_action = "目标问题已清除，可以继续推进当前路线。"
+
+        return RepairEvalSummary(
+            before_issue_ids=sorted(before_ids),
+            after_issue_ids=sorted(after_ids),
+            resolved_issue_ids=resolved_issue_ids,
+            residual_issue_ids=residual_issue_ids,
+            introduced_issue_ids=introduced_issue_ids,
+            before_issue_types=before_issue_types,
+            after_issue_types=after_issue_types,
+            resolved_issue_count=len(resolved_issue_ids),
+            residual_issue_count=len(residual_issue_ids),
+            introduced_issue_count=len(introduced_issue_ids),
+            recommended_next_action=next_action,
+        )
+
+    def build_generation_eval_record(
+        self,
+        *,
+        book_id: int,
+        layer: str,
+        task_type: str,
+        source_model: str,
+        prompt_version: str,
+        candidate_count: int,
+        selected_candidate: RepairCandidate,
+        eval_summary: RepairEvalSummary,
+        accepted_by: str,
+        context_payload: dict[str, object] | None = None,
+    ) -> GenerationEvalRecord:
+        """把一次生成/重写的评审结果落成统一评测记录。"""
+
+        return GenerationEvalRecord(
+            eval_id=_build_generation_eval_id(book_id, task_type),
+            book_id=book_id,
+            layer=cast(Any, layer),
+            task_type=cast(Any, task_type),
+            source_model=source_model,
+            prompt_version=prompt_version,
+            candidate_count=candidate_count,
+            selected_candidate_id=selected_candidate.candidate_id,
+            before_issue_types=eval_summary.before_issue_types,
+            after_issue_types=eval_summary.after_issue_types,
+            resolved_issue_count=eval_summary.resolved_issue_count,
+            residual_issue_count=eval_summary.residual_issue_count,
+            introduced_issue_count=eval_summary.introduced_issue_count,
+            judge_scores=selected_candidate.judge_scores,
+            accepted_by=cast(Any, accepted_by),
+            context_payload=context_payload or {},
+            created_at=_now_iso(),
+        )
+
+    def judge_candidate(
+        self,
+        *,
+        judge_llm: LLMClient | None,
+        task_type: str,
+        candidate_summary: str,
+        target_issue_messages: list[str],
+        residual_issue_types: list[str],
+        introduced_issue_types: list[str],
+        fixed_constraints: list[str],
+    ) -> tuple[list[RepairJudgeScore], str]:
+        """用 judge 模型给候选打分；失败时退回到稳定的启发式打分。
+
+        这里的 judge 只负责排序，不负责直接修改真源：
+        - 即使本地 judge 模型未来替换，生成真源的主语义也不会受影响；
+        - 评测记录里保留 judge 分数，后续才能比较模型和提示词版本的真实效果。
+        """
+
+        if judge_llm is None:
+            return self._fallback_judge_scores(
+                residual_issue_types=residual_issue_types,
+                introduced_issue_types=introduced_issue_types,
+            )
+
+        prompt = (
+            "你是长篇小说修复候选的评审器。请只返回 JSON。\n"
+            f"任务类型：{task_type}\n"
+            f"目标问题：{target_issue_messages}\n"
+            f"候选摘要：{candidate_summary}\n"
+            f"残留问题类型：{residual_issue_types}\n"
+            f"新增问题类型：{introduced_issue_types}\n"
+            f"硬约束：{fixed_constraints}\n"
+            "请返回："
+            "{summary, scores:[{dimension, score, rationale}]}"
+        )
+        try:
+            raw = judge_llm.complete_json(
+                prompt,
+                system="你是严谨的小说质量评审。必须从问题解决、结构升级和连续性三个维度打分。",
+            )
+            raw_scores = raw.get("scores") if isinstance(raw.get("scores"), list) else []
+            scores = [
+                RepairJudgeScore.model_validate(item)
+                for item in raw_scores
+                if isinstance(item, dict)
+            ]
+            if scores:
+                return scores, str(raw.get("summary") or "").strip()
+        except Exception:  # noqa: BLE001
+            pass
+        return self._fallback_judge_scores(
+            residual_issue_types=residual_issue_types,
+            introduced_issue_types=introduced_issue_types,
+        )
+
+    def select_best_candidate(
+        self,
+        candidates: list[RepairCandidate],
+        *,
+        judge_threshold: float = 0.0,
+    ) -> RepairCandidate:
+        """从多个候选里挑一个真正最值得落库的版本。
+
+        排序规则刻意偏保守：
+        1. 先看 fatal 是否减少；
+        2. 再看残留问题和新增问题；
+        3. 最后再参考 judge 总分。
+        这样可以避免“文风更顺但问题没解决”的候选被误选。
+        """
+
+        if not candidates:
+            raise ValueError("当前没有可选候选。")
+
+        def candidate_total_score(candidate: RepairCandidate) -> float:
+            return sum(item.score for item in candidate.judge_scores)
+
+        ordered = sorted(
+            candidates,
+            key=lambda item: (
+                item.verifier_fatal_count,
+                len(item.residual_issue_types),
+                len(item.introduced_issue_types),
+                -candidate_total_score(item),
+            ),
+        )
+        best = ordered[0]
+        if candidate_total_score(best) < judge_threshold and len(ordered) > 1:
+            best = ordered[0]
+        for item in candidates:
+            item.selected = item.candidate_id == best.candidate_id
+        return best
+
+    def _fallback_judge_scores(
+        self,
+        *,
+        residual_issue_types: list[str],
+        introduced_issue_types: list[str],
+    ) -> tuple[list[RepairJudgeScore], str]:
+        """当 judge 不可用时，用稳定启发式维持可排序性。"""
+
+        issue_resolution = max(0.0, 5.0 - float(len(residual_issue_types) * 1.5))
+        safety = max(0.0, 5.0 - float(len(introduced_issue_types)))
+        scores = [
+            RepairJudgeScore(
+                dimension="issue_resolution",
+                score=issue_resolution,
+                rationale="残留问题越少，说明候选越接近真正解决目标问题。",
+            ),
+            RepairJudgeScore(
+                dimension="safety",
+                score=safety,
+                rationale="新增问题越少，说明候选越稳，不会把旧问题换成新问题。",
+            ),
+        ]
+        return scores, "judge 模型不可用，已退回到启发式排序。"
 
     def _classify_issue(
         self,
@@ -534,6 +755,10 @@ class CreativeOrchestrator:
         world: WorldBlueprint | None,
         characters: list[CharacterBlueprint],
         llm: LLMClient | None,
+        judge_llm: LLMClient | None,
+        relationship_graph: list[Any],
+        candidate_count: int,
+        judge_threshold: float,
     ) -> list[CreativeRepairProposal]:
         if intent is None or variant is None or world is None or llm is None:
             return []
@@ -572,17 +797,70 @@ class CreativeOrchestrator:
                 statuses={"awaiting_approval"},
             ):
                 continue
-            rewritten = self._planner.regenerate_last_arc_chapter(
-                intent=intent,
-                variant=variant,
-                world=world,
-                characters=characters,
-                llm=llm,
-                story_arc=arc,
-                chapter_number=chapter_number,
-                feedback=feedback,
-                existing_roadmap=roadmap,
-            )
+            target_issue_messages = [issue_map[item.issue_id].message for item in issues if item.issue_id in issue_map]
+            target_issue_types = {
+                issue_map[item.issue_id].type
+                for item in issues
+                if item.issue_id in issue_map
+            }
+            chapter_candidates: list[RepairCandidate] = []
+            rewritten_by_candidate_id: dict[str, ChapterRoadmapItem] = {}
+            for _ in range(max(1, candidate_count)):
+                rewritten = self._planner.regenerate_last_arc_chapter(
+                    intent=intent,
+                    variant=variant,
+                    world=world,
+                    characters=characters,
+                    llm=llm,
+                    story_arc=arc,
+                    chapter_number=chapter_number,
+                    feedback=feedback,
+                    existing_roadmap=roadmap,
+                )
+                candidate_roadmap = [
+                    rewritten if item.chapter_number == chapter_number else item
+                    for item in roadmap
+                ]
+                after_issues = self._planner.verify_roadmap(
+                    story_arcs,
+                    candidate_roadmap,
+                    world=world,
+                    relationship_graph=relationship_graph,
+                )
+                residual_issue_types = sorted({item.type for item in after_issues if item.type in target_issue_types})
+                introduced_issue_types = sorted({item.type for item in after_issues if item.type not in target_issue_types})
+                judge_scores, judge_summary = self.judge_candidate(
+                    judge_llm=judge_llm,
+                    task_type="rewrite_chapter",
+                    candidate_summary=(
+                        f"标题：{rewritten.title}\n"
+                        f"章节功能：{rewritten.chapter_function}\n"
+                        f"主线推进：{rewritten.story_progress}\n"
+                        f"关键事件：{'；'.join(rewritten.key_events)}"
+                    ),
+                    target_issue_messages=target_issue_messages,
+                    residual_issue_types=residual_issue_types,
+                    introduced_issue_types=introduced_issue_types,
+                    fixed_constraints=["必须保留前文连续性", "不能破坏当前阶段的章号和顺序"],
+                )
+                candidate = RepairCandidate(
+                    candidate_id=_build_candidate_id(f"chapter-rewrite-{chapter_number}"),
+                    prompt_version="repair.rewrite_chapter.v1",
+                    summary=judge_summary or f"候选章节：{rewritten.title}",
+                    applied_issue_ids=[issue.issue_id for issue in issues],
+                    judge_scores=judge_scores,
+                    residual_issue_types=residual_issue_types,
+                    introduced_issue_types=introduced_issue_types,
+                    diff_preview=self._build_chapter_rewrite_preview(current_chapter, rewritten),
+                    verifier_fatal_count=sum(1 for item in after_issues if item.severity == "fatal"),
+                    verifier_warning_count=sum(1 for item in after_issues if item.severity == "warning"),
+                    model_name=llm.model,
+                )
+                chapter_candidates.append(candidate)
+                rewritten_by_candidate_id[candidate.candidate_id] = rewritten
+
+            best_candidate = self.select_best_candidate(chapter_candidates, judge_threshold=judge_threshold)
+            rewritten = rewritten_by_candidate_id[best_candidate.candidate_id]
             proposals.append(
                 CreativeRepairProposal(
                     proposal_id=_build_proposal_id([issue.issue_id for issue in issues], "chapter_rewrite"),
@@ -601,7 +879,8 @@ class CreativeOrchestrator:
                         )
                     ],
                     summary=f"重写第 {chapter_number} 章以解决语义连续性问题",
-                    diff_preview=self._build_chapter_rewrite_preview(current_chapter, rewritten),
+                    diff_preview=best_candidate.diff_preview,
+                    candidates=chapter_candidates,
                     expected_post_conditions=["当前章节的重复、停滞或缺失结构问题应在复验后消失。"],
                     requires_llm=True,
                     created_at=_now_iso(),
@@ -627,27 +906,78 @@ class CreativeOrchestrator:
                 statuses={"awaiting_approval", "applied"},
             ):
                 continue
-            regenerated_arcs = self._planner.regenerate_story_arc_skeleton(
-                intent=intent,
-                variant=variant,
-                world=world,
-                characters=characters,
-                llm=llm,
-                story_arcs=story_arcs,
-                arc_number=arc_number,
-                feedback=feedback,
-                starting_chapter=total_start_chapter,
-                chapter_count=total_end_chapter - total_start_chapter + 1,
-                existing_roadmap=[item for item in roadmap if item.chapter_number < arc.start_chapter],
-            )
-            replacement = next((item for item in regenerated_arcs if item.arc_number == arc_number), None)
-            if replacement is None:
-                continue
             clear_numbers = [
                 item.chapter_number
                 for item in roadmap
                 if arc.start_chapter <= item.chapter_number <= arc.end_chapter
             ]
+            target_issue_messages = [issue_map[item.issue_id].message for item in issues if item.issue_id in issue_map]
+            target_issue_types = {
+                issue_map[item.issue_id].type
+                for item in issues
+                if item.issue_id in issue_map
+            }
+            arc_candidates: list[RepairCandidate] = []
+            replacement_by_candidate_id: dict[str, StoryArcPlan] = {}
+            for _ in range(max(1, candidate_count)):
+                regenerated_arcs = self._planner.regenerate_story_arc_skeleton(
+                    intent=intent,
+                    variant=variant,
+                    world=world,
+                    characters=characters,
+                    llm=llm,
+                    story_arcs=story_arcs,
+                    arc_number=arc_number,
+                    feedback=feedback,
+                    starting_chapter=total_start_chapter,
+                    chapter_count=total_end_chapter - total_start_chapter + 1,
+                    existing_roadmap=[item for item in roadmap if item.chapter_number < arc.start_chapter],
+                )
+                replacement = next((item for item in regenerated_arcs if item.arc_number == arc_number), None)
+                if replacement is None:
+                    continue
+                residual_issue_types = (
+                    sorted(target_issue_types)
+                    if (
+                        replacement.purpose == arc.purpose
+                        and replacement.main_progress == arc.main_progress
+                        and replacement.arc_climax == arc.arc_climax
+                    )
+                    else []
+                )
+                judge_scores, judge_summary = self.judge_candidate(
+                    judge_llm=judge_llm,
+                    task_type="rewrite_arc",
+                    candidate_summary=(
+                        f"阶段目的：{replacement.purpose}\n"
+                        f"主线推进：{'；'.join(replacement.main_progress)}\n"
+                        f"关系推进：{'；'.join(replacement.relationship_progress)}\n"
+                        f"阶段高潮：{replacement.arc_climax}"
+                    ),
+                    target_issue_messages=target_issue_messages,
+                    residual_issue_types=residual_issue_types,
+                    introduced_issue_types=[],
+                    fixed_constraints=["必须保留当前幕原有章号区间", "不能改动后续阶段的章号边界"],
+                )
+                candidate = RepairCandidate(
+                    candidate_id=_build_candidate_id(f"arc-rewrite-{arc_number}"),
+                    prompt_version="repair.rewrite_arc.v1",
+                    summary=judge_summary or f"候选阶段目的：{replacement.purpose}",
+                    applied_issue_ids=[issue.issue_id for issue in issues],
+                    judge_scores=judge_scores,
+                    residual_issue_types=residual_issue_types,
+                    introduced_issue_types=[],
+                    diff_preview=self._build_arc_rewrite_preview(arc, replacement, clear_numbers),
+                    verifier_fatal_count=len(residual_issue_types),
+                    verifier_warning_count=0,
+                    model_name=llm.model,
+                )
+                arc_candidates.append(candidate)
+                replacement_by_candidate_id[candidate.candidate_id] = replacement
+            if not arc_candidates:
+                continue
+            best_candidate = self.select_best_candidate(arc_candidates, judge_threshold=judge_threshold)
+            replacement = replacement_by_candidate_id[best_candidate.candidate_id]
             proposals.append(
                 CreativeRepairProposal(
                     proposal_id=_build_proposal_id([issue.issue_id for issue in issues], "arc_rewrite"),
@@ -669,7 +999,8 @@ class CreativeOrchestrator:
                         )
                     ],
                     summary=f"重写第 {arc_number} 幕骨架（保留本幕章号区间），并清空该幕已生成章节以重新展开",
-                    diff_preview=self._build_arc_rewrite_preview(arc, replacement, clear_numbers),
+                    diff_preview=best_candidate.diff_preview,
+                    candidates=arc_candidates,
                     expected_post_conditions=[
                         "该幕的结构性重复或停滞问题应通过重新展开得到缓解。",
                         "当前幕的章号区间保持不变，后续幕的分幕范围不会被一起改写。",

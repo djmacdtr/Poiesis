@@ -74,11 +74,16 @@ def _build_context(config_path: str, db: Database, book_id: int) -> BlueprintCon
     anthropic_key = _load_key_from_db(db, "ANTHROPIC_API_KEY")
     siliconflow_key = _load_key_from_db(db, "SILICONFLOW_API_KEY")
     planner_llm = _build_llm(cfg.planner_llm, openai_key, anthropic_key, siliconflow_key)
+    judge_cfg = cfg.judge_llm if hasattr(cfg, "judge_llm") else cfg.planner_llm
+    judge_llm = _build_llm(judge_cfg, openai_key, anthropic_key, siliconflow_key)
     return BlueprintContext(
         db=db,
         llm=planner_llm,
         book_id=book_id,
         planner=RoadmapPlanner(),
+        judge_llm=judge_llm,
+        repair_candidate_count=getattr(getattr(cfg, "repair", None), "generation_candidate_count", 3),
+        repair_judge_threshold=getattr(getattr(cfg, "repair", None), "judge_threshold", 0.0),
     )
 
 
@@ -92,6 +97,14 @@ def list_creative_issues(db: Database, book_id: int) -> list[dict[str, object]]:
     return [
         item.model_dump(mode="json")
         for item in build_book_blueprint(db, book_id).creative_issues
+    ]
+
+
+def list_generation_evals(db: Database, book_id: int) -> list[dict[str, object]]:
+    """读取当前作品的生成/修复评测记录。"""
+    return [
+        item.model_dump(mode="json")
+        for item in build_book_blueprint(db, book_id).generation_evals
     ]
 
 

@@ -106,6 +106,8 @@ def _apply_model_overrides(cfg: Config, db: Database) -> None:
     llm_model = db.get_system_config("llm_model")
     planner_provider = db.get_system_config("planner_llm_provider")
     planner_model = db.get_system_config("planner_llm_model")
+    judge_provider = db.get_system_config("judge_llm_provider")
+    judge_model = db.get_system_config("judge_llm_model")
 
     if llm_provider:
         cfg.llm.provider = str(llm_provider)
@@ -115,6 +117,10 @@ def _apply_model_overrides(cfg: Config, db: Database) -> None:
         cfg.planner_llm.provider = str(planner_provider)
     if planner_model:
         cfg.planner_llm.model = str(planner_model)
+    if hasattr(cfg, "judge_llm") and judge_provider:
+        cfg.judge_llm.provider = str(judge_provider)
+    if hasattr(cfg, "judge_llm") and judge_model:
+        cfg.judge_llm.model = str(judge_model)
 
 
 def _build_context_from_db(

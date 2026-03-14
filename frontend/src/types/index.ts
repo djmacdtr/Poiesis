@@ -758,6 +758,41 @@ export interface RepairOperation {
   reason: string
 }
 
+export interface RepairJudgeScore {
+  dimension: string
+  score: number
+  rationale: string
+}
+
+export interface RepairCandidate {
+  candidate_id: string
+  prompt_version: string
+  summary: string
+  applied_issue_ids: string[]
+  judge_scores: RepairJudgeScore[]
+  residual_issue_types: string[]
+  introduced_issue_types: string[]
+  diff_preview: Array<Record<string, unknown>>
+  selected: boolean
+  verifier_fatal_count: number
+  verifier_warning_count: number
+  model_name: string
+}
+
+export interface RepairEvalSummary {
+  before_issue_ids: string[]
+  after_issue_ids: string[]
+  resolved_issue_ids: string[]
+  residual_issue_ids: string[]
+  introduced_issue_ids: string[]
+  before_issue_types: string[]
+  after_issue_types: string[]
+  resolved_issue_count: number
+  residual_issue_count: number
+  introduced_issue_count: number
+  recommended_next_action: string
+}
+
 export interface CreativeRepairProposal {
   proposal_id: string
   book_id: number
@@ -769,6 +804,7 @@ export interface CreativeRepairProposal {
   operations: RepairOperation[]
   summary: string
   diff_preview: Array<Record<string, unknown>>
+  candidates: RepairCandidate[]
   expected_post_conditions: string[]
   requires_llm: boolean
   created_at: string
@@ -783,8 +819,29 @@ export interface CreativeRepairRun {
   logs: string[]
   before_snapshot_ref: string | null
   after_snapshot_ref: string | null
+  eval_summary: RepairEvalSummary | null
   created_at: string
   error_message: string
+}
+
+export interface GenerationEvalRecord {
+  eval_id: string
+  book_id: number
+  layer: 'roadmap' | 'scene' | 'repair'
+  task_type: 'next_chapter' | 'rewrite_chapter' | 'rewrite_arc' | 'field_patch' | 'scene_retry' | 'scene_patch'
+  source_model: string
+  prompt_version: string
+  candidate_count: number
+  selected_candidate_id: string
+  before_issue_types: string[]
+  after_issue_types: string[]
+  resolved_issue_count: number
+  residual_issue_count: number
+  introduced_issue_count: number
+  judge_scores: RepairJudgeScore[]
+  accepted_by: 'auto' | 'user' | 'review'
+  context_payload: Record<string, unknown>
+  created_at: string
 }
 
 export interface BookBlueprint {
@@ -813,6 +870,7 @@ export interface BookBlueprint {
   creative_issues: CreativeIssue[]
   creative_repair_proposals: CreativeRepairProposal[]
   creative_repair_runs: CreativeRepairRun[]
+  generation_evals: GenerationEvalRecord[]
   revisions: BlueprintRevision[]
 }
 

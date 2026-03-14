@@ -22,6 +22,7 @@ from poiesis.api.schemas.blueprint import (
     CreationIntentRequest,
     CreativeIssueListResponse,
     CreativeRepairProposalResponse,
+    GenerationEvalListResponse,
     PlanCreativeRepairsRequest,
     RegenerateConceptVariantResponse,
     RelationshipGraphResponse,
@@ -126,6 +127,14 @@ def list_creative_issues(book_id: int, db: Database = Depends(get_db)) -> Creati
     if db.get_book(book_id) is None:
         raise HTTPException(status_code=404, detail="书籍不存在")
     return CreativeIssueListResponse(items=blueprint_service.list_creative_issues(db, book_id))
+
+
+@router.get("/{book_id}/generation-evals", response_model=GenerationEvalListResponse)
+def list_generation_evals(book_id: int, db: Database = Depends(get_db)) -> GenerationEvalListResponse:
+    """读取当前作品的生成/修复评测记录。"""
+    if db.get_book(book_id) is None:
+        raise HTTPException(status_code=404, detail="书籍不存在")
+    return GenerationEvalListResponse(items=blueprint_service.list_generation_evals(db, book_id))
 
 
 @router.post("/{book_id}/creative-issues:plan-repairs", response_model=BookBlueprintResponse)

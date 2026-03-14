@@ -16,6 +16,7 @@ from poiesis.application.blueprint_contracts import (
     CreativeIssue,
     CreativeRepairProposal,
     CreativeRepairRun,
+    GenerationEvalRecord,
     RelationshipBlueprintEdge,
     RelationshipConflictReport,
     RelationshipPendingItem,
@@ -161,3 +162,9 @@ class CreativeRepairRunListResponse(BaseModel):
     """执行记录列表。"""
 
     items: list[CreativeRepairRun]
+
+
+class GenerationEvalListResponse(BaseModel):
+    """生成与修复评测记录列表。"""
+
+    items: list[GenerationEvalRecord]

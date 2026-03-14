@@ -79,6 +79,10 @@ interface RoadmapInspectorPanelProps {
   reviewQueueHref: string
 }
 
+function sumJudgeScores(scores: Array<{ score: number }>): number {
+  return scores.reduce((total, item) => total + item.score, 0)
+}
+
 export function RoadmapInspectorPanel({
   state,
   currentActionableArc,
@@ -129,6 +133,64 @@ export function RoadmapInspectorPanel({
               风险等级：{formatCreativeRiskLabel(state.proposal.risk_level)} ·
               {state.proposal.requires_llm ? ' 需要模型改写' : ' 结构补丁'}
             </div>
+            {state.proposal.candidates.length > 0 ? (
+              <div className="rounded-2xl border border-indigo-100 bg-indigo-50 px-3 py-3 text-indigo-900">
+                <p className="font-medium">候选评审摘要</p>
+                <p className="mt-1 leading-5">
+                  当前共生成 {state.proposal.candidates.length} 个候选，默认展示评审通过且综合分最高的方案。你在这里看到的 diff
+                  与“接受并执行”操作，都会指向被选中的候选。
+                </p>
+                <div className="mt-3 space-y-2">
+                  {state.proposal.candidates.map((candidate, index) => (
+                    <div
+                      key={candidate.candidate_id}
+                      className={`rounded-2xl px-3 py-3 text-xs ${
+                        candidate.selected ? 'bg-white text-indigo-900 ring-1 ring-indigo-200' : 'bg-indigo-100/70 text-indigo-800'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">
+                          候选 {index + 1}
+                          {candidate.selected ? ' · 已选中' : ''}
+                        </span>
+                        <span>模型：{candidate.model_name || '未记录'}</span>
+                        <span>提示词版本：{candidate.prompt_version || '未记录'}</span>
+                        <span>综合分：{sumJudgeScores(candidate.judge_scores).toFixed(1)}</span>
+                      </div>
+                      <p className="mt-1 leading-5">{candidate.summary || '当前候选没有附加摘要。'}</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <span>严重问题：{candidate.verifier_fatal_count}</span>
+                        <span>提醒：{candidate.verifier_warning_count}</span>
+                        <span>残留：{candidate.residual_issue_types.length}</span>
+                        <span>新增：{candidate.introduced_issue_types.length}</span>
+                      </div>
+                      {candidate.judge_scores.length > 0 ? (
+                        <div className="mt-2 space-y-1">
+                          {candidate.judge_scores.map((score) => (
+                            <div key={`${candidate.candidate_id}-${score.dimension}`} className="rounded-xl bg-white/70 px-2 py-2 leading-5">
+                              <span className="font-medium">{score.dimension}</span>
+                              {'：'}
+                              {score.score.toFixed(1)} 分
+                              {score.rationale ? ` · ${score.rationale}` : ''}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {candidate.residual_issue_types.length > 0 ? (
+                        <p className="mt-2 leading-5">
+                          残留问题：{candidate.residual_issue_types.map((item) => formatCreativeIssueTypeLabel(item)).join('、')}
+                        </p>
+                      ) : null}
+                      {candidate.introduced_issue_types.length > 0 ? (
+                        <p className="mt-1 leading-5">
+                          新引入问题：{candidate.introduced_issue_types.map((item) => formatCreativeIssueTypeLabel(item)).join('、')}
+                        </p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {state.proposal.strategy_type === 'arc_rewrite' ? (
               <div className="rounded-2xl bg-sky-50 px-3 py-3 text-sky-800">
                 本提案只会重写当前幕的结构内容，并清空该幕已生成章节以重新展开；不会改动整书分幕章号，也不会重排后续幕。
@@ -180,6 +242,38 @@ export function RoadmapInspectorPanel({
               执行后快照：{state.run.after_snapshot_ref || '未记录'}
             </div>
           </div>
+          {state.run.eval_summary ? (
+            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-3 text-xs text-emerald-900">
+              <p className="font-medium">修复效果回执</p>
+              <div className="mt-2 grid gap-2 md:grid-cols-3">
+                <div className="rounded-2xl bg-white px-3 py-3">
+                  <p className="text-stone-500">已清除</p>
+                  <p className="mt-1 text-base font-semibold">{state.run.eval_summary.resolved_issue_count} 项问题</p>
+                </div>
+                <div className="rounded-2xl bg-white px-3 py-3">
+                  <p className="text-stone-500">仍存在</p>
+                  <p className="mt-1 text-base font-semibold">{state.run.eval_summary.residual_issue_count} 项问题</p>
+                </div>
+                <div className="rounded-2xl bg-white px-3 py-3">
+                  <p className="text-stone-500">新增</p>
+                  <p className="mt-1 text-base font-semibold">{state.run.eval_summary.introduced_issue_count} 项问题</p>
+                </div>
+              </div>
+              <div className="mt-3 space-y-2">
+                <p className="leading-5">{state.run.eval_summary.recommended_next_action}</p>
+                {state.run.eval_summary.before_issue_types.length > 0 ? (
+                  <p className="leading-5 text-emerald-800/90">
+                    执行前问题类型：{state.run.eval_summary.before_issue_types.map((item) => formatCreativeIssueTypeLabel(item)).join('、')}
+                  </p>
+                ) : null}
+                {state.run.eval_summary.after_issue_types.length > 0 ? (
+                  <p className="leading-5 text-emerald-800/90">
+                    复验后问题类型：{state.run.eval_summary.after_issue_types.map((item) => formatCreativeIssueTypeLabel(item)).join('、')}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
           <div className="space-y-2">
             {state.run.logs.length > 0 ? (
               state.run.logs.map((log, index) => (

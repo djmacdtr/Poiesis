@@ -34,6 +34,8 @@ CreativeIssueStatus = Literal["open", "planned", "awaiting_approval", "applied",
 CreativeRepairStrategy = Literal["field_patch", "chapter_rewrite", "arc_rewrite", "scene_rewrite", "canon_sync"]
 CreativeRepairRiskLevel = Literal["low", "medium", "high"]
 CreativeRepairRunStatus = Literal["queued", "running", "succeeded", "failed", "rolled_back"]
+GenerationEvalLayer = Literal["roadmap", "scene", "repair"]
+GenerationEvalTaskType = Literal["next_chapter", "rewrite_chapter", "rewrite_arc", "field_patch", "scene_retry", "scene_patch"]
 RepairOperationType = Literal[
     "set_field",
     "append_item",
@@ -505,6 +507,57 @@ class RepairOperation(BaseModel):
     reason: str = ""
 
 
+class RepairJudgeScore(BaseModel):
+    """候选评审的单维度打分。"""
+
+    dimension: str = ""
+    score: float = 0.0
+    rationale: str = ""
+
+
+class RepairCandidate(BaseModel):
+    """单条修复/生成候选的结构化评审结果。
+
+    这层不是只服务 repair proposal：
+    - roadmap 单章生成与重生成也会复用同一种候选结构；
+    - selected 用于明确“最终被采用的是哪一个候选”，避免前端和评测层再自己猜。
+    """
+
+    candidate_id: str
+    prompt_version: str = ""
+    summary: str = ""
+    applied_issue_ids: list[str] = Field(default_factory=list)
+    judge_scores: list[RepairJudgeScore] = Field(default_factory=list)
+    residual_issue_types: list[str] = Field(default_factory=list)
+    introduced_issue_types: list[str] = Field(default_factory=list)
+    diff_preview: list[dict[str, object]] = Field(default_factory=list)
+    selected: bool = False
+    verifier_fatal_count: int = 0
+    verifier_warning_count: int = 0
+    model_name: str = ""
+
+
+class RepairEvalSummary(BaseModel):
+    """一次执行或一次自动选择后的效果回执。
+
+    设计目标：
+    - 把“执行成功”和“问题解决成功”明确拆开；
+    - 让工作台能直接告诉作者：清掉了多少、还剩多少、又引入了多少。
+    """
+
+    before_issue_ids: list[str] = Field(default_factory=list)
+    after_issue_ids: list[str] = Field(default_factory=list)
+    resolved_issue_ids: list[str] = Field(default_factory=list)
+    residual_issue_ids: list[str] = Field(default_factory=list)
+    introduced_issue_ids: list[str] = Field(default_factory=list)
+    before_issue_types: list[str] = Field(default_factory=list)
+    after_issue_types: list[str] = Field(default_factory=list)
+    resolved_issue_count: int = 0
+    residual_issue_count: int = 0
+    introduced_issue_count: int = 0
+    recommended_next_action: str = ""
+
+
 class CreativeRepairProposal(BaseModel):
     """面向作者展示和确认的修复提案。
 
@@ -523,6 +576,7 @@ class CreativeRepairProposal(BaseModel):
     operations: list[RepairOperation] = Field(default_factory=list)
     summary: str = ""
     diff_preview: list[dict[str, object]] = Field(default_factory=list)
+    candidates: list[RepairCandidate] = Field(default_factory=list)
     expected_post_conditions: list[str] = Field(default_factory=list)
     requires_llm: bool = False
     created_at: str = ""
@@ -539,8 +593,31 @@ class CreativeRepairRun(BaseModel):
     logs: list[str] = Field(default_factory=list)
     before_snapshot_ref: str | None = None
     after_snapshot_ref: str | None = None
+    eval_summary: RepairEvalSummary | None = None
     created_at: str = ""
     error_message: str = ""
+
+
+class GenerationEvalRecord(BaseModel):
+    """记录一次生成/重写/修复评审的结果，作为后续评测和微调真源。"""
+
+    eval_id: str
+    book_id: int
+    layer: GenerationEvalLayer
+    task_type: GenerationEvalTaskType
+    source_model: str = ""
+    prompt_version: str = ""
+    candidate_count: int = 0
+    selected_candidate_id: str = ""
+    before_issue_types: list[str] = Field(default_factory=list)
+    after_issue_types: list[str] = Field(default_factory=list)
+    resolved_issue_count: int = 0
+    residual_issue_count: int = 0
+    introduced_issue_count: int = 0
+    judge_scores: list[RepairJudgeScore] = Field(default_factory=list)
+    accepted_by: Literal["auto", "user", "review"] = "auto"
+    context_payload: dict[str, object] = Field(default_factory=dict)
+    created_at: str = ""
 
 
 class CreativeStateSnapshot(BaseModel):
@@ -584,6 +661,7 @@ class BookBlueprint(BaseModel):
     creative_issues: list[CreativeIssue] = Field(default_factory=list)
     creative_repair_proposals: list[CreativeRepairProposal] = Field(default_factory=list)
     creative_repair_runs: list[CreativeRepairRun] = Field(default_factory=list)
+    generation_evals: list[GenerationEvalRecord] = Field(default_factory=list)
     revisions: list[BlueprintRevision] = Field(default_factory=list)
 
 

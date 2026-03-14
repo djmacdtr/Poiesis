@@ -19,10 +19,12 @@ from poiesis.application.blueprint_contracts import (
     CreativeIssue,
     CreativeRepairProposal,
     CreativeRepairRun,
+    GenerationEvalRecord,
     RelationshipBlueprintEdge,
     RelationshipConflictReport,
     RelationshipPendingItem,
     RelationshipRetconProposal,
+    RepairCandidate,
     RoadmapValidationIssue,
     StoryArcPlan,
     WorldBlueprint,
@@ -41,6 +43,9 @@ class BlueprintContext:
     llm: LLMClient
     book_id: int
     planner: RoadmapPlanner
+    judge_llm: LLMClient | None = None
+    repair_candidate_count: int = 3
+    repair_judge_threshold: float = 0.0
 
 
 def _normalize_expanded_arc_numbers(raw: object, story_arcs: list[StoryArcPlan]) -> list[int]:
@@ -221,6 +226,15 @@ def _load_creative_control_snapshots(state: dict[str, Any]) -> list[dict[str, ob
     ]
 
 
+def _load_generation_evals(state: dict[str, Any]) -> list[GenerationEvalRecord]:
+    """把工作态中的评测记录反序列化成正式模型。"""
+    return [
+        GenerationEvalRecord.model_validate(item)
+        for item in state.get("generation_evals") or []
+        if isinstance(item, dict)
+    ]
+
+
 def _upsert_blueprint_business_state(
     db: Database,
     book_id: int,
@@ -229,6 +243,7 @@ def _upsert_blueprint_business_state(
     creative_repair_proposals: list[dict[str, object]] | None = None,
     creative_repair_runs: list[dict[str, object]] | None = None,
     creative_control_snapshots: list[dict[str, object]] | None = None,
+    generation_evals: list[dict[str, object]] | None = None,
 ) -> None:
     """把业务真源和控制面状态一次性写回 book_blueprints。
 
@@ -257,6 +272,7 @@ def _upsert_blueprint_business_state(
         creative_repair_proposals=creative_repair_proposals,
         creative_repair_runs=creative_repair_runs,
         creative_control_snapshots=creative_control_snapshots,
+        generation_evals=generation_evals,
     )
 
 
@@ -349,6 +365,7 @@ def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
     ]
     creative_repair_proposals = _load_creative_repair_proposals(state)
     creative_repair_runs = _load_creative_repair_runs(state)
+    generation_evals = _load_generation_evals(state)
     roadmap_creative_issues = orchestrator.build_creative_issues(
         book_id=book_id,
         story_arcs=base_story_arcs,
@@ -448,6 +465,7 @@ def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
         creative_issues=creative_issues,
         creative_repair_proposals=creative_repair_proposals,
         creative_repair_runs=creative_repair_runs,
+        generation_evals=generation_evals,
         revisions=revisions,
     )
 
@@ -671,6 +689,219 @@ class _BlueprintLayerBase:
         CreativeOrchestrator，避免后续 scene / canon 再各写一套相似逻辑。
         """
         return CreativeOrchestrator(self._context.planner)
+
+    def _append_generation_eval(
+        self,
+        state: dict[str, Any],
+        record: GenerationEvalRecord,
+    ) -> list[dict[str, object]]:
+        """把新的评测记录追加到工作态里，并限制历史长度。
+
+        第一阶段先把评测真源挂在 blueprint 工作态上：
+        - 实现成本低，能立刻支撑“修得动了吗”的统计；
+        - 等后续 scene / canon 接入更重的评测后，再考虑独立成专门表。
+        """
+
+        current = [item.model_dump(mode="json") for item in _load_generation_evals(state)]
+        current.append(record.model_dump(mode="json"))
+        return current[-100:]
+
+    def _score_chapter_candidates(
+        self,
+        *,
+        task_type: str,
+        prompt_version: str,
+        story_arcs: list[StoryArcPlan],
+        current_roadmap: list[ChapterRoadmapItem],
+        candidate_roadmaps: list[tuple[ChapterRoadmapItem, list[ChapterRoadmapItem]]],
+        target_issue_messages: list[str],
+        target_issue_types: set[str],
+    ) -> tuple[ChapterRoadmapItem, RepairCandidate, GenerationEvalRecord]:
+        """对单章候选做 verifier + judge 评分并选出最佳版本。"""
+
+        orchestrator = self._creative_orchestrator()
+        before_issues = orchestrator.build_creative_issues(
+            book_id=self._context.book_id,
+            story_arcs=story_arcs,
+            roadmap=current_roadmap,
+            roadmap_issues=self._verify_roadmap(story_arcs, current_roadmap),
+            stored_proposals=[],
+        )
+        candidates: list[RepairCandidate] = []
+        roadmap_by_candidate_id: dict[str, list[ChapterRoadmapItem]] = {}
+        chapter_by_candidate_id: dict[str, ChapterRoadmapItem] = {}
+        for chapter, merged in candidate_roadmaps:
+            after_validation_issues = self._verify_roadmap(story_arcs, merged)
+            after_creative_issues = orchestrator.build_creative_issues(
+                book_id=self._context.book_id,
+                story_arcs=story_arcs,
+                roadmap=merged,
+                roadmap_issues=after_validation_issues,
+                stored_proposals=[],
+            )
+            residual_issue_types = sorted({item.issue_type for item in after_creative_issues if item.issue_type in target_issue_types})
+            introduced_issue_types = sorted({item.issue_type for item in after_creative_issues if item.issue_type not in target_issue_types})
+            judge_scores, judge_summary = orchestrator.judge_candidate(
+                judge_llm=self._context.judge_llm or self._context.llm,
+                task_type=task_type,
+                candidate_summary=(
+                    f"标题：{chapter.title}\n"
+                    f"章节功能：{chapter.chapter_function}\n"
+                    f"主线推进：{chapter.story_progress}\n"
+                    f"关键事件：{'；'.join(chapter.key_events)}"
+                ),
+                target_issue_messages=target_issue_messages,
+                residual_issue_types=residual_issue_types,
+                introduced_issue_types=introduced_issue_types,
+                fixed_constraints=["必须承接前文连续性", "不能改变既有章号顺序"],
+            )
+            candidate = RepairCandidate(
+                candidate_id=f"{task_type}-{chapter.chapter_number}-{len(candidates) + 1}",
+                prompt_version=prompt_version,
+                summary=judge_summary or chapter.title,
+                applied_issue_ids=[],
+                judge_scores=judge_scores,
+                residual_issue_types=residual_issue_types,
+                introduced_issue_types=introduced_issue_types,
+                diff_preview=[],
+                verifier_fatal_count=sum(1 for item in after_validation_issues if item.severity == "fatal"),
+                verifier_warning_count=sum(1 for item in after_validation_issues if item.severity == "warning"),
+                model_name=self._context.llm.model,
+            )
+            candidates.append(candidate)
+            roadmap_by_candidate_id[candidate.candidate_id] = merged
+            chapter_by_candidate_id[candidate.candidate_id] = chapter
+
+        selected_candidate = orchestrator.select_best_candidate(
+            candidates,
+            judge_threshold=self._context.repair_judge_threshold,
+        )
+        selected_roadmap = roadmap_by_candidate_id[selected_candidate.candidate_id]
+        after_issues = orchestrator.build_creative_issues(
+            book_id=self._context.book_id,
+            story_arcs=story_arcs,
+            roadmap=selected_roadmap,
+            roadmap_issues=self._verify_roadmap(story_arcs, selected_roadmap),
+            stored_proposals=[],
+        )
+        eval_summary = orchestrator.build_repair_eval_summary(
+            before_issues=before_issues,
+            after_issues=after_issues,
+            target_issue_ids=[item.issue_id for item in before_issues if item.issue_type in target_issue_types],
+        )
+        eval_record = orchestrator.build_generation_eval_record(
+            book_id=self._context.book_id,
+            layer="roadmap",
+            task_type=task_type,
+            source_model=self._context.llm.model,
+            prompt_version=prompt_version,
+            candidate_count=len(candidates),
+            selected_candidate=selected_candidate,
+            eval_summary=eval_summary,
+            accepted_by="auto",
+            context_payload={"chapter_number": chapter_by_candidate_id[selected_candidate.candidate_id].chapter_number},
+        )
+        return chapter_by_candidate_id[selected_candidate.candidate_id], selected_candidate, eval_record
+
+    def _score_arc_rewrite_candidates(
+        self,
+        *,
+        prompt_version: str,
+        story_arcs: list[StoryArcPlan],
+        target_arc: StoryArcPlan,
+        target_issue_messages: list[str],
+        target_issue_types: set[str],
+        candidates: list[StoryArcPlan],
+    ) -> tuple[StoryArcPlan, RepairCandidate, GenerationEvalRecord]:
+        """对单幕骨架重写候选做 judge 排序并输出评测记录。"""
+
+        orchestrator = self._creative_orchestrator()
+        repair_candidates: list[RepairCandidate] = []
+        arc_by_candidate_id: dict[str, StoryArcPlan] = {}
+        for index, arc_candidate in enumerate(candidates, start=1):
+            residual_issue_types = (
+                sorted(target_issue_types)
+                if (
+                    arc_candidate.purpose == target_arc.purpose
+                    and arc_candidate.main_progress == target_arc.main_progress
+                    and arc_candidate.arc_climax == target_arc.arc_climax
+                )
+                else []
+            )
+            judge_scores, judge_summary = orchestrator.judge_candidate(
+                judge_llm=self._context.judge_llm or self._context.llm,
+                task_type="rewrite_arc",
+                candidate_summary=(
+                    f"阶段目的：{arc_candidate.purpose}\n"
+                    f"主线推进：{'；'.join(arc_candidate.main_progress)}\n"
+                    f"关系推进：{'；'.join(arc_candidate.relationship_progress)}\n"
+                    f"阶段高潮：{arc_candidate.arc_climax}"
+                ),
+                target_issue_messages=target_issue_messages,
+                residual_issue_types=residual_issue_types,
+                introduced_issue_types=[],
+                fixed_constraints=["必须保留原章号区间", "不能改动后续阶段章号"],
+            )
+            candidate = RepairCandidate(
+                candidate_id=f"rewrite-arc-{target_arc.arc_number}-{index}",
+                prompt_version=prompt_version,
+                summary=judge_summary or arc_candidate.purpose,
+                applied_issue_ids=[],
+                judge_scores=judge_scores,
+                residual_issue_types=residual_issue_types,
+                introduced_issue_types=[],
+                diff_preview=[],
+                verifier_fatal_count=len(residual_issue_types),
+                verifier_warning_count=0,
+                model_name=self._context.llm.model,
+            )
+            repair_candidates.append(candidate)
+            arc_by_candidate_id[candidate.candidate_id] = arc_candidate
+
+        selected_candidate = orchestrator.select_best_candidate(
+            repair_candidates,
+            judge_threshold=self._context.repair_judge_threshold,
+        )
+        eval_summary = orchestrator.build_repair_eval_summary(
+            before_issues=[
+                CreativeIssue(
+                    issue_id=f"arc-rewrite-target-{index}",
+                    book_id=self._context.book_id,
+                    source_layer="roadmap",
+                    target_type="roadmap_arc",
+                    target_ref={"arc_number": target_arc.arc_number},
+                    issue_type=issue_type,
+                    message=message,
+                )
+                for index, (issue_type, message) in enumerate(zip(sorted(target_issue_types), target_issue_messages), start=1)
+            ],
+            after_issues=[
+                CreativeIssue(
+                    issue_id=f"arc-rewrite-residual-{index}",
+                    book_id=self._context.book_id,
+                    source_layer="roadmap",
+                    target_type="roadmap_arc",
+                    target_ref={"arc_number": target_arc.arc_number},
+                    issue_type=issue_type,
+                    message=issue_type,
+                )
+                for index, issue_type in enumerate(selected_candidate.residual_issue_types, start=1)
+            ],
+            target_issue_ids=[f"arc-rewrite-target-{index}" for index in range(1, len(target_issue_messages) + 1)],
+        )
+        eval_record = orchestrator.build_generation_eval_record(
+            book_id=self._context.book_id,
+            layer="roadmap",
+            task_type="rewrite_arc",
+            source_model=self._context.llm.model,
+            prompt_version=prompt_version,
+            candidate_count=len(repair_candidates),
+            selected_candidate=selected_candidate,
+            eval_summary=eval_summary,
+            accepted_by="auto",
+            context_payload={"arc_number": target_arc.arc_number},
+        )
+        return arc_by_candidate_id[selected_candidate.candidate_id], selected_candidate, eval_record
 
     def _load_story_arcs_and_roadmap(
         self,
@@ -979,15 +1210,43 @@ class GenerateNextArcChapterUseCase(_BlueprintLayerBase):
         next_chapter_number = cast(int | None, progress["next_chapter_number"])
         if next_chapter_number is None:
             raise ValueError(f"第 {arc_number} 幕已完成全部章节生成。")
-        next_chapter = self._context.planner.generate_next_arc_chapter(
-            intent=intent,
-            variant=variant,
-            world=world,
-            characters=characters,
-            llm=self._context.llm,
-            story_arc=target_arc,
-            feedback=feedback,
-            existing_roadmap=current_roadmap,
+        before_issues = self._verify_roadmap(story_arcs, current_roadmap)
+        target_issue_messages = [
+            item.message
+            for item in before_issues
+            if item.arc_number == arc_number or item.chapter_number == next_chapter_number
+        ]
+        target_issue_types = {
+            item.type
+            for item in before_issues
+            if item.arc_number == arc_number or item.chapter_number == next_chapter_number
+        }
+        candidate_roadmaps: list[tuple[ChapterRoadmapItem, list[ChapterRoadmapItem]]] = []
+        for _ in range(max(1, self._context.repair_candidate_count)):
+            candidate = self._context.planner.generate_next_arc_chapter(
+                intent=intent,
+                variant=variant,
+                world=world,
+                characters=characters,
+                llm=self._context.llm,
+                story_arc=target_arc,
+                feedback=feedback,
+                existing_roadmap=current_roadmap,
+            )
+            candidate_roadmaps.append(
+                (
+                    candidate,
+                    sorted([*current_roadmap, candidate], key=lambda item: item.chapter_number),
+                )
+            )
+        next_chapter, _selected_candidate, eval_record = self._score_chapter_candidates(
+            task_type="next_chapter",
+            prompt_version="roadmap.next_chapter.v1",
+            story_arcs=story_arcs,
+            current_roadmap=current_roadmap,
+            candidate_roadmaps=candidate_roadmaps,
+            target_issue_messages=target_issue_messages,
+            target_issue_types=target_issue_types,
         )
         merged = sorted([*current_roadmap, next_chapter], key=lambda item: item.chapter_number)
         target_progress_after = self._context.planner.summarize_story_arc_progress(target_arc, merged)
@@ -1012,6 +1271,7 @@ class GenerateNextArcChapterUseCase(_BlueprintLayerBase):
             roadmap_draft=[item.model_dump(mode="json") for item in merged],
             blueprint_continuity_state=self._rebuild_continuity_state(merged),
             roadmap_validation_issues=[item.model_dump(mode="json") for item in merged_issues],
+            generation_evals=self._append_generation_eval(state, eval_record),
         )
         return build_book_blueprint(self._context.db, self._context.book_id)
 
@@ -1044,18 +1304,49 @@ class RegenerateStoryArcUseCase(_BlueprintLayerBase):
         # - 当前动作只允许重写这一幕的结构内容；
         # - 不允许顺带把后续幕的章号边界一起打乱；
         # - 因此生成后要立刻做区间一致性校验，再决定是否落库。
-        regenerated_arcs = self._context.planner.regenerate_story_arc_skeleton(
-            intent=intent,
-            variant=variant,
-            world=world,
-            characters=characters,
-            llm=self._context.llm,
+        before_issues = self._verify_roadmap(story_arcs, current_roadmap)
+        target_issue_messages = [
+            item.message
+            for item in before_issues
+            if item.arc_number == arc_number
+        ]
+        target_issue_types = {
+            item.type
+            for item in before_issues
+            if item.arc_number == arc_number
+        }
+        arc_candidates: list[StoryArcPlan] = []
+        for _ in range(max(1, self._context.repair_candidate_count)):
+            regenerated_arcs = self._context.planner.regenerate_story_arc_skeleton(
+                intent=intent,
+                variant=variant,
+                world=world,
+                characters=characters,
+                llm=self._context.llm,
+                story_arcs=story_arcs,
+                arc_number=arc_number,
+                feedback=feedback,
+                chapter_count=self._length_to_chapter_count(intent),
+                existing_roadmap=[item for item in current_roadmap if item.chapter_number < target_arc.start_chapter],
+            )
+            self._context.planner.validate_story_arc_ranges(regenerated_arcs)
+            replacement = next((item for item in regenerated_arcs if item.arc_number == arc_number), None)
+            if replacement is not None:
+                arc_candidates.append(replacement)
+        if not arc_candidates:
+            raise ValueError(f"第 {arc_number} 幕重生成失败，未得到有效候选。")
+        selected_arc, _selected_candidate, eval_record = self._score_arc_rewrite_candidates(
+            prompt_version="roadmap.rewrite_arc.v1",
             story_arcs=story_arcs,
-            arc_number=arc_number,
-            feedback=feedback,
-            chapter_count=self._length_to_chapter_count(intent),
-            existing_roadmap=[item for item in current_roadmap if item.chapter_number < target_arc.start_chapter],
+            target_arc=target_arc,
+            target_issue_messages=target_issue_messages,
+            target_issue_types=target_issue_types,
+            candidates=arc_candidates,
         )
+        regenerated_arcs = [
+            selected_arc if item.arc_number == arc_number else item
+            for item in story_arcs
+        ]
         self._context.planner.validate_story_arc_ranges(regenerated_arcs)
         preserved_roadmap = [
             item
@@ -1082,6 +1373,7 @@ class RegenerateStoryArcUseCase(_BlueprintLayerBase):
             roadmap_draft=[item.model_dump(mode="json") for item in preserved_roadmap],
             blueprint_continuity_state=self._rebuild_continuity_state(preserved_roadmap),
             roadmap_validation_issues=[item.model_dump(mode="json") for item in issues],
+            generation_evals=self._append_generation_eval(state, eval_record),
         )
         return build_book_blueprint(self._context.db, self._context.book_id)
 
@@ -1106,16 +1398,47 @@ class RegenerateArcChapterUseCase(_BlueprintLayerBase):
         current_roadmap = self._context.planner.normalize_roadmap_payload(
             state.get("roadmap_draft") or state.get("roadmap_confirmed") or []
         )
-        regenerated = self._context.planner.regenerate_last_arc_chapter(
-            intent=intent,
-            variant=variant,
-            world=world,
-            characters=characters,
-            llm=self._context.llm,
-            story_arc=target_arc,
-            chapter_number=chapter_number,
-            feedback=feedback,
-            existing_roadmap=current_roadmap,
+        before_issues = self._verify_roadmap(story_arcs, current_roadmap)
+        target_issue_messages = [
+            item.message
+            for item in before_issues
+            if item.arc_number == arc_number or item.chapter_number == chapter_number
+        ]
+        target_issue_types = {
+            item.type
+            for item in before_issues
+            if item.arc_number == arc_number or item.chapter_number == chapter_number
+        }
+        candidate_roadmaps: list[tuple[ChapterRoadmapItem, list[ChapterRoadmapItem]]] = []
+        for _ in range(max(1, self._context.repair_candidate_count)):
+            regenerated = self._context.planner.regenerate_last_arc_chapter(
+                intent=intent,
+                variant=variant,
+                world=world,
+                characters=characters,
+                llm=self._context.llm,
+                story_arc=target_arc,
+                chapter_number=chapter_number,
+                feedback=feedback,
+                existing_roadmap=current_roadmap,
+            )
+            candidate_roadmaps.append(
+                (
+                    regenerated,
+                    sorted(
+                        [item for item in current_roadmap if item.chapter_number != chapter_number] + [regenerated],
+                        key=lambda item: item.chapter_number,
+                    ),
+                )
+            )
+        regenerated, _selected_candidate, eval_record = self._score_chapter_candidates(
+            task_type="rewrite_chapter",
+            prompt_version="roadmap.rewrite_chapter.v1",
+            story_arcs=story_arcs,
+            current_roadmap=current_roadmap,
+            candidate_roadmaps=candidate_roadmaps,
+            target_issue_messages=target_issue_messages,
+            target_issue_types=target_issue_types,
         )
         merged = sorted(
             [item for item in current_roadmap if item.chapter_number != chapter_number] + [regenerated],
@@ -1139,6 +1462,7 @@ class RegenerateArcChapterUseCase(_BlueprintLayerBase):
             roadmap_draft=[item.model_dump(mode="json") for item in merged],
             blueprint_continuity_state=self._rebuild_continuity_state(merged),
             roadmap_validation_issues=[item.model_dump(mode="json") for item in merged_issues],
+            generation_evals=self._append_generation_eval(state, eval_record),
         )
         return build_book_blueprint(self._context.db, self._context.book_id)
 
@@ -1170,6 +1494,10 @@ class PlanCreativeRepairsUseCase(_BlueprintLayerBase):
             world=self._load_confirmed_world_optional(),
             characters=self._require_character_confirmed() if (state.get("character_confirmed") or state.get("character_draft")) else [],
             llm=self._context.llm,
+            judge_llm=self._context.judge_llm or self._context.llm,
+            relationship_graph=self._load_confirmed_relationship_graph(),
+            candidate_count=self._context.repair_candidate_count,
+            judge_threshold=self._context.repair_judge_threshold,
         )
         _upsert_blueprint_business_state(
             self._context.db,
@@ -1178,6 +1506,7 @@ class PlanCreativeRepairsUseCase(_BlueprintLayerBase):
             creative_repair_proposals=[item.model_dump(mode="json") for item in proposals],
             creative_repair_runs=[item.model_dump(mode="json") for item in _load_creative_repair_runs(state)],
             creative_control_snapshots=_load_creative_control_snapshots(state),
+            generation_evals=[item.model_dump(mode="json") for item in _load_generation_evals(state)],
         )
         return build_book_blueprint(self._context.db, self._context.book_id)
 
@@ -1224,6 +1553,13 @@ class ApplyCreativeRepairProposalUseCase(_BlueprintLayerBase):
             raise ValueError("已锁定蓝图只允许字段级修复；大范围改写请改用未来章节重规划。")
 
         story_arcs, roadmap, expanded_arc_numbers = self._load_story_arcs_and_roadmap(state)
+        before_issue_models = orchestrator.build_creative_issues(
+            book_id=self._context.book_id,
+            story_arcs=story_arcs,
+            roadmap=roadmap,
+            roadmap_issues=self._verify_roadmap_with_gate_issues(story_arcs, roadmap, expanded_arc_numbers),
+            stored_proposals=proposals,
+        )
         before_payload = orchestrator.build_snapshot_payload(state)
         next_snapshots, before_snapshot_id = orchestrator.append_snapshot(
             book_id=self._context.book_id,
@@ -1281,8 +1617,21 @@ class ApplyCreativeRepairProposalUseCase(_BlueprintLayerBase):
                         f"已执行提案：{proposal.summary}",
                         "系统已自动重建连续性工作态并复验当前章节路线。",
                     ],
+                    eval_summary=orchestrator.build_repair_eval_summary(
+                        before_issues=before_issue_models,
+                        after_issues=orchestrator.build_creative_issues(
+                            book_id=self._context.book_id,
+                            story_arcs=next_story_arcs,
+                            roadmap=next_roadmap,
+                            roadmap_issues=next_issues,
+                            stored_proposals=updated_proposals,
+                        ),
+                        target_issue_ids=proposal.issue_ids,
+                    ),
                 ),
             ]
+            latest_eval_summary = updated_runs[-1].eval_summary
+            selected_candidate = next((item for item in proposal.candidates if item.selected), None)
             _upsert_blueprint_business_state(
                 self._context.db,
                 self._context.book_id,
@@ -1290,6 +1639,46 @@ class ApplyCreativeRepairProposalUseCase(_BlueprintLayerBase):
                 creative_repair_proposals=[item.model_dump(mode="json") for item in updated_proposals],
                 creative_repair_runs=[item.model_dump(mode="json") for item in updated_runs],
                 creative_control_snapshots=next_snapshots,
+                generation_evals=self._append_generation_eval(
+                    state,
+                    orchestrator.build_generation_eval_record(
+                        book_id=self._context.book_id,
+                        layer="repair",
+                        task_type=(
+                            "field_patch"
+                            if proposal.strategy_type == "field_patch"
+                            else
+                            "rewrite_chapter"
+                            if proposal.strategy_type == "chapter_rewrite"
+                            else "rewrite_arc"
+                            if proposal.strategy_type == "arc_rewrite"
+                            else "field_patch"
+                        ),
+                        source_model=self._context.llm.model,
+                        prompt_version=(selected_candidate.prompt_version if selected_candidate is not None else "repair.legacy"),
+                        candidate_count=max(1, len(proposal.candidates)),
+                        selected_candidate=selected_candidate
+                        or RepairCandidate(
+                            candidate_id=f"proposal-{proposal.proposal_id}",
+                            prompt_version="repair.legacy",
+                            summary=proposal.summary,
+                            applied_issue_ids=proposal.issue_ids,
+                            judge_scores=[],
+                            residual_issue_types=[],
+                            introduced_issue_types=[],
+                            diff_preview=proposal.diff_preview,
+                            selected=True,
+                            model_name=self._context.llm.model,
+                        ),
+                        eval_summary=latest_eval_summary or orchestrator.build_repair_eval_summary(
+                            before_issues=before_issue_models,
+                            after_issues=[],
+                            target_issue_ids=proposal.issue_ids,
+                        ),
+                        accepted_by="user",
+                        context_payload={"proposal_id": proposal.proposal_id, "strategy_type": proposal.strategy_type},
+                    ),
+                ),
             )
             return build_book_blueprint(self._context.db, self._context.book_id)
         except Exception as exc:  # noqa: BLE001

@@ -137,6 +137,7 @@ class Database:
         self._ensure_column(conn, "book_blueprints", "creative_repair_proposals_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "book_blueprints", "creative_repair_runs_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "book_blueprints", "creative_control_snapshots_json", "JSON DEFAULT '[]'")
+        self._ensure_column(conn, "book_blueprints", "generation_evals_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "book_blueprint_revisions", "relationship_graph_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "blueprint_chapter_roadmap", "relationship_progress_json", "JSON DEFAULT '[]'")
         self._ensure_column(conn, "story_state_snapshots", "blueprint_revision_id", "INTEGER")
@@ -961,6 +962,7 @@ class Database:
           creative_repair_proposals: list[dict[str, Any]] | None = None,
           creative_repair_runs: list[dict[str, Any]] | None = None,
           creative_control_snapshots: list[dict[str, Any]] | None = None,
+          generation_evals: list[dict[str, Any]] | None = None,
       ) -> int:
         """保存蓝图工作态，供控制台逐层确认。
 
@@ -977,9 +979,9 @@ class Database:
                     relationship_graph_draft_json, relationship_graph_confirmed_json,
                     story_arcs_draft_json, story_arcs_confirmed_json, expanded_arc_numbers_json,
                     roadmap_draft_json, roadmap_confirmed_json, blueprint_continuity_state_json, roadmap_validation_issues_json,
-                    creative_repair_proposals_json, creative_repair_runs_json, creative_control_snapshots_json
+                    creative_repair_proposals_json, creative_repair_runs_json, creative_control_snapshots_json, generation_evals_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(book_id) DO UPDATE SET
                     status = excluded.status,
                     current_step = excluded.current_step,
@@ -1001,6 +1003,7 @@ class Database:
                     creative_repair_proposals_json = excluded.creative_repair_proposals_json,
                     creative_repair_runs_json = excluded.creative_repair_runs_json,
                     creative_control_snapshots_json = excluded.creative_control_snapshots_json,
+                    generation_evals_json = excluded.generation_evals_json,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -1069,6 +1072,9 @@ class Database:
                         if creative_control_snapshots is not None
                         else existing.get("creative_control_snapshots") or []
                     ),
+                    json.dumps(
+                        generation_evals if generation_evals is not None else existing.get("generation_evals") or []
+                    ),
                 ),
             )
             return cur.lastrowid or 0
@@ -1097,6 +1103,7 @@ class Database:
         item["creative_repair_proposals"] = json.loads(item.pop("creative_repair_proposals_json", "[]") or "[]")
         item["creative_repair_runs"] = json.loads(item.pop("creative_repair_runs_json", "[]") or "[]")
         item["creative_control_snapshots"] = json.loads(item.pop("creative_control_snapshots_json", "[]") or "[]")
+        item["generation_evals"] = json.loads(item.pop("generation_evals_json", "[]") or "[]")
         return item
 
     def create_blueprint_revision(

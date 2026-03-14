@@ -8,6 +8,7 @@ import {
   formatCreativeDiffFieldLabel,
   formatCreativeDiffValue,
   formatCreativeIssueStatusLabel,
+  formatCreativeIssueTypeLabel,
   formatCreativeRepairabilityLabel,
   formatCreativeRiskLabel,
   formatCreativeRunStatusLabel,
@@ -67,6 +68,10 @@ function isArcRewriteGuidanceIssue(issue: CreativeIssue): boolean {
 
 function canAutoPlanIssue(issue: CreativeIssue): boolean {
   return issue.source_layer === 'roadmap' && issue.repairability !== 'manual' && !isArcRewriteGuidanceIssue(issue)
+}
+
+function sumJudgeScores(scores: Array<{ score: number }>): number {
+  return scores.reduce((total, item) => total + item.score, 0)
 }
 
 export function CreativeRepairBoard({
@@ -355,6 +360,26 @@ export function CreativeRepairBoard({
                     ))}
                   </div>
                 ) : null}
+                {proposal.candidates.length > 0 ? (
+                  <div className="mt-3 rounded-2xl bg-emerald-50 p-3 text-xs text-emerald-900">
+                    {(() => {
+                      const selectedCandidate =
+                        proposal.candidates.find((candidate) => candidate.selected) ?? proposal.candidates[0]
+                      return (
+                        <>
+                          <p className="font-medium">已为本次提案评审 {proposal.candidates.length} 个候选</p>
+                          <p className="mt-1 leading-5">
+                            当前采用：{selectedCandidate.summary || '未记录摘要'} · 综合分 {sumJudgeScores(selectedCandidate.judge_scores).toFixed(1)}
+                          </p>
+                          <p className="mt-1 leading-5">
+                            残留问题 {selectedCandidate.residual_issue_types.length} 项 · 新引入问题{' '}
+                            {selectedCandidate.introduced_issue_types.length} 项
+                          </p>
+                        </>
+                      )
+                    })()}
+                  </div>
+                ) : null}
               </button>
             ))
           ) : (
@@ -396,6 +421,20 @@ export function CreativeRepairBoard({
                       </button>
                     ) : null}
                   </div>
+                  {run.eval_summary ? (
+                    <div className="mt-3 rounded-2xl bg-white p-3 text-xs text-stone-600">
+                      <div className="flex flex-wrap gap-3">
+                        <span>已清除 {run.eval_summary.resolved_issue_count} 项</span>
+                        <span>仍存在 {run.eval_summary.residual_issue_count} 项</span>
+                        <span>新增 {run.eval_summary.introduced_issue_count} 项</span>
+                      </div>
+                      {run.eval_summary.after_issue_types.length > 0 ? (
+                        <p className="mt-2 leading-5">
+                          复验后问题：{run.eval_summary.after_issue_types.map((item) => formatCreativeIssueTypeLabel(item)).join('、')}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {run.error_message ? <p className="mt-2 text-xs text-rose-600">{run.error_message}</p> : null}
                 </button>
               ))}

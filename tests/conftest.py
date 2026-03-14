@@ -13,6 +13,7 @@ from poiesis.config import (
     DatabaseConfig,
     GenerationConfig,
     ModelConfig,
+    RepairConfig,
     SimilarityConfig,
     VectorStoreConfig,
 )
@@ -61,10 +62,12 @@ class MockLLMClient(LLMClient):
         self,
         text_response: str = "Mock response.",
         json_response: dict[str, Any] | None = None,
+        json_responses: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(model="mock", temperature=0.0, max_tokens=100)
         self._text_response = text_response
         self._json_response: dict[str, Any] = json_response or {}
+        self._json_responses: list[dict[str, Any]] = list(json_responses or [])
 
     def _complete(self, prompt: str, system: str | None = None, **kwargs: Any) -> str:
         return self._text_response
@@ -72,6 +75,8 @@ class MockLLMClient(LLMClient):
     def _complete_json(
         self, prompt: str, system: str | None = None, **kwargs: Any
     ) -> dict[str, Any]:
+        if self._json_responses:
+            return self._json_responses.pop(0)
         return self._json_response
 
     def _stream_complete(
@@ -164,11 +169,18 @@ def sample_config() -> Config:
         planner_llm=ModelConfig(
             provider="openai", model="gpt-4o", temperature=0.3, max_tokens=100
         ),
+        judge_llm=ModelConfig(
+            provider="openai", model="gpt-4o-mini", temperature=0.1, max_tokens=100
+        ),
         similarity=SimilarityConfig(
             originality_threshold=0.85, fact_retrieval_k=5, chapter_similarity_k=3
         ),
         generation=GenerationConfig(
             max_chapters=5, rewrite_retries=1, new_rule_budget=3, target_word_count=500
+        ),
+        repair=RepairConfig(
+            generation_candidate_count=2,
+            judge_threshold=0.0,
         ),
         database=DatabaseConfig(path=":memory:"),
         vector_store=VectorStoreConfig(

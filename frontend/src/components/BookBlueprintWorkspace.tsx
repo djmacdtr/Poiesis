@@ -16,6 +16,7 @@ import { WorkspaceInspectorRail } from '@/components/workspace/WorkspaceInspecto
 import { RoadmapArcBoard } from '@/components/workspace/RoadmapArcBoard'
 import { RoadmapChapterList } from '@/components/workspace/RoadmapChapterList'
 import { RoadmapControlPanel, type RoadmapViewMode } from '@/components/workspace/RoadmapControlPanel'
+import { GenerationEvalBoard } from '@/components/workspace/GenerationEvalBoard'
 import {
   CreativeRepairBoard,
   type CreativeIssueSourceFilter,
@@ -893,6 +894,7 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
     ? []
     : blueprint?.creative_repair_proposals ?? []
   const creativeRepairRuns: CreativeRepairRun[] = roadmapDraftDirty ? [] : blueprint?.creative_repair_runs ?? []
+  const generationEvals = blueprint?.generation_evals ?? []
   const roadmapLockState = useMemo(
     () => summarizeRoadmapLockState(storyArcsToShow, expandedArcNumbers, roadmapIssues, roadmapToShow),
     [expandedArcNumbers, roadmapIssues, roadmapToShow, storyArcsToShow],
@@ -3122,55 +3124,58 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
                 还没有阶段骨架。请先确认世界观与人物蓝图，再生成整书阶段结构。
               </div>
             ) : roadmapViewMode === 'repair' ? (
-              <CreativeRepairBoard
-                issues={creativeIssues}
-                proposals={creativeRepairProposals}
-                runs={creativeRepairRuns}
-                roadmapDraftDirty={roadmapDraftDirty}
-                isPlanningRepairs={planCreativeRepairsMutation.isPending}
-                isApplyingProposal={applyCreativeRepairProposalMutation.isPending}
-                isRollingBackRun={rollbackCreativeRepairRunMutation.isPending}
-                onPlanAll={() => planCreativeRepairsMutation.mutate([])}
-                onPlanIssue={(issueId) => planCreativeRepairsMutation.mutate([issueId])}
-                onApplyProposal={(proposalId) => applyCreativeRepairProposalMutation.mutate(proposalId)}
-                onRollbackRun={(runId) => rollbackCreativeRepairRunMutation.mutate(runId)}
-                onFocusChapter={focusRoadmapChapter}
-                onFocusArc={jumpToRoadmapArc}
-                onSelectIssue={(issueId) => {
-                  const matchedIssue = creativeIssues.find((item) => item.issue_id === issueId) ?? null
-                  if (matchedIssue) {
-                    setCreativeIssueSourceFilter(
-                      ['roadmap', 'scene', 'review', 'canon'].includes(matchedIssue.source_layer)
-                        ? (matchedIssue.source_layer as CreativeIssueSourceFilter)
-                        : 'all',
-                    )
-                  }
-                  setSelectedCreativeIssueId(issueId)
-                  setSelectedCreativeRepairProposalId(null)
-                  setSelectedCreativeRepairRunId(null)
-                  setSelectedRoadmapChapterNumber(null)
-                }}
-                onSelectProposal={(proposalId) => {
-                  setCreativeIssueSourceFilter('roadmap')
-                  setSelectedCreativeRepairProposalId(proposalId)
-                  setSelectedCreativeIssueId(null)
-                  setSelectedCreativeRepairRunId(null)
-                  setSelectedRoadmapChapterNumber(null)
-                }}
-                onSelectRun={(runId) => {
-                  setCreativeIssueSourceFilter('roadmap')
-                  setSelectedCreativeRepairRunId(runId)
-                  setSelectedCreativeIssueId(null)
-                  setSelectedCreativeRepairProposalId(null)
-                  setSelectedRoadmapChapterNumber(null)
-                }}
-                selectedIssueId={selectedCreativeIssueId}
-                selectedProposalId={selectedCreativeRepairProposalId}
-                selectedRunId={selectedCreativeRepairRunId}
-                sourceFilter={creativeIssueSourceFilter}
-                onSourceFilterChange={handleCreativeIssueSourceFilterChange}
-                reviewQueueHref={`/reviews?book=${bookId}`}
-              />
+              <div className="space-y-4">
+                <CreativeRepairBoard
+                  issues={creativeIssues}
+                  proposals={creativeRepairProposals}
+                  runs={creativeRepairRuns}
+                  roadmapDraftDirty={roadmapDraftDirty}
+                  isPlanningRepairs={planCreativeRepairsMutation.isPending}
+                  isApplyingProposal={applyCreativeRepairProposalMutation.isPending}
+                  isRollingBackRun={rollbackCreativeRepairRunMutation.isPending}
+                  onPlanAll={() => planCreativeRepairsMutation.mutate([])}
+                  onPlanIssue={(issueId) => planCreativeRepairsMutation.mutate([issueId])}
+                  onApplyProposal={(proposalId) => applyCreativeRepairProposalMutation.mutate(proposalId)}
+                  onRollbackRun={(runId) => rollbackCreativeRepairRunMutation.mutate(runId)}
+                  onFocusChapter={focusRoadmapChapter}
+                  onFocusArc={jumpToRoadmapArc}
+                  onSelectIssue={(issueId) => {
+                    const matchedIssue = creativeIssues.find((item) => item.issue_id === issueId) ?? null
+                    if (matchedIssue) {
+                      setCreativeIssueSourceFilter(
+                        ['roadmap', 'scene', 'review', 'canon'].includes(matchedIssue.source_layer)
+                          ? (matchedIssue.source_layer as CreativeIssueSourceFilter)
+                          : 'all',
+                      )
+                    }
+                    setSelectedCreativeIssueId(issueId)
+                    setSelectedCreativeRepairProposalId(null)
+                    setSelectedCreativeRepairRunId(null)
+                    setSelectedRoadmapChapterNumber(null)
+                  }}
+                  onSelectProposal={(proposalId) => {
+                    setCreativeIssueSourceFilter('roadmap')
+                    setSelectedCreativeRepairProposalId(proposalId)
+                    setSelectedCreativeIssueId(null)
+                    setSelectedCreativeRepairRunId(null)
+                    setSelectedRoadmapChapterNumber(null)
+                  }}
+                  onSelectRun={(runId) => {
+                    setCreativeIssueSourceFilter('roadmap')
+                    setSelectedCreativeRepairRunId(runId)
+                    setSelectedCreativeIssueId(null)
+                    setSelectedCreativeRepairProposalId(null)
+                    setSelectedRoadmapChapterNumber(null)
+                  }}
+                  selectedIssueId={selectedCreativeIssueId}
+                  selectedProposalId={selectedCreativeRepairProposalId}
+                  selectedRunId={selectedCreativeRepairRunId}
+                  sourceFilter={creativeIssueSourceFilter}
+                  onSourceFilterChange={handleCreativeIssueSourceFilterChange}
+                  reviewQueueHref={`/reviews?book=${bookId}`}
+                />
+                <GenerationEvalBoard items={generationEvals} />
+              </div>
             ) : (
               <>
                 <RoadmapArcBoard

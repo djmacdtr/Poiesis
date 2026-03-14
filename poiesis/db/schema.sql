@@ -207,6 +207,7 @@ CREATE TABLE IF NOT EXISTS book_blueprints (
     creative_repair_proposals_json JSON DEFAULT '[]',
     creative_repair_runs_json JSON DEFAULT '[]',
     creative_control_snapshots_json JSON DEFAULT '[]',
+    generation_evals_json JSON DEFAULT '[]',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (book_id) REFERENCES books(id),

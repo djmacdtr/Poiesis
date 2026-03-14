@@ -20,6 +20,7 @@ import type {
   WorldBlueprint,
   CreativeIssue,
   CreativeRepairProposal,
+  GenerationEvalRecord,
 } from '@/types'
 
 /** 获取书籍列表 */
@@ -48,6 +49,11 @@ export function fetchBookBlueprint(bookId: number): Promise<BookBlueprint> {
 /** 读取闭环控制面的问题队列 */
 export function fetchCreativeIssues(bookId: number): Promise<{ items: CreativeIssue[] }> {
   return get<{ items: CreativeIssue[] }>(`/api/books/${bookId}/creative-issues`)
+}
+
+/** 读取当前作品的生成/修复评测记录 */
+export function fetchGenerationEvals(bookId: number): Promise<{ items: GenerationEvalRecord[] }> {
+  return get<{ items: GenerationEvalRecord[] }>(`/api/books/${bookId}/generation-evals`)
 }
 
 /** 为当前问题队列生成修复提案 */
