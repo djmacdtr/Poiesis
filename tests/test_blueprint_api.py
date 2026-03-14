@@ -971,6 +971,7 @@ def test_world_generate_api_normalizes_rich_payload(tmp_db: Database, monkeypatc
             llm=llm,
             book_id=book_id,
             planner=RoadmapPlanner(),
+            repair_candidate_count=1,
         )
 
     monkeypatch.setattr(blueprint_service, "_build_context", _fake_context)
@@ -1110,6 +1111,7 @@ def test_roadmap_generate_api_normalizes_half_structured_payload(tmp_db: Databas
             llm=llm,
             book_id=book_id,
             planner=RoadmapPlanner(),
+            repair_candidate_count=1,
         )
 
     monkeypatch.setattr(blueprint_service, "_build_context", _fake_context)
@@ -2917,6 +2919,323 @@ def test_plan_creative_repairs_generates_ranked_candidates_for_rewrite(tmp_db: D
     assert selected_candidate.summary == "候选二既解决重复，也明显加强了升级和压迫感。"
 
 
+def test_plan_creative_repairs_blocks_semantic_proposal_when_judge_unavailable(tmp_db: Database) -> None:
+    """judge 不可用时，语义类候选只保留评审反馈，不进入可执行提案。"""
+    book_id = tmp_db.create_book(
+        name="judge 不可用门禁测试",
+        language="zh-CN",
+        style_preset="literary_cn",
+        style_prompt="",
+        naming_policy="localized_zh",
+        is_default=False,
+    )
+    tmp_db.upsert_creation_intent(
+        book_id,
+        {
+            "genre": "武侠",
+            "themes": ["成长"],
+            "tone": "冷峻",
+            "protagonist_prompt": "少年剑客",
+            "conflict_prompt": "追查旧案",
+            "ending_preference": "代价胜利",
+            "forbidden_elements": [],
+            "length_preference": "3",
+            "target_experience": "递进",
+            "variant_preference": "",
+        },
+    )
+    tmp_db.replace_concept_variants(
+        book_id,
+        [
+            {
+                "variant_no": 1,
+                "hook": "少年剑客误入风暴",
+                "world_pitch": "旧案引动暗流",
+                "main_arc_pitch": "主角被迫卷入真相",
+                "ending_pitch": "代价胜利",
+                "selected": True,
+            }
+        ],
+    )
+    selected_variant_id = tmp_db.list_concept_variants(book_id)[0]["id"]
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="story_arcs_ready",
+        current_step="roadmap",
+        selected_variant_id=selected_variant_id,
+        world_confirmed={"setting_summary": "旧案背后有江湖暗网。"},
+        story_arcs_draft=[
+            {
+                "arc_number": 1,
+                "title": "第一幕",
+                "purpose": "卷入主线",
+                "start_chapter": 1,
+                "end_chapter": 3,
+                "main_progress": ["把旧案从传闻推进到可验证线索"],
+                "relationship_progress": [],
+                "loop_progress": [],
+                "timeline_milestones": ["入秋初夜"],
+                "arc_climax": "在渡口确认幕后有人提前布局",
+            }
+        ],
+        roadmap_draft=[
+            {
+                "chapter_number": 1,
+                "title": "旧案初现",
+                "story_stage": "第一幕",
+                "timeline_anchor": "入秋初夜",
+                "depends_on_chapters": [],
+                "goal": "卷入主线",
+                "core_conflict": "主角不敢惊动师门",
+                "turning_point": "残谱异动",
+                "story_progress": "主角第一次确认旧案并非巧合",
+                "key_events": ["主角第一次看见残谱异动"],
+                "chapter_tasks": [],
+                "relationship_beats": [],
+                "character_progress": [],
+                "relationship_progress": [],
+                "new_reveals": [],
+                "world_updates": [],
+                "status_shift": [],
+                "chapter_function": "调查",
+                "anti_repeat_signature": "第一幕:调查旧案",
+                "planned_loops": [],
+                "closure_function": "继续调查",
+            },
+            {
+                "chapter_number": 2,
+                "title": "再查旧案",
+                "story_stage": "第一幕",
+                "timeline_anchor": "入秋次日清晨",
+                "depends_on_chapters": [1],
+                "goal": "继续追查",
+                "core_conflict": "主角仍不敢惊动师门",
+                "turning_point": "账册缺页",
+                "story_progress": "主角继续确认旧案并非巧合",
+                "key_events": ["渡口账册出现缺页"],
+                "chapter_tasks": [],
+                "relationship_beats": [],
+                "character_progress": [],
+                "relationship_progress": [],
+                "new_reveals": [],
+                "world_updates": [],
+                "status_shift": [],
+                "chapter_function": "调查",
+                "anti_repeat_signature": "第一幕:继续调查",
+                "planned_loops": [],
+                "closure_function": "继续调查",
+            },
+        ],
+        expanded_arc_numbers=[],
+    )
+
+    payload = PlanCreativeRepairsUseCase(
+        BlueprintContext(
+            db=tmp_db,
+            llm=MockLLMClient(
+                json_responses=[
+                    {
+                        "chapter_number": 2,
+                        "title": "残谱裂痕",
+                        "story_stage": "第一幕",
+                        "timeline_anchor": "入秋次日清晨",
+                        "depends_on_chapters": [1],
+                        "goal": "让主角确认残谱与旧案的直接关联",
+                        "core_conflict": "主角仍不敢惊动师门",
+                        "turning_point": "残谱裂痕共鸣",
+                        "story_progress": "发现玄铁剑气与血月门血脉的关联",
+                        "key_events": ["玄铁剑与残谱产生共鸣"],
+                        "chapter_tasks": [],
+                        "relationship_beats": [],
+                        "character_progress": [],
+                        "relationship_progress": [],
+                        "new_reveals": [],
+                        "world_updates": [],
+                        "status_shift": [],
+                        "chapter_function": "揭示",
+                        "anti_repeat_signature": "第一幕:揭示血脉",
+                        "planned_loops": [],
+                        "closure_function": "抛出下一章钩子",
+                    }
+                ]
+            ),
+            judge_llm=None,
+            book_id=book_id,
+            planner=RoadmapPlanner(),
+            repair_candidate_count=1,
+        )
+    ).execute([])
+
+    assert payload.creative_repair_proposals == []
+    repeated_issue = next(item for item in payload.creative_issues if item.issue_type == "repeated_chapter_function")
+    assert repeated_issue.status == "planned"
+    assert repeated_issue.context_payload["has_planning_feedback"] is True
+    assert repeated_issue.context_payload["judge_mode"] == "none"
+    assert repeated_issue.context_payload["execution_readiness"] == "blocked"
+
+
+def test_plan_creative_repairs_blocks_semantic_proposal_below_judge_threshold(tmp_db: Database) -> None:
+    """即使 judge 可用，综合分低于阈值的语义候选也不能进入可执行提案。"""
+    book_id = tmp_db.create_book(
+        name="judge 阈值门禁测试",
+        language="zh-CN",
+        style_preset="literary_cn",
+        style_prompt="",
+        naming_policy="localized_zh",
+        is_default=False,
+    )
+    tmp_db.upsert_creation_intent(
+        book_id,
+        {
+            "genre": "武侠",
+            "themes": ["成长"],
+            "tone": "冷峻",
+            "protagonist_prompt": "少年剑客",
+            "conflict_prompt": "追查旧案",
+            "ending_preference": "代价胜利",
+            "forbidden_elements": [],
+            "length_preference": "3",
+            "target_experience": "递进",
+            "variant_preference": "",
+        },
+    )
+    tmp_db.replace_concept_variants(
+        book_id,
+        [
+            {
+                "variant_no": 1,
+                "hook": "少年剑客误入风暴",
+                "world_pitch": "旧案引动暗流",
+                "main_arc_pitch": "主角被迫卷入真相",
+                "ending_pitch": "代价胜利",
+                "selected": True,
+            }
+        ],
+    )
+    selected_variant_id = tmp_db.list_concept_variants(book_id)[0]["id"]
+    tmp_db.upsert_book_blueprint_state(
+        book_id,
+        status="story_arcs_ready",
+        current_step="roadmap",
+        selected_variant_id=selected_variant_id,
+        world_confirmed={"setting_summary": "旧案背后有江湖暗网。"},
+        story_arcs_draft=[
+            {
+                "arc_number": 1,
+                "title": "第一幕",
+                "purpose": "卷入主线",
+                "start_chapter": 1,
+                "end_chapter": 3,
+                "main_progress": ["把旧案从传闻推进到可验证线索"],
+                "relationship_progress": [],
+                "loop_progress": [],
+                "timeline_milestones": ["入秋初夜"],
+                "arc_climax": "在渡口确认幕后有人提前布局",
+            }
+        ],
+        roadmap_draft=[
+            {
+                "chapter_number": 1,
+                "title": "旧案初现",
+                "story_stage": "第一幕",
+                "timeline_anchor": "入秋初夜",
+                "depends_on_chapters": [],
+                "goal": "卷入主线",
+                "core_conflict": "主角不敢惊动师门",
+                "turning_point": "残谱异动",
+                "story_progress": "主角第一次确认旧案并非巧合",
+                "key_events": ["主角第一次看见残谱异动"],
+                "chapter_tasks": [],
+                "relationship_beats": [],
+                "character_progress": [],
+                "relationship_progress": [],
+                "new_reveals": [],
+                "world_updates": [],
+                "status_shift": [],
+                "chapter_function": "调查",
+                "anti_repeat_signature": "第一幕:调查旧案",
+                "planned_loops": [],
+                "closure_function": "继续调查",
+            },
+            {
+                "chapter_number": 2,
+                "title": "再查旧案",
+                "story_stage": "第一幕",
+                "timeline_anchor": "入秋次日清晨",
+                "depends_on_chapters": [1],
+                "goal": "继续追查",
+                "core_conflict": "主角仍不敢惊动师门",
+                "turning_point": "账册缺页",
+                "story_progress": "主角继续确认旧案并非巧合",
+                "key_events": ["渡口账册出现缺页"],
+                "chapter_tasks": [],
+                "relationship_beats": [],
+                "character_progress": [],
+                "relationship_progress": [],
+                "new_reveals": [],
+                "world_updates": [],
+                "status_shift": [],
+                "chapter_function": "调查",
+                "anti_repeat_signature": "第一幕:继续调查",
+                "planned_loops": [],
+                "closure_function": "继续调查",
+            },
+        ],
+        expanded_arc_numbers=[],
+    )
+
+    payload = PlanCreativeRepairsUseCase(
+        BlueprintContext(
+            db=tmp_db,
+            llm=MockLLMClient(
+                json_responses=[
+                    {
+                        "chapter_number": 2,
+                        "title": "残谱裂痕",
+                        "story_stage": "第一幕",
+                        "timeline_anchor": "入秋次日清晨",
+                        "depends_on_chapters": [1],
+                        "goal": "让主角确认残谱与旧案的直接关联",
+                        "core_conflict": "主角仍不敢惊动师门",
+                        "turning_point": "残谱裂痕共鸣",
+                        "story_progress": "发现玄铁剑气与血月门血脉的关联",
+                        "key_events": ["玄铁剑与残谱产生共鸣"],
+                        "chapter_tasks": [],
+                        "relationship_beats": [],
+                        "character_progress": [],
+                        "relationship_progress": [],
+                        "new_reveals": [],
+                        "world_updates": [],
+                        "status_shift": [],
+                        "chapter_function": "揭示",
+                        "anti_repeat_signature": "第一幕:揭示血脉",
+                        "planned_loops": [],
+                        "closure_function": "抛出下一章钩子",
+                    }
+                ]
+            ),
+            judge_llm=MockLLMClient(
+                json_response={
+                    "summary": "候选虽然有变化，但提升不足。",
+                    "scores": [
+                        {"dimension": "issue_resolution", "score": 2.0, "rationale": "问题有所缓解但不充分。"},
+                        {"dimension": "structure_upgrade", "score": 2.0, "rationale": "升级幅度不足。"},
+                    ],
+                }
+            ),
+            book_id=book_id,
+            planner=RoadmapPlanner(),
+            repair_candidate_count=1,
+            repair_judge_threshold=10.0,
+        )
+    ).execute([])
+
+    assert payload.creative_repair_proposals == []
+    repeated_issue = next(item for item in payload.creative_issues if item.issue_type == "repeated_chapter_function")
+    assert repeated_issue.context_payload["execution_readiness"] == "preview_only"
+    assert any("评审综合分低于执行阈值" in reason for reason in repeated_issue.context_payload["blocking_reasons"])
+
+
 def test_global_repair_planning_skips_arc_rewrite_issue_by_default() -> None:
     """全量生成修复方案时，不应自动把阶段级骨架重写问题卷进去。"""
     planner = RoadmapPlanner()
@@ -3082,6 +3401,15 @@ def test_explicit_arc_rewrite_generation_deduplicates_pending_and_applied_propos
     """显式点阶段问题时仍可生成骨架修复方案，但同签名方案不应重复堆叠。"""
     planner = RoadmapPlanner()
     orchestrator = CreativeOrchestrator(planner)
+    judge_llm = MockLLMClient(
+        json_response={
+            "summary": "该候选明显增强了阶段递进和高潮强度。",
+            "scores": [
+                {"dimension": "issue_resolution", "score": 8.0, "rationale": "阶段重复和停滞问题得到明显缓解。"},
+                {"dimension": "structure_upgrade", "score": 8.0, "rationale": "主线推进和阶段高潮都有实质升级。"},
+            ],
+        }
+    )
     story_arcs = [
         StoryArcPlan(
             arc_number=1,
@@ -3154,7 +3482,7 @@ def test_explicit_arc_rewrite_generation_deduplicates_pending_and_applied_propos
     )
     target_issue = next(item for item in creative_issues if item.issue_type == "arc_function_monotony")
 
-    proposals = orchestrator.plan_roadmap_repairs(
+    proposals, _planning_feedback = orchestrator.plan_roadmap_repairs(
         book_id=1,
         story_arcs=story_arcs,
         roadmap=roadmap,
@@ -3200,6 +3528,7 @@ def test_explicit_arc_rewrite_generation_deduplicates_pending_and_applied_propos
                 ]
             }
         ),
+        judge_llm=judge_llm,
     )
 
     arc_rewrite = next(item for item in proposals if item.strategy_type == "arc_rewrite")
@@ -3235,6 +3564,7 @@ def test_explicit_arc_rewrite_generation_deduplicates_pending_and_applied_propos
             world=WorldBlueprint(setting_summary="旧案背后有江湖暗网。"),
             characters=[],
             llm=MockLLMClient(json_response={"story_arcs": []}),
+            judge_llm=judge_llm,
         )
 
     applied_proposal = proposals[0].model_copy(update={"status": "applied"})
@@ -3268,6 +3598,7 @@ def test_explicit_arc_rewrite_generation_deduplicates_pending_and_applied_propos
             world=WorldBlueprint(setting_summary="旧案背后有江湖暗网。"),
             characters=[],
             llm=MockLLMClient(json_response={"story_arcs": []}),
+            judge_llm=judge_llm,
         )
 
 

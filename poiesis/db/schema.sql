@@ -204,6 +204,7 @@ CREATE TABLE IF NOT EXISTS book_blueprints (
     roadmap_confirmed_json JSON DEFAULT '[]',
     blueprint_continuity_state_json JSON DEFAULT '{}',
     roadmap_validation_issues_json JSON DEFAULT '[]',
+    creative_issue_feedback_json JSON DEFAULT '{}',
     creative_repair_proposals_json JSON DEFAULT '[]',
     creative_repair_runs_json JSON DEFAULT '[]',
     creative_control_snapshots_json JSON DEFAULT '[]',

@@ -772,6 +772,16 @@ export interface RepairCandidate {
   judge_scores: RepairJudgeScore[]
   residual_issue_types: string[]
   introduced_issue_types: string[]
+  target_resolved_issue_ids: string[]
+  target_residual_issue_ids: string[]
+  target_resolved_issue_count: number
+  target_residual_issue_count: number
+  introduced_fatal_issue_ids: string[]
+  introduced_warning_issue_ids: string[]
+  judge_mode: 'model' | 'heuristic' | 'none'
+  judge_health_status: 'model_ok' | 'config_invalid' | 'provider_unavailable' | 'json_parse_failed'
+  execution_readiness: 'executable' | 'preview_only' | 'blocked'
+  blocking_reasons: string[]
   diff_preview: Array<Record<string, unknown>>
   selected: boolean
   verifier_fatal_count: number
@@ -785,11 +795,20 @@ export interface RepairEvalSummary {
   resolved_issue_ids: string[]
   residual_issue_ids: string[]
   introduced_issue_ids: string[]
+  target_resolved_issue_ids: string[]
+  target_residual_issue_ids: string[]
+  introduced_fatal_issue_ids: string[]
+  introduced_warning_issue_ids: string[]
   before_issue_types: string[]
   after_issue_types: string[]
   resolved_issue_count: number
   residual_issue_count: number
   introduced_issue_count: number
+  target_resolved_issue_count: number
+  target_residual_issue_count: number
+  judge_mode: 'model' | 'heuristic' | 'none'
+  execution_readiness: 'executable' | 'preview_only' | 'blocked'
+  blocking_reasons: string[]
   recommended_next_action: string
 }
 

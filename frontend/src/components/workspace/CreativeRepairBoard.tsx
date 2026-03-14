@@ -7,6 +7,7 @@ import type { CreativeIssue, CreativeRepairProposal, CreativeRepairRun } from '@
 import {
   formatCreativeDiffFieldLabel,
   formatCreativeDiffValue,
+  formatExecutionReadinessLabel,
   formatCreativeIssueStatusLabel,
   formatCreativeIssueTypeLabel,
   formatCreativeRepairabilityLabel,
@@ -14,6 +15,8 @@ import {
   formatCreativeRunStatusLabel,
   formatCreativeSourceLayerLabel,
   formatCreativeStrategyLabel,
+  formatJudgeHealthStatusLabel,
+  formatJudgeModeLabel,
 } from '@/lib/display-labels'
 
 export type CreativeIssueSourceFilter = 'all' | 'roadmap' | 'scene' | 'review' | 'canon'
@@ -72,6 +75,36 @@ function canAutoPlanIssue(issue: CreativeIssue): boolean {
 
 function sumJudgeScores(scores: Array<{ score: number }>): number {
   return scores.reduce((total, item) => total + item.score, 0)
+}
+
+function buildIssueNextStepHints(issue: CreativeIssue): string[] {
+  const hints: string[] = []
+  const context = issue.context_payload ?? {}
+  const readiness = String(context.execution_readiness ?? '').trim()
+  const judgeHealth = String(context.judge_health_status ?? '').trim()
+  const recommended = String(context.recommended_next_action ?? '').trim()
+
+  if (recommended) {
+    hints.push(recommended)
+  }
+
+  if (judgeHealth && judgeHealth !== 'model_ok') {
+    hints.push(`当前评审健康状态：${formatJudgeHealthStatusLabel(judgeHealth)}，建议先恢复 judge 再重新评审。`)
+  }
+
+  if (issue.source_layer === 'roadmap' && issue.suggested_strategy === 'chapter_rewrite') {
+    hints.push('优先查看当前章节细修表单，确认是否可以先手动补强升级点，再决定是否重试改写。')
+  }
+
+  if (issue.source_layer === 'roadmap' && issue.suggested_strategy === 'arc_rewrite') {
+    hints.push('这类阶段级问题通常需要先判断是否继续展开 1-2 章后会自然改善，再决定是否重写本幕骨架。')
+  }
+
+  if (issue.source_layer === 'roadmap' && readiness === 'preview_only') {
+    hints.push('当前只生成了参考候选，暂时不要直接依赖自动修复结果推进工作流。')
+  }
+
+  return Array.from(new Set(hints.filter(Boolean))).slice(0, 3)
 }
 
 export function CreativeRepairBoard({
@@ -211,6 +244,12 @@ export function CreativeRepairBoard({
             filteredIssues.map((issue) => {
               const chapterNumber = Number(issue.target_ref.chapter_number ?? 0) || null
               const arcNumber = Number(issue.target_ref.arc_number ?? 0) || null
+              const hasPlanningFeedback = Boolean(issue.context_payload?.has_planning_feedback)
+              const postApplyResidual = Boolean(issue.context_payload?.post_apply_residual)
+              const candidateCount = Number(issue.context_payload?.candidate_count ?? 0) || 0
+              const executionReadiness = String(issue.context_payload?.execution_readiness ?? '').trim()
+              const judgeMode = String(issue.context_payload?.judge_mode ?? '').trim()
+              const nextStepHints = buildIssueNextStepHints(issue)
               return (
                 <button
                   key={issue.issue_id}
@@ -233,6 +272,41 @@ export function CreativeRepairBoard({
                     </span>
                   </div>
                   <p className="mt-2 leading-6">{issue.message}</p>
+                  {hasPlanningFeedback ? (
+                    <div className="mt-3 rounded-2xl bg-white/80 px-3 py-3 text-xs text-stone-700">
+                      <p className="font-medium text-stone-800">已评审 {candidateCount || 0} 个候选，但暂无可执行方案</p>
+                      <p className="mt-1 leading-5">
+                        当前状态：{formatExecutionReadinessLabel(executionReadiness)} · {formatJudgeModeLabel(judgeMode)}
+                      </p>
+                      {nextStepHints.length > 0 ? (
+                        <div className="mt-2 space-y-1 text-stone-600">
+                          <p className="font-medium text-stone-800">建议下一步</p>
+                          {nextStepHints.map((hint) => (
+                            <p key={`${issue.issue_id}-${hint}`} className="leading-5">
+                              {hint}
+                            </p>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {postApplyResidual ? (
+                    <div className="mt-3 rounded-2xl bg-white/80 px-3 py-3 text-xs text-stone-700">
+                      <p className="font-medium text-stone-800">复验后仍存在</p>
+                      <p className="mt-1 leading-5">
+                        该问题在最近一次修复执行后仍未清除，建议先查看右侧详情再决定继续重写还是手动细修。
+                      </p>
+                      {nextStepHints.length > 0 ? (
+                        <div className="mt-2 space-y-1 text-stone-600">
+                          {nextStepHints.map((hint) => (
+                            <p key={`${issue.issue_id}-post-${hint}`} className="leading-5">
+                              {hint}
+                            </p>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <div className="mt-3 flex flex-wrap gap-2">
                     {issue.suggested_strategy ? (
                       <span className="rounded-full bg-white px-2 py-1 text-[11px] text-stone-600">
@@ -275,7 +349,7 @@ export function CreativeRepairBoard({
                           event.stopPropagation()
                           onPlanIssue(issue.issue_id)
                         }}
-                        disabled={isPlanningRepairs}
+                        disabled={isPlanningRepairs || hasPlanningFeedback}
                         className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-stone-800 disabled:opacity-50"
                       >
                         {isArcRewriteGuidanceIssue(issue) ? '单独生成骨架修复方案' : '生成修复方案'}

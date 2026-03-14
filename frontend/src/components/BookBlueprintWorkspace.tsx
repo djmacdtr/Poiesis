@@ -821,8 +821,13 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
 
   const planCreativeRepairsMutation = useMutation({
     mutationFn: (issueIds: string[] = []) => planCreativeRepairs(bookId, issueIds),
-    onSuccess: async () => {
-      toast.success('已生成修复提案，请先预览差异再决定是否执行')
+    onSuccess: async (payload) => {
+      const hasExecutableProposal = payload.creative_repair_proposals.some((item) => item.status === 'awaiting_approval')
+      if (hasExecutableProposal) {
+        toast.success('已生成可执行修复方案，请先预览差异再决定是否执行')
+      } else {
+        toast.success('已完成候选评审，但当前暂无可执行方案')
+      }
       await refreshBlueprint()
     },
     onError: (error: Error) => toast.error(error.message),
@@ -830,8 +835,16 @@ export function BookBlueprintWorkspace({ bookId, blueprint, activeBook = null }:
 
   const applyCreativeRepairProposalMutation = useMutation({
     mutationFn: (proposalId: string) => applyCreativeRepairProposal(bookId, proposalId),
-    onSuccess: async () => {
-      toast.success('修复提案已执行，并已自动复验当前章节路线')
+    onSuccess: async (payload) => {
+      const latestRun = [...payload.creative_repair_runs].at(-1) ?? null
+      const summary = latestRun?.eval_summary ?? null
+      if (summary?.target_residual_issue_count) {
+        toast.success('修复变更已应用，但目标问题仍存在')
+      } else if (summary?.introduced_issue_count) {
+        toast.success('修复变更已应用，但引入了新的问题')
+      } else {
+        toast.success('修复提案已执行，目标问题已清除')
+      }
       await refreshBlueprint()
     },
     onError: (error: Error) => toast.error(error.message),

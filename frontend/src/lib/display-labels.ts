@@ -105,7 +105,7 @@ const CONTINUITY_EVENT_KIND_LABELS: Record<string, string> = {
 
 const CREATIVE_ISSUE_STATUS_LABELS: Record<string, string> = {
   open: '待处理',
-  planned: '已规划',
+  planned: '已评审',
   awaiting_approval: '待确认',
   applied: '已执行',
   verified: '已复验',
@@ -182,6 +182,25 @@ const GENERATION_EVAL_ACCEPTED_BY_LABELS: Record<string, string> = {
   auto: '系统自动采用',
   user: '用户确认执行',
   review: '审阅确认采用',
+}
+
+const JUDGE_MODE_LABELS: Record<string, string> = {
+  model: '模型评审',
+  heuristic: '启发式评审',
+  none: '未启用评审',
+}
+
+const EXECUTION_READINESS_LABELS: Record<string, string> = {
+  executable: '可执行',
+  preview_only: '仅参考',
+  blocked: '已阻断',
+}
+
+const JUDGE_HEALTH_STATUS_LABELS: Record<string, string> = {
+  model_ok: '模型可用',
+  config_invalid: '配置无效',
+  provider_unavailable: '模型服务不可用',
+  json_parse_failed: '返回结构异常',
 }
 
 const CREATIVE_ISSUE_TYPE_LABELS: Record<string, string> = {
@@ -372,6 +391,21 @@ export function formatGenerationEvalTaskTypeLabel(taskType?: string | null): str
 export function formatGenerationEvalAcceptedByLabel(acceptedBy?: string | null): string {
   if (!acceptedBy) return '未标注采用方式'
   return GENERATION_EVAL_ACCEPTED_BY_LABELS[acceptedBy] ?? acceptedBy
+}
+
+export function formatJudgeModeLabel(mode?: string | null): string {
+  if (!mode) return '未标注评审模式'
+  return JUDGE_MODE_LABELS[mode] ?? mode
+}
+
+export function formatExecutionReadinessLabel(value?: string | null): string {
+  if (!value) return '未标注执行状态'
+  return EXECUTION_READINESS_LABELS[value] ?? value
+}
+
+export function formatJudgeHealthStatusLabel(status?: string | null): string {
+  if (!status) return '未标注健康状态'
+  return JUDGE_HEALTH_STATUS_LABELS[status] ?? status
 }
 
 export function formatCreativeIssueTypeLabel(issueType?: string | null): string {

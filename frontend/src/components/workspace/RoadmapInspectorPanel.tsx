@@ -26,6 +26,9 @@ import type {
 import {
   formatCreativeDiffFieldLabel,
   formatCreativeDiffValue,
+  formatExecutionReadinessLabel,
+  formatJudgeHealthStatusLabel,
+  formatJudgeModeLabel,
   formatCreativeIssueStatusLabel,
   formatCreativeIssueTypeLabel,
   formatCreativeRepairabilityLabel,
@@ -116,6 +119,37 @@ export function RoadmapInspectorPanel({
   const reviewSceneStatus = String(issueContext.scene_status ?? '').trim()
   const reviewLatestResultSummary = String(issueContext.latest_result_summary ?? '').trim()
   const reviewPatchText = String(issueContext.patch_text ?? '').trim()
+  const planningFeedbackCandidateCount = Number(issueContext.candidate_count ?? 0) || 0
+  const planningFeedbackSummary = String(issueContext.selected_candidate_summary ?? '').trim()
+  const planningFeedbackJudgeMode = String(issueContext.judge_mode ?? '').trim()
+  const planningFeedbackJudgeHealth = String(issueContext.judge_health_status ?? '').trim()
+  const planningFeedbackReadiness = String(issueContext.execution_readiness ?? '').trim()
+  const planningFeedbackTargetResidualCount = Number(issueContext.target_residual_issue_count ?? 0) || 0
+  const planningFeedbackIntroducedCount = Number(issueContext.introduced_issue_count ?? 0) || 0
+  const planningFeedbackReasons = Array.isArray(issueContext.blocking_reasons)
+    ? issueContext.blocking_reasons.map((item) => String(item)).filter(Boolean)
+    : []
+  const planningFeedbackNextAction = String(issueContext.recommended_next_action ?? '').trim()
+  const postApplyResidual = Boolean(issueContext.post_apply_residual)
+  const issueNextStepHints = Array.from(
+    new Set(
+      [
+        planningFeedbackNextAction,
+        planningFeedbackJudgeHealth && planningFeedbackJudgeHealth !== 'model_ok'
+          ? `当前评审健康状态：${formatJudgeHealthStatusLabel(planningFeedbackJudgeHealth)}，建议先恢复 judge 再重新评审。`
+          : '',
+        state.issue?.source_layer === 'roadmap' && state.issue?.suggested_strategy === 'chapter_rewrite'
+          ? '优先打开对应章节细修表单，确认能否通过手动补强升级点解决问题。'
+          : '',
+        state.issue?.source_layer === 'roadmap' && state.issue?.suggested_strategy === 'arc_rewrite'
+          ? '先判断继续展开 1-2 章后是否会自然改善；只有确认本幕骨架偏了，再重写本幕骨架。'
+          : '',
+        planningFeedbackReadiness === 'preview_only'
+          ? '当前只有参考候选，没有达到自动执行门槛；建议把它当作排查线索而不是直接方案。'
+          : '',
+      ].filter(Boolean),
+    ),
+  )
 
   if (state.mode === 'proposal' && state.proposal) {
     return (
@@ -161,8 +195,10 @@ export function RoadmapInspectorPanel({
                       <div className="mt-2 flex flex-wrap gap-2">
                         <span>严重问题：{candidate.verifier_fatal_count}</span>
                         <span>提醒：{candidate.verifier_warning_count}</span>
-                        <span>残留：{candidate.residual_issue_types.length}</span>
+                        <span>目标残留：{candidate.target_residual_issue_count}</span>
                         <span>新增：{candidate.introduced_issue_types.length}</span>
+                        <span>{formatJudgeModeLabel(candidate.judge_mode)}</span>
+                        <span>{formatExecutionReadinessLabel(candidate.execution_readiness)}</span>
                       </div>
                       {candidate.judge_scores.length > 0 ? (
                         <div className="mt-2 space-y-1">
@@ -186,6 +222,20 @@ export function RoadmapInspectorPanel({
                           新引入问题：{candidate.introduced_issue_types.map((item) => formatCreativeIssueTypeLabel(item)).join('、')}
                         </p>
                       ) : null}
+                      {candidate.blocking_reasons.length > 0 ? (
+                        <div className="mt-2 rounded-xl bg-amber-50 px-2 py-2 text-amber-800">
+                          <p className="font-medium">执行门槛检查</p>
+                          <ul className="mt-1 list-disc space-y-1 pl-4">
+                            {candidate.blocking_reasons.map((reason) => (
+                              <li key={`${candidate.candidate_id}-${reason}`}>{reason}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : (
+                        <div className="mt-2 rounded-xl bg-emerald-50 px-2 py-2 text-emerald-800">
+                          执行门槛检查：已通过，可作为自动执行方案。
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -243,16 +293,22 @@ export function RoadmapInspectorPanel({
             </div>
           </div>
           {state.run.eval_summary ? (
-            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-3 text-xs text-emerald-900">
+            <div
+              className={`rounded-2xl px-3 py-3 text-xs ${
+                state.run.eval_summary.target_residual_issue_count > 0 || state.run.eval_summary.introduced_issue_count > 0
+                  ? 'border border-amber-200 bg-amber-50 text-amber-900'
+                  : 'border border-emerald-100 bg-emerald-50 text-emerald-900'
+              }`}
+            >
               <p className="font-medium">修复效果回执</p>
               <div className="mt-2 grid gap-2 md:grid-cols-3">
                 <div className="rounded-2xl bg-white px-3 py-3">
-                  <p className="text-stone-500">已清除</p>
-                  <p className="mt-1 text-base font-semibold">{state.run.eval_summary.resolved_issue_count} 项问题</p>
+                  <p className="text-stone-500">已清除目标问题</p>
+                  <p className="mt-1 text-base font-semibold">{state.run.eval_summary.target_resolved_issue_count} 项问题</p>
                 </div>
                 <div className="rounded-2xl bg-white px-3 py-3">
-                  <p className="text-stone-500">仍存在</p>
-                  <p className="mt-1 text-base font-semibold">{state.run.eval_summary.residual_issue_count} 项问题</p>
+                  <p className="text-stone-500">目标问题残留</p>
+                  <p className="mt-1 text-base font-semibold">{state.run.eval_summary.target_residual_issue_count} 项问题</p>
                 </div>
                 <div className="rounded-2xl bg-white px-3 py-3">
                   <p className="text-stone-500">新增</p>
@@ -322,6 +378,43 @@ export function RoadmapInspectorPanel({
               修复方式：{formatCreativeRepairabilityLabel(state.issue.repairability)}
               {state.issue.suggested_strategy ? ` · 建议策略：${formatCreativeStrategyLabel(state.issue.suggested_strategy)}` : ''}
             </div>
+            {planningFeedbackCandidateCount > 0 ? (
+              <div className="rounded-2xl bg-sky-50 px-3 py-3 text-sky-900">
+                <p className="font-medium">最近一次候选评审</p>
+                <p className="mt-1 leading-5">
+                  已评审 {planningFeedbackCandidateCount} 个候选 · {formatJudgeModeLabel(planningFeedbackJudgeMode)} ·{' '}
+                  {formatExecutionReadinessLabel(planningFeedbackReadiness)}
+                </p>
+                {planningFeedbackSummary ? <p className="mt-1 leading-5">{planningFeedbackSummary}</p> : null}
+                <p className="mt-1 leading-5 text-sky-800/90">
+                  健康状态：{formatJudgeHealthStatusLabel(planningFeedbackJudgeHealth)} · 目标残留 {planningFeedbackTargetResidualCount} 项 ·
+                  新增 {planningFeedbackIntroducedCount} 项
+                </p>
+                {planningFeedbackReasons.length > 0 ? (
+                  <ul className="mt-2 list-disc space-y-1 pl-4 text-sky-800/90">
+                    {planningFeedbackReasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {planningFeedbackNextAction ? <p className="mt-2 leading-5">{planningFeedbackNextAction}</p> : null}
+                {issueNextStepHints.length > 0 ? (
+                  <div className="mt-3 rounded-2xl bg-white/70 px-3 py-3 text-sky-900">
+                    <p className="font-medium">建议下一步</p>
+                    <ul className="mt-2 list-disc space-y-1 pl-4 text-sky-800/90">
+                      {issueNextStepHints.map((hint) => (
+                        <li key={hint}>{hint}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {postApplyResidual ? (
+              <div className="rounded-2xl bg-amber-50 px-3 py-3 text-amber-900">
+                最近一次修复执行后，这个问题仍然存在。这里显示的是复验后的当前问题，不是旧缓存。
+              </div>
+            ) : null}
             {state.issue.source_layer === 'roadmap' && state.issue.suggested_strategy === 'arc_rewrite' ? (
               <div className="rounded-2xl bg-amber-50 px-3 py-3 text-amber-800">
                 这类阶段级问题默认只作为审查提示，不会自动混入“为当前问题生成修复方案”。如果你判断这一幕骨架确实已经写偏，再单独生成骨架修复方案会更稳妥。

@@ -165,6 +165,8 @@ class CreativeOrchestrator:
         roadmap: list[ChapterRoadmapItem],
         roadmap_issues: list[RoadmapValidationIssue],
         stored_proposals: list[CreativeRepairProposal],
+        issue_feedback: dict[str, dict[str, object]] | None = None,
+        stored_runs: list[CreativeRepairRun] | None = None,
     ) -> list[CreativeIssue]:
         """把 verifier 原始结果升级成统一问题队列。"""
         active_issue_ids = {
@@ -173,12 +175,37 @@ class CreativeOrchestrator:
             if proposal.status == "awaiting_approval"
             for issue_id in proposal.issue_ids
         }
+        planning_feedback = issue_feedback or {}
+        residual_issue_feedback: dict[str, dict[str, object]] = {}
+        for run in reversed(stored_runs or []):
+            eval_summary = run.eval_summary
+            if eval_summary is None:
+                continue
+            for issue_id in eval_summary.residual_issue_ids:
+                residual_issue_feedback.setdefault(
+                    issue_id,
+                    {
+                        "post_apply_residual": True,
+                        "last_run_id": run.run_id,
+                        "last_run_status": run.status,
+                        "recommended_next_action": eval_summary.recommended_next_action,
+                        "target_residual_issue_count": eval_summary.target_residual_issue_count,
+                        "introduced_issue_count": eval_summary.introduced_issue_count,
+                    },
+                )
         issues: list[CreativeIssue] = []
         for issue in roadmap_issues:
             issue_id = _build_issue_id(issue)
             issue_signature = _build_issue_signature(issue)
             target_type = "roadmap_chapter" if issue.chapter_number is not None else "roadmap_arc"
             repairability, suggested_strategy = self._classify_issue(issue, story_arcs, roadmap)
+            context_payload = {
+                **planning_feedback.get(issue_id, {}),
+                **residual_issue_feedback.get(issue_id, {}),
+            }
+            status = "awaiting_approval" if issue_id in active_issue_ids else "open"
+            if status == "open" and planning_feedback.get(issue_id):
+                status = "planned"
             issues.append(
                 CreativeIssue(
                     issue_id=issue_id,
@@ -195,9 +222,10 @@ class CreativeOrchestrator:
                     message=issue.message,
                     detected_by="roadmap_verifier",
                     repairability=repairability,
-                    status="awaiting_approval" if issue_id in active_issue_ids else "open",
+                    status=cast(Any, status),
                     suggested_strategy=suggested_strategy,
                     issue_signature=issue_signature,
+                    context_payload=context_payload,
                 )
             )
         issues.sort(
@@ -209,6 +237,77 @@ class CreativeOrchestrator:
             )
         )
         return issues
+
+    def _candidate_total_score(self, candidate: RepairCandidate) -> float:
+        """统一计算候选综合分，避免排序和门禁各自算出两套结果。"""
+        return sum(item.score for item in candidate.judge_scores)
+
+    def evaluate_candidate_gate(
+        self,
+        *,
+        candidate: RepairCandidate,
+        before_issues: list[CreativeIssue],
+        after_issues: list[CreativeIssue],
+        target_issue_ids: list[str],
+        judge_threshold: float,
+        requires_model_judge: bool,
+    ) -> RepairCandidate:
+        """把“候选排序”和“候选能否执行”拆成两层规则。
+
+        当前最重要的收口点在这里：
+        - best candidate 只代表“相对最不差”的候选；
+        - execution_readiness 才决定它是否足够安全，能不能给作者“接受并执行”按钮。
+        """
+
+        before_issue_ids = {item.issue_id for item in before_issues}
+        after_issue_map = {item.issue_id: item for item in after_issues}
+        target_ids = set(target_issue_ids)
+        if after_issue_map:
+            candidate.target_resolved_issue_ids = sorted(target_ids - set(after_issue_map))
+            candidate.target_residual_issue_ids = sorted(target_ids & set(after_issue_map))
+        elif candidate.residual_issue_types:
+            # 某些阶段级候选目前只能拿到“残留问题类型”而没有完整 issue 列表。
+            # 这里宁可保守地视为目标问题仍残留，也不要误判为可直接执行。
+            candidate.target_resolved_issue_ids = []
+            candidate.target_residual_issue_ids = sorted(target_ids)
+        else:
+            candidate.target_resolved_issue_ids = sorted(target_ids)
+            candidate.target_residual_issue_ids = []
+        candidate.target_resolved_issue_count = len(candidate.target_resolved_issue_ids)
+        candidate.target_residual_issue_count = len(candidate.target_residual_issue_ids)
+        candidate.introduced_fatal_issue_ids = sorted(
+            issue_id
+            for issue_id, issue in after_issue_map.items()
+            if issue_id not in before_issue_ids and issue.severity == "fatal"
+        )
+        candidate.introduced_warning_issue_ids = sorted(
+            issue_id
+            for issue_id, issue in after_issue_map.items()
+            if issue_id not in before_issue_ids and issue.severity != "fatal"
+        )
+
+        before_fatal_count = sum(1 for item in before_issues if item.severity == "fatal")
+        before_warning_count = sum(1 for item in before_issues if item.severity != "fatal")
+        blocking_reasons: list[str] = []
+        if candidate.target_residual_issue_count > 0:
+            blocking_reasons.append("目标问题仍有残留，当前候选不能视为真正修复成功。")
+        if candidate.introduced_fatal_issue_ids:
+            blocking_reasons.append("当前候选会引入新的严重问题，不能自动执行。")
+        if candidate.verifier_fatal_count > before_fatal_count:
+            blocking_reasons.append("当前候选的严重问题数比修复前更多，属于回归。")
+        if candidate.verifier_warning_count > before_warning_count:
+            blocking_reasons.append("当前候选的提醒问题数比修复前更多，属于回归。")
+        if requires_model_judge and candidate.judge_mode != "model":
+            blocking_reasons.append("judge 模型不可用，语义类修复已降级为仅参考，不允许自动执行。")
+        if requires_model_judge and self._candidate_total_score(candidate) < judge_threshold:
+            blocking_reasons.append("当前候选的评审综合分低于执行阈值，不允许自动执行。")
+
+        candidate.blocking_reasons = blocking_reasons
+        if blocking_reasons:
+            candidate.execution_readiness = "blocked" if requires_model_judge and candidate.judge_mode != "model" else "preview_only"
+        else:
+            candidate.execution_readiness = "executable"
+        return candidate
 
     def plan_roadmap_repairs(
         self,
@@ -224,11 +323,11 @@ class CreativeOrchestrator:
         world: WorldBlueprint | None,
         characters: list[CharacterBlueprint],
         llm: LLMClient | None,
-        judge_llm: LLMClient | None,
+        judge_llm: LLMClient | None = None,
         relationship_graph: list[Any] | None = None,
         candidate_count: int = 3,
         judge_threshold: float = 0.0,
-    ) -> list[CreativeRepairProposal]:
+    ) -> tuple[list[CreativeRepairProposal], dict[str, dict[str, object]]]:
         """为当前 open issue 生成预览提案。"""
         available_issues = self.build_creative_issues(
             book_id=book_id,
@@ -253,39 +352,63 @@ class CreativeOrchestrator:
 
         next_proposals = list(stored_proposals)
         generated_proposals: list[CreativeRepairProposal] = []
-        generated_proposals.extend(
-            self._build_field_patch_proposals(
-                book_id,
-                story_arcs,
-                roadmap,
-                roadmap_issues,
-                selected_issues,
-                stored_proposals,
-            )
+        planning_feedback: dict[str, dict[str, object]] = {}
+        field_patch_proposals, field_patch_feedback = self._build_field_patch_proposals(
+            book_id,
+            story_arcs,
+            roadmap,
+            roadmap_issues,
+            selected_issues,
+            stored_proposals,
         )
-        generated_proposals.extend(
-            self._build_rewrite_proposals(
-                book_id=book_id,
-                story_arcs=story_arcs,
-                roadmap=roadmap,
-                roadmap_issues=roadmap_issues,
-                selected_issues=selected_issues,
-                stored_proposals=stored_proposals,
-                intent=intent,
-                variant=variant,
-                world=world,
-                characters=characters,
-                llm=llm,
-                judge_llm=judge_llm,
-                relationship_graph=relationship_graph or [],
-                candidate_count=candidate_count,
-                judge_threshold=judge_threshold,
-            )
+        generated_proposals.extend(field_patch_proposals)
+        planning_feedback.update(field_patch_feedback)
+        rewrite_proposals, rewrite_feedback = self._build_rewrite_proposals(
+            book_id=book_id,
+            story_arcs=story_arcs,
+            roadmap=roadmap,
+            roadmap_issues=roadmap_issues,
+            selected_issues=selected_issues,
+            stored_proposals=stored_proposals,
+            intent=intent,
+            variant=variant,
+            world=world,
+            characters=characters,
+            llm=llm,
+            judge_llm=judge_llm,
+            relationship_graph=relationship_graph or [],
+            candidate_count=candidate_count,
+            judge_threshold=judge_threshold,
         )
-        if not generated_proposals:
+        generated_proposals.extend(rewrite_proposals)
+        planning_feedback.update(rewrite_feedback)
+        if not generated_proposals and not planning_feedback:
             raise ValueError("当前问题暂无新的修复方案；可能已有待确认方案，或同类骨架重写刚执行过。")
         next_proposals.extend(generated_proposals)
-        return sorted(next_proposals, key=lambda item: item.created_at, reverse=True)
+        return sorted(next_proposals, key=lambda item: item.created_at, reverse=True), planning_feedback
+
+    def _build_issue_planning_feedback(
+        self,
+        *,
+        candidate_count: int,
+        selected_candidate: RepairCandidate,
+        recommended_next_action: str,
+    ) -> dict[str, object]:
+        """把“已评审但不可执行”的结果写成问题详情的只读反馈。"""
+
+        return {
+            "has_planning_feedback": True,
+            "candidate_count": candidate_count,
+            "selected_candidate_summary": selected_candidate.summary,
+            "judge_mode": selected_candidate.judge_mode,
+            "judge_health_status": selected_candidate.judge_health_status,
+            "execution_readiness": selected_candidate.execution_readiness,
+            "target_residual_issue_count": selected_candidate.target_residual_issue_count,
+            "introduced_issue_count": len(selected_candidate.introduced_issue_types),
+            "introduced_fatal_issue_count": len(selected_candidate.introduced_fatal_issue_ids),
+            "blocking_reasons": list(selected_candidate.blocking_reasons),
+            "recommended_next_action": recommended_next_action,
+        }
 
     def apply_proposal(
         self,
@@ -450,6 +573,7 @@ class CreativeOrchestrator:
         before_issues: list[CreativeIssue],
         after_issues: list[CreativeIssue],
         target_issue_ids: list[str],
+        selected_candidate: RepairCandidate | None = None,
     ) -> RepairEvalSummary:
         """把一次执行前后的问题差异收口成作者可读的效果回执。
 
@@ -464,11 +588,21 @@ class CreativeOrchestrator:
         resolved_issue_ids = sorted(target_ids - after_ids)
         residual_issue_ids = sorted(target_ids & after_ids)
         introduced_issue_ids = sorted(after_ids - before_ids)
+        introduced_fatal_issue_ids = sorted(
+            item.issue_id
+            for item in after_issues
+            if item.issue_id in introduced_issue_ids and item.severity == "fatal"
+        )
+        introduced_warning_issue_ids = sorted(
+            item.issue_id
+            for item in after_issues
+            if item.issue_id in introduced_issue_ids and item.severity != "fatal"
+        )
         before_issue_types = sorted({item.issue_type for item in before_issues})
         after_issue_types = sorted({item.issue_type for item in after_issues})
 
         if residual_issue_ids:
-            next_action = "提案已执行，但目标问题仍有残留；建议查看右侧详情，决定继续重写、手动细修或推进后再复验。"
+            next_action = "变更已应用，但目标问题仍有残留；建议查看右侧详情，决定继续重写、手动细修或推进后再复验。"
         elif introduced_issue_ids:
             next_action = "目标问题已缓解，但引入了新的后续问题；建议优先处理新增问题。"
         else:
@@ -480,11 +614,20 @@ class CreativeOrchestrator:
             resolved_issue_ids=resolved_issue_ids,
             residual_issue_ids=residual_issue_ids,
             introduced_issue_ids=introduced_issue_ids,
+            target_resolved_issue_ids=resolved_issue_ids,
+            target_residual_issue_ids=residual_issue_ids,
+            introduced_fatal_issue_ids=introduced_fatal_issue_ids,
+            introduced_warning_issue_ids=introduced_warning_issue_ids,
             before_issue_types=before_issue_types,
             after_issue_types=after_issue_types,
             resolved_issue_count=len(resolved_issue_ids),
             residual_issue_count=len(residual_issue_ids),
             introduced_issue_count=len(introduced_issue_ids),
+            target_resolved_issue_count=len(resolved_issue_ids),
+            target_residual_issue_count=len(residual_issue_ids),
+            judge_mode=selected_candidate.judge_mode if selected_candidate is not None else "none",
+            execution_readiness=selected_candidate.execution_readiness if selected_candidate is not None else "executable",
+            blocking_reasons=list(selected_candidate.blocking_reasons) if selected_candidate is not None else [],
             recommended_next_action=next_action,
         )
 
@@ -534,7 +677,7 @@ class CreativeOrchestrator:
         residual_issue_types: list[str],
         introduced_issue_types: list[str],
         fixed_constraints: list[str],
-    ) -> tuple[list[RepairJudgeScore], str]:
+    ) -> tuple[list[RepairJudgeScore], str, str, str]:
         """用 judge 模型给候选打分；失败时退回到稳定的启发式打分。
 
         这里的 judge 只负责排序，不负责直接修改真源：
@@ -543,10 +686,17 @@ class CreativeOrchestrator:
         """
 
         if judge_llm is None:
-            return self._fallback_judge_scores(
+            scores, summary = self._fallback_judge_scores(
                 residual_issue_types=residual_issue_types,
                 introduced_issue_types=introduced_issue_types,
             )
+            return scores, summary, "none", "provider_unavailable"
+        if not str(getattr(judge_llm, "model", "") or "").strip():
+            scores, summary = self._fallback_judge_scores(
+                residual_issue_types=residual_issue_types,
+                introduced_issue_types=introduced_issue_types,
+            )
+            return scores, summary, "none", "config_invalid"
 
         prompt = (
             "你是长篇小说修复候选的评审器。请只返回 JSON。\n"
@@ -564,6 +714,13 @@ class CreativeOrchestrator:
                 prompt,
                 system="你是严谨的小说质量评审。必须从问题解决、结构升级和连续性三个维度打分。",
             )
+        except Exception:  # noqa: BLE001
+            scores, summary = self._fallback_judge_scores(
+                residual_issue_types=residual_issue_types,
+                introduced_issue_types=introduced_issue_types,
+            )
+            return scores, summary, "heuristic", "provider_unavailable"
+        try:
             raw_scores = raw.get("scores") if isinstance(raw.get("scores"), list) else []
             scores = [
                 RepairJudgeScore.model_validate(item)
@@ -571,13 +728,14 @@ class CreativeOrchestrator:
                 if isinstance(item, dict)
             ]
             if scores:
-                return scores, str(raw.get("summary") or "").strip()
+                return scores, str(raw.get("summary") or "").strip(), "model", "model_ok"
         except Exception:  # noqa: BLE001
             pass
-        return self._fallback_judge_scores(
+        scores, summary = self._fallback_judge_scores(
             residual_issue_types=residual_issue_types,
             introduced_issue_types=introduced_issue_types,
         )
+        return scores, summary, "heuristic", "json_parse_failed"
 
     def select_best_candidate(
         self,
@@ -597,21 +755,17 @@ class CreativeOrchestrator:
         if not candidates:
             raise ValueError("当前没有可选候选。")
 
-        def candidate_total_score(candidate: RepairCandidate) -> float:
-            return sum(item.score for item in candidate.judge_scores)
-
         ordered = sorted(
             candidates,
             key=lambda item: (
-                item.verifier_fatal_count,
-                len(item.residual_issue_types),
+                item.target_residual_issue_count,
+                len(item.introduced_fatal_issue_ids),
                 len(item.introduced_issue_types),
-                -candidate_total_score(item),
+                item.verifier_fatal_count,
+                -self._candidate_total_score(item),
             ),
         )
         best = ordered[0]
-        if candidate_total_score(best) < judge_threshold and len(ordered) > 1:
-            best = ordered[0]
         for item in candidates:
             item.selected = item.candidate_id == best.candidate_id
         return best
@@ -680,9 +834,10 @@ class CreativeOrchestrator:
         roadmap_issues: list[RoadmapValidationIssue],
         selected_issues: list[CreativeIssue],
         stored_proposals: list[CreativeRepairProposal],
-    ) -> list[CreativeRepairProposal]:
+    ) -> tuple[list[CreativeRepairProposal], dict[str, dict[str, object]]]:
         issue_map = {_build_issue_id(issue): issue for issue in roadmap_issues}
         grouped: dict[int, list[CreativeIssue]] = {}
+        planning_feedback: dict[str, dict[str, object]] = {}
         for issue in selected_issues:
             if issue.repairability != "deterministic":
                 continue
@@ -691,6 +846,13 @@ class CreativeOrchestrator:
                 grouped.setdefault(chapter_number, []).append(issue)
 
         proposals: list[CreativeRepairProposal] = []
+        before_issue_models = self.build_creative_issues(
+            book_id=book_id,
+            story_arcs=story_arcs,
+            roadmap=roadmap,
+            roadmap_issues=roadmap_issues,
+            stored_proposals=stored_proposals,
+        )
         for chapter_number, issues in grouped.items():
             chapter = next((item for item in roadmap if item.chapter_number == chapter_number), None)
             if chapter is None:
@@ -722,6 +884,51 @@ class CreativeOrchestrator:
                 statuses={"awaiting_approval"},
             ):
                 continue
+            candidate_roadmap = [item.model_copy(deep=True) for item in roadmap]
+            for operation in operations:
+                if operation.op_type == "set_field":
+                    candidate_roadmap = self._apply_set_field_operation(candidate_roadmap, operation)
+            after_issues = self._planner.verify_roadmap(
+                story_arcs,
+                candidate_roadmap,
+                world=None,
+                relationship_graph=[],
+            )
+            after_issue_models = self.build_creative_issues(
+                book_id=book_id,
+                story_arcs=story_arcs,
+                roadmap=candidate_roadmap,
+                roadmap_issues=after_issues,
+                stored_proposals=stored_proposals,
+            )
+            candidate = self.evaluate_candidate_gate(
+                candidate=RepairCandidate(
+                    candidate_id=_build_candidate_id(f"field-patch-{chapter_number}"),
+                    prompt_version="repair.field_patch.v1",
+                    summary=f"结构补丁候选：修复第 {chapter_number} 章的 {len(issues)} 个结构问题",
+                    applied_issue_ids=[issue.issue_id for issue in issues],
+                    judge_mode="none",
+                    judge_health_status="model_ok",
+                    diff_preview=diff_preview,
+                    verifier_fatal_count=sum(1 for item in after_issue_models if item.severity == "fatal"),
+                    verifier_warning_count=sum(1 for item in after_issue_models if item.severity != "fatal"),
+                    model_name="deterministic",
+                ),
+                before_issues=before_issue_models,
+                after_issues=after_issue_models,
+                target_issue_ids=[issue.issue_id for issue in issues],
+                judge_threshold=0.0,
+                requires_model_judge=False,
+            )
+            if candidate.execution_readiness != "executable":
+                feedback = self._build_issue_planning_feedback(
+                    candidate_count=1,
+                    selected_candidate=candidate,
+                    recommended_next_action="结构补丁无法稳定清除目标问题，请改为手动细修，或切换到更大粒度的重写。",
+                )
+                for issue in issues:
+                    planning_feedback[issue.issue_id] = feedback
+                continue
             proposals.append(
                 CreativeRepairProposal(
                     proposal_id=_build_proposal_id([issue.issue_id for issue in issues], "field_patch"),
@@ -734,12 +941,13 @@ class CreativeOrchestrator:
                     operations=operations,
                     summary=f"修复第 {chapter_number} 章的 {len(issues)} 个结构问题",
                     diff_preview=diff_preview,
+                    candidates=[candidate],
                     expected_post_conditions=["当前章节的结构型 fatal 应明显减少或消失。"],
                     requires_llm=False,
                     created_at=_now_iso(),
                 )
             )
-        return proposals
+        return proposals, planning_feedback
 
     def _build_rewrite_proposals(
         self,
@@ -759,11 +967,19 @@ class CreativeOrchestrator:
         relationship_graph: list[Any],
         candidate_count: int,
         judge_threshold: float,
-    ) -> list[CreativeRepairProposal]:
+    ) -> tuple[list[CreativeRepairProposal], dict[str, dict[str, object]]]:
         if intent is None or variant is None or world is None or llm is None:
-            return []
+            return [], {}
         issue_map = {_build_issue_id(issue): issue for issue in roadmap_issues}
         proposals: list[CreativeRepairProposal] = []
+        planning_feedback: dict[str, dict[str, object]] = {}
+        before_issue_models = self.build_creative_issues(
+            book_id=book_id,
+            story_arcs=story_arcs,
+            roadmap=roadmap,
+            roadmap_issues=roadmap_issues,
+            stored_proposals=stored_proposals,
+        )
 
         chapter_groups: dict[int, list[CreativeIssue]] = {}
         arc_groups: dict[int, list[CreativeIssue]] = {}
@@ -829,7 +1045,7 @@ class CreativeOrchestrator:
                 )
                 residual_issue_types = sorted({item.type for item in after_issues if item.type in target_issue_types})
                 introduced_issue_types = sorted({item.type for item in after_issues if item.type not in target_issue_types})
-                judge_scores, judge_summary = self.judge_candidate(
+                judge_scores, judge_summary, judge_mode, judge_health_status = self.judge_candidate(
                     judge_llm=judge_llm,
                     task_type="rewrite_chapter",
                     candidate_summary=(
@@ -843,7 +1059,15 @@ class CreativeOrchestrator:
                     introduced_issue_types=introduced_issue_types,
                     fixed_constraints=["必须保留前文连续性", "不能破坏当前阶段的章号和顺序"],
                 )
-                candidate = RepairCandidate(
+                after_issue_models = self.build_creative_issues(
+                    book_id=book_id,
+                    story_arcs=story_arcs,
+                    roadmap=candidate_roadmap,
+                    roadmap_issues=after_issues,
+                    stored_proposals=stored_proposals,
+                )
+                candidate = self.evaluate_candidate_gate(
+                    candidate=RepairCandidate(
                     candidate_id=_build_candidate_id(f"chapter-rewrite-{chapter_number}"),
                     prompt_version="repair.rewrite_chapter.v1",
                     summary=judge_summary or f"候选章节：{rewritten.title}",
@@ -851,15 +1075,32 @@ class CreativeOrchestrator:
                     judge_scores=judge_scores,
                     residual_issue_types=residual_issue_types,
                     introduced_issue_types=introduced_issue_types,
+                    judge_mode=cast(Any, judge_mode),
+                    judge_health_status=cast(Any, judge_health_status),
                     diff_preview=self._build_chapter_rewrite_preview(current_chapter, rewritten),
                     verifier_fatal_count=sum(1 for item in after_issues if item.severity == "fatal"),
                     verifier_warning_count=sum(1 for item in after_issues if item.severity == "warning"),
                     model_name=llm.model,
+                    ),
+                    before_issues=before_issue_models,
+                    after_issues=after_issue_models,
+                    target_issue_ids=[issue.issue_id for issue in issues],
+                    judge_threshold=judge_threshold,
+                    requires_model_judge=True,
                 )
                 chapter_candidates.append(candidate)
                 rewritten_by_candidate_id[candidate.candidate_id] = rewritten
 
             best_candidate = self.select_best_candidate(chapter_candidates, judge_threshold=judge_threshold)
+            if best_candidate.execution_readiness != "executable":
+                feedback = self._build_issue_planning_feedback(
+                    candidate_count=len(chapter_candidates),
+                    selected_candidate=best_candidate,
+                    recommended_next_action="已评审多个单章候选，但当前没有可自动执行的方案；建议手动细修该章，或在 judge 恢复后重新生成。",
+                )
+                for issue in issues:
+                    planning_feedback[issue.issue_id] = feedback
+                continue
             rewritten = rewritten_by_candidate_id[best_candidate.candidate_id]
             proposals.append(
                 CreativeRepairProposal(
@@ -945,7 +1186,7 @@ class CreativeOrchestrator:
                     )
                     else []
                 )
-                judge_scores, judge_summary = self.judge_candidate(
+                judge_scores, judge_summary, judge_mode, judge_health_status = self.judge_candidate(
                     judge_llm=judge_llm,
                     task_type="rewrite_arc",
                     candidate_summary=(
@@ -959,7 +1200,8 @@ class CreativeOrchestrator:
                     introduced_issue_types=[],
                     fixed_constraints=["必须保留当前幕原有章号区间", "不能改动后续阶段的章号边界"],
                 )
-                candidate = RepairCandidate(
+                candidate = self.evaluate_candidate_gate(
+                    candidate=RepairCandidate(
                     candidate_id=_build_candidate_id(f"arc-rewrite-{arc_number}"),
                     prompt_version="repair.rewrite_arc.v1",
                     summary=judge_summary or f"候选阶段目的：{replacement.purpose}",
@@ -967,16 +1209,33 @@ class CreativeOrchestrator:
                     judge_scores=judge_scores,
                     residual_issue_types=residual_issue_types,
                     introduced_issue_types=[],
+                    judge_mode=cast(Any, judge_mode),
+                    judge_health_status=cast(Any, judge_health_status),
                     diff_preview=self._build_arc_rewrite_preview(arc, replacement, clear_numbers),
                     verifier_fatal_count=len(residual_issue_types),
                     verifier_warning_count=0,
                     model_name=llm.model,
+                    ),
+                    before_issues=before_issue_models,
+                    after_issues=[],
+                    target_issue_ids=[issue.issue_id for issue in issues],
+                    judge_threshold=judge_threshold,
+                    requires_model_judge=True,
                 )
                 arc_candidates.append(candidate)
                 replacement_by_candidate_id[candidate.candidate_id] = replacement
             if not arc_candidates:
                 continue
             best_candidate = self.select_best_candidate(arc_candidates, judge_threshold=judge_threshold)
+            if best_candidate.execution_readiness != "executable":
+                feedback = self._build_issue_planning_feedback(
+                    candidate_count=len(arc_candidates),
+                    selected_candidate=best_candidate,
+                    recommended_next_action="当前幕已评审多个骨架候选，但都未达到自动执行门槛；建议先手动细化章节，或等 judge 恢复后再重新评审。",
+                )
+                for issue in issues:
+                    planning_feedback[issue.issue_id] = feedback
+                continue
             replacement = replacement_by_candidate_id[best_candidate.candidate_id]
             proposals.append(
                 CreativeRepairProposal(
@@ -1010,7 +1269,7 @@ class CreativeOrchestrator:
                 )
             )
 
-        return proposals
+        return proposals, planning_feedback
 
     def _has_proposal_signature(
         self,

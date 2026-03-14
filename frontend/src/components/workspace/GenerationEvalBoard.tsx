@@ -12,8 +12,10 @@ import type { GenerationEvalRecord } from '@/types'
 import {
   formatCreativeIssueTypeLabel,
   formatCreativeSourceLayerLabel,
+  formatExecutionReadinessLabel,
   formatGenerationEvalAcceptedByLabel,
   formatGenerationEvalTaskTypeLabel,
+  formatJudgeModeLabel,
 } from '@/lib/display-labels'
 
 interface GenerationEvalBoardProps {
@@ -329,6 +331,15 @@ export function GenerationEvalBoard({ items }: GenerationEvalBoardProps) {
                         <div className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">
                           新增：{item.introduced_issue_count}
                         </div>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-stone-500">
+                        <span>
+                          评审：{formatJudgeModeLabel(String(item.context_payload.judge_mode ?? '').trim() || 'none')}
+                        </span>
+                        <span>
+                          执行状态：
+                          {formatExecutionReadinessLabel(String(item.context_payload.execution_readiness ?? '').trim() || 'executable')}
+                        </span>
                       </div>
                       {item.after_issue_types.length > 0 ? (
                         <p className="mt-3 text-xs leading-5 text-stone-600">

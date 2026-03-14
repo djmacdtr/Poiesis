@@ -235,11 +235,30 @@ def _load_generation_evals(state: dict[str, Any]) -> list[GenerationEvalRecord]:
     ]
 
 
+def _load_creative_issue_feedback(state: dict[str, Any]) -> dict[str, dict[str, object]]:
+    """读取“已评审但暂无可执行方案”的问题反馈。
+
+    这层反馈和 proposal 分开存：
+    - proposal 只承载真正可执行的方案；
+    - feedback 只承载“系统已经评审过，但还不该给执行按钮”的只读结果。
+    """
+
+    raw = state.get("creative_issue_feedback") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(issue_id): cast(dict[str, object], payload)
+        for issue_id, payload in raw.items()
+        if isinstance(issue_id, str) and isinstance(payload, dict)
+    }
+
+
 def _upsert_blueprint_business_state(
     db: Database,
     book_id: int,
     payload: dict[str, object],
     *,
+    creative_issue_feedback: dict[str, dict[str, object]] | None = None,
     creative_repair_proposals: list[dict[str, object]] | None = None,
     creative_repair_runs: list[dict[str, object]] | None = None,
     creative_control_snapshots: list[dict[str, object]] | None = None,
@@ -269,6 +288,7 @@ def _upsert_blueprint_business_state(
         roadmap_confirmed=cast(list[dict[str, Any]] | None, payload.get("roadmap_confirmed")),
         blueprint_continuity_state=cast(dict[str, Any] | None, payload.get("blueprint_continuity_state")),
         roadmap_validation_issues=cast(list[dict[str, Any]] | None, payload.get("roadmap_validation_issues")),
+        creative_issue_feedback=creative_issue_feedback,
         creative_repair_proposals=creative_repair_proposals,
         creative_repair_runs=creative_repair_runs,
         creative_control_snapshots=creative_control_snapshots,
@@ -365,6 +385,7 @@ def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
     ]
     creative_repair_proposals = _load_creative_repair_proposals(state)
     creative_repair_runs = _load_creative_repair_runs(state)
+    creative_issue_feedback = _load_creative_issue_feedback(state)
     generation_evals = _load_generation_evals(state)
     roadmap_creative_issues = orchestrator.build_creative_issues(
         book_id=book_id,
@@ -372,6 +393,8 @@ def build_book_blueprint(db: Database, book_id: int) -> BookBlueprint:
         roadmap=base_roadmap,
         roadmap_issues=roadmap_issues,
         stored_proposals=creative_repair_proposals,
+        issue_feedback=creative_issue_feedback,
+        stored_runs=creative_repair_runs,
     )
     review_creative_issues = _build_review_queue_creative_issues(db, book_id)
     creative_issues = sorted(
@@ -741,8 +764,8 @@ class _BlueprintLayerBase:
             )
             residual_issue_types = sorted({item.issue_type for item in after_creative_issues if item.issue_type in target_issue_types})
             introduced_issue_types = sorted({item.issue_type for item in after_creative_issues if item.issue_type not in target_issue_types})
-            judge_scores, judge_summary = orchestrator.judge_candidate(
-                judge_llm=self._context.judge_llm or self._context.llm,
+            judge_scores, judge_summary, judge_mode, judge_health_status = orchestrator.judge_candidate(
+                judge_llm=self._context.judge_llm,
                 task_type=task_type,
                 candidate_summary=(
                     f"标题：{chapter.title}\n"
@@ -755,7 +778,8 @@ class _BlueprintLayerBase:
                 introduced_issue_types=introduced_issue_types,
                 fixed_constraints=["必须承接前文连续性", "不能改变既有章号顺序"],
             )
-            candidate = RepairCandidate(
+            candidate = orchestrator.evaluate_candidate_gate(
+                candidate=RepairCandidate(
                 candidate_id=f"{task_type}-{chapter.chapter_number}-{len(candidates) + 1}",
                 prompt_version=prompt_version,
                 summary=judge_summary or chapter.title,
@@ -763,10 +787,18 @@ class _BlueprintLayerBase:
                 judge_scores=judge_scores,
                 residual_issue_types=residual_issue_types,
                 introduced_issue_types=introduced_issue_types,
+                judge_mode=cast(Any, judge_mode),
+                judge_health_status=cast(Any, judge_health_status),
                 diff_preview=[],
                 verifier_fatal_count=sum(1 for item in after_validation_issues if item.severity == "fatal"),
                 verifier_warning_count=sum(1 for item in after_validation_issues if item.severity == "warning"),
                 model_name=self._context.llm.model,
+                ),
+                before_issues=before_issues,
+                after_issues=after_creative_issues,
+                target_issue_ids=[item.issue_id for item in before_issues if item.issue_type in target_issue_types],
+                judge_threshold=self._context.repair_judge_threshold,
+                requires_model_judge=False,
             )
             candidates.append(candidate)
             roadmap_by_candidate_id[candidate.candidate_id] = merged
@@ -788,6 +820,7 @@ class _BlueprintLayerBase:
             before_issues=before_issues,
             after_issues=after_issues,
             target_issue_ids=[item.issue_id for item in before_issues if item.issue_type in target_issue_types],
+            selected_candidate=selected_candidate,
         )
         eval_record = orchestrator.build_generation_eval_record(
             book_id=self._context.book_id,
@@ -799,7 +832,11 @@ class _BlueprintLayerBase:
             selected_candidate=selected_candidate,
             eval_summary=eval_summary,
             accepted_by="auto",
-            context_payload={"chapter_number": chapter_by_candidate_id[selected_candidate.candidate_id].chapter_number},
+            context_payload={
+                "chapter_number": chapter_by_candidate_id[selected_candidate.candidate_id].chapter_number,
+                "judge_mode": selected_candidate.judge_mode,
+                "execution_readiness": selected_candidate.execution_readiness,
+            },
         )
         return chapter_by_candidate_id[selected_candidate.candidate_id], selected_candidate, eval_record
 
@@ -828,8 +865,8 @@ class _BlueprintLayerBase:
                 )
                 else []
             )
-            judge_scores, judge_summary = orchestrator.judge_candidate(
-                judge_llm=self._context.judge_llm or self._context.llm,
+            judge_scores, judge_summary, judge_mode, judge_health_status = orchestrator.judge_candidate(
+                judge_llm=self._context.judge_llm,
                 task_type="rewrite_arc",
                 candidate_summary=(
                     f"阶段目的：{arc_candidate.purpose}\n"
@@ -842,7 +879,8 @@ class _BlueprintLayerBase:
                 introduced_issue_types=[],
                 fixed_constraints=["必须保留原章号区间", "不能改动后续阶段章号"],
             )
-            candidate = RepairCandidate(
+            candidate = orchestrator.evaluate_candidate_gate(
+                candidate=RepairCandidate(
                 candidate_id=f"rewrite-arc-{target_arc.arc_number}-{index}",
                 prompt_version=prompt_version,
                 summary=judge_summary or arc_candidate.purpose,
@@ -850,10 +888,29 @@ class _BlueprintLayerBase:
                 judge_scores=judge_scores,
                 residual_issue_types=residual_issue_types,
                 introduced_issue_types=[],
+                judge_mode=cast(Any, judge_mode),
+                judge_health_status=cast(Any, judge_health_status),
                 diff_preview=[],
                 verifier_fatal_count=len(residual_issue_types),
                 verifier_warning_count=0,
                 model_name=self._context.llm.model,
+                ),
+                before_issues=[
+                    CreativeIssue(
+                        issue_id=f"arc-rewrite-target-{position}",
+                        book_id=self._context.book_id,
+                        source_layer="roadmap",
+                        target_type="roadmap_arc",
+                        target_ref={"arc_number": target_arc.arc_number},
+                        issue_type=issue_type,
+                        message=message,
+                    )
+                    for position, (issue_type, message) in enumerate(zip(sorted(target_issue_types), target_issue_messages), start=1)
+                ],
+                after_issues=[],
+                target_issue_ids=[f"arc-rewrite-target-{position}" for position in range(1, len(target_issue_messages) + 1)],
+                judge_threshold=self._context.repair_judge_threshold,
+                requires_model_judge=False,
             )
             repair_candidates.append(candidate)
             arc_by_candidate_id[candidate.candidate_id] = arc_candidate
@@ -888,6 +945,7 @@ class _BlueprintLayerBase:
                 for index, issue_type in enumerate(selected_candidate.residual_issue_types, start=1)
             ],
             target_issue_ids=[f"arc-rewrite-target-{index}" for index in range(1, len(target_issue_messages) + 1)],
+            selected_candidate=selected_candidate,
         )
         eval_record = orchestrator.build_generation_eval_record(
             book_id=self._context.book_id,
@@ -899,7 +957,11 @@ class _BlueprintLayerBase:
             selected_candidate=selected_candidate,
             eval_summary=eval_summary,
             accepted_by="auto",
-            context_payload={"arc_number": target_arc.arc_number},
+            context_payload={
+                "arc_number": target_arc.arc_number,
+                "judge_mode": selected_candidate.judge_mode,
+                "execution_readiness": selected_candidate.execution_readiness,
+            },
         )
         return arc_by_candidate_id[selected_candidate.candidate_id], selected_candidate, eval_record
 
@@ -1482,7 +1544,7 @@ class PlanCreativeRepairsUseCase(_BlueprintLayerBase):
         if not story_arcs and not roadmap:
             raise ValueError("当前还没有可修复的章节路线。")
         orchestrator = self._creative_orchestrator()
-        proposals = orchestrator.plan_roadmap_repairs(
+        proposals, planning_feedback = orchestrator.plan_roadmap_repairs(
             book_id=self._context.book_id,
             story_arcs=story_arcs,
             roadmap=roadmap,
@@ -1494,15 +1556,36 @@ class PlanCreativeRepairsUseCase(_BlueprintLayerBase):
             world=self._load_confirmed_world_optional(),
             characters=self._require_character_confirmed() if (state.get("character_confirmed") or state.get("character_draft")) else [],
             llm=self._context.llm,
-            judge_llm=self._context.judge_llm or self._context.llm,
+            judge_llm=self._context.judge_llm,
             relationship_graph=self._load_confirmed_relationship_graph(),
             candidate_count=self._context.repair_candidate_count,
             judge_threshold=self._context.repair_judge_threshold,
         )
+        existing_feedback = _load_creative_issue_feedback(state)
+        selected_issue_ids = set(issue_ids or [])
+        if not selected_issue_ids:
+            selected_issue_ids = {
+                item.issue_id
+                for item in orchestrator.build_creative_issues(
+                    book_id=self._context.book_id,
+                    story_arcs=story_arcs,
+                    roadmap=roadmap,
+                    roadmap_issues=self._verify_roadmap_with_gate_issues(story_arcs, roadmap, expanded_arc_numbers),
+                    stored_proposals=_load_creative_repair_proposals(state),
+                )
+                if item.status == "open" and item.repairability != "manual" and item.issue_type not in orchestrator._AUTO_PLAN_EXCLUDED_ISSUE_TYPES
+            }
+        next_feedback = {
+            issue_id: payload
+            for issue_id, payload in existing_feedback.items()
+            if issue_id not in selected_issue_ids
+        }
+        next_feedback.update(planning_feedback)
         _upsert_blueprint_business_state(
             self._context.db,
             self._context.book_id,
             payload=orchestrator.build_snapshot_payload(state),
+            creative_issue_feedback=next_feedback,
             creative_repair_proposals=[item.model_dump(mode="json") for item in proposals],
             creative_repair_runs=[item.model_dump(mode="json") for item in _load_creative_repair_runs(state)],
             creative_control_snapshots=_load_creative_control_snapshots(state),
@@ -1544,6 +1627,7 @@ class ApplyCreativeRepairProposalUseCase(_BlueprintLayerBase):
         proposals = _load_creative_repair_proposals(state)
         runs = _load_creative_repair_runs(state)
         snapshots = _load_creative_control_snapshots(state)
+        issue_feedback = _load_creative_issue_feedback(state)
         proposal = next((item for item in proposals if item.proposal_id == proposal_id), None)
         if proposal is None:
             raise ValueError("修复提案不存在。")
@@ -1559,6 +1643,8 @@ class ApplyCreativeRepairProposalUseCase(_BlueprintLayerBase):
             roadmap=roadmap,
             roadmap_issues=self._verify_roadmap_with_gate_issues(story_arcs, roadmap, expanded_arc_numbers),
             stored_proposals=proposals,
+            issue_feedback=issue_feedback,
+            stored_runs=runs,
         )
         before_payload = orchestrator.build_snapshot_payload(state)
         next_snapshots, before_snapshot_id = orchestrator.append_snapshot(
@@ -1606,6 +1692,12 @@ class ApplyCreativeRepairProposalUseCase(_BlueprintLayerBase):
                     updated_proposals.append(item.model_copy(update={"status": "applied"}))
                 else:
                     updated_proposals.append(item)
+            next_issue_feedback = {
+                issue_id: payload
+                for issue_id, payload in issue_feedback.items()
+                if issue_id not in set(proposal.issue_ids)
+            }
+            selected_candidate = next((item for item in proposal.candidates if item.selected), None)
             updated_runs = [
                 *runs,
                 orchestrator.build_success_run(
@@ -1625,17 +1717,20 @@ class ApplyCreativeRepairProposalUseCase(_BlueprintLayerBase):
                             roadmap=next_roadmap,
                             roadmap_issues=next_issues,
                             stored_proposals=updated_proposals,
+                            issue_feedback=next_issue_feedback,
+                            stored_runs=runs,
                         ),
                         target_issue_ids=proposal.issue_ids,
+                        selected_candidate=selected_candidate,
                     ),
                 ),
             ]
             latest_eval_summary = updated_runs[-1].eval_summary
-            selected_candidate = next((item for item in proposal.candidates if item.selected), None)
             _upsert_blueprint_business_state(
                 self._context.db,
                 self._context.book_id,
                 payload=business_payload,
+                creative_issue_feedback=next_issue_feedback,
                 creative_repair_proposals=[item.model_dump(mode="json") for item in updated_proposals],
                 creative_repair_runs=[item.model_dump(mode="json") for item in updated_runs],
                 creative_control_snapshots=next_snapshots,
@@ -1674,9 +1769,17 @@ class ApplyCreativeRepairProposalUseCase(_BlueprintLayerBase):
                             before_issues=before_issue_models,
                             after_issues=[],
                             target_issue_ids=proposal.issue_ids,
+                            selected_candidate=selected_candidate,
                         ),
                         accepted_by="user",
-                        context_payload={"proposal_id": proposal.proposal_id, "strategy_type": proposal.strategy_type},
+                        context_payload={
+                            "proposal_id": proposal.proposal_id,
+                            "strategy_type": proposal.strategy_type,
+                            "judge_mode": selected_candidate.judge_mode if selected_candidate is not None else "none",
+                            "execution_readiness": (
+                                selected_candidate.execution_readiness if selected_candidate is not None else "executable"
+                            ),
+                        },
                     ),
                 ),
             )
@@ -1698,6 +1801,7 @@ class ApplyCreativeRepairProposalUseCase(_BlueprintLayerBase):
                 self._context.db,
                 self._context.book_id,
                 payload=before_payload,
+                creative_issue_feedback=issue_feedback,
                 creative_repair_proposals=[item.model_dump(mode="json") for item in failed_proposals],
                 creative_repair_runs=[item.model_dump(mode="json") for item in failed_runs],
                 creative_control_snapshots=next_snapshots,

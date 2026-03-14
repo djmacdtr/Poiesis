@@ -530,6 +530,21 @@ class RepairCandidate(BaseModel):
     judge_scores: list[RepairJudgeScore] = Field(default_factory=list)
     residual_issue_types: list[str] = Field(default_factory=list)
     introduced_issue_types: list[str] = Field(default_factory=list)
+    target_resolved_issue_ids: list[str] = Field(default_factory=list)
+    target_residual_issue_ids: list[str] = Field(default_factory=list)
+    target_resolved_issue_count: int = 0
+    target_residual_issue_count: int = 0
+    introduced_fatal_issue_ids: list[str] = Field(default_factory=list)
+    introduced_warning_issue_ids: list[str] = Field(default_factory=list)
+    judge_mode: Literal["model", "heuristic", "none"] = "none"
+    judge_health_status: Literal[
+        "model_ok",
+        "config_invalid",
+        "provider_unavailable",
+        "json_parse_failed",
+    ] = "provider_unavailable"
+    execution_readiness: Literal["executable", "preview_only", "blocked"] = "preview_only"
+    blocking_reasons: list[str] = Field(default_factory=list)
     diff_preview: list[dict[str, object]] = Field(default_factory=list)
     selected: bool = False
     verifier_fatal_count: int = 0
@@ -550,11 +565,20 @@ class RepairEvalSummary(BaseModel):
     resolved_issue_ids: list[str] = Field(default_factory=list)
     residual_issue_ids: list[str] = Field(default_factory=list)
     introduced_issue_ids: list[str] = Field(default_factory=list)
+    target_resolved_issue_ids: list[str] = Field(default_factory=list)
+    target_residual_issue_ids: list[str] = Field(default_factory=list)
+    introduced_fatal_issue_ids: list[str] = Field(default_factory=list)
+    introduced_warning_issue_ids: list[str] = Field(default_factory=list)
     before_issue_types: list[str] = Field(default_factory=list)
     after_issue_types: list[str] = Field(default_factory=list)
     resolved_issue_count: int = 0
     residual_issue_count: int = 0
     introduced_issue_count: int = 0
+    target_resolved_issue_count: int = 0
+    target_residual_issue_count: int = 0
+    judge_mode: Literal["model", "heuristic", "none"] = "none"
+    execution_readiness: Literal["executable", "preview_only", "blocked"] = "preview_only"
+    blocking_reasons: list[str] = Field(default_factory=list)
     recommended_next_action: str = ""
 
 
